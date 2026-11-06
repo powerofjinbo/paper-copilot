@@ -172,7 +172,8 @@ export function submissionCheck(input: SubmissionInput): SubmissionReport {
     try {
       const m = maskComments(text);
       const lineAt = (off: number): number => m.slice(0, off).split('\n').length;
-      for (const kc of scanLatex(m).keyCommands) if (kc.kind === 'cite') for (const k of kc.keys) citeKeys.push({ key: k, file, line: lineAt(kc.start) });
+      // \nocite{*} lists the whole .bib: not a key
+      for (const kc of scanLatex(m).keyCommands) if (kc.kind === 'cite') for (const k of kc.keys) if (k.trim() && k.trim() !== '*') citeKeys.push({ key: k.trim(), file, line: lineAt(kc.start) });
     } catch {
       /* no cites */
     }

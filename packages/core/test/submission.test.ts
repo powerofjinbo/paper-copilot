@@ -253,6 +253,15 @@ describe('submissionCheck on fixtures/large-multifile', () => {
   });
 });
 
+describe('citation forms', () => {
+  it('optional arguments, natbib variants and lists are read; \\nocite{*} is not a key', () => {
+    const text = '\\documentclass{revtex4-2}\n\\begin{document}\n\\section{Intro}\nWe follow Ref.~\\cite[p.~3]{a} and \\citep{b,c}, see also \\citet*{d}.\n\\nocite{*}\n\\end{document}\n';
+    const r = submissionCheck({ mainFile: 'main.tex', files: [{ file: 'main.tex', text }], units: unitsOf('main.tex', text), facts: [], venue: 'aps', bibKeys: ['a', 'b'], compile: OK_COMPILE });
+    expect(item(r, 'undefined_cites').items.map((e) => e.text)).toEqual(['c', 'd']);
+    expect(item(r, 'undefined_cites').items[0]!.sentenceId).toBe('main.tex#0');
+  });
+});
+
 describe('disclosure statement: a sentence that says who used which AI tool for what', () => {
   const STATS: DisclosureStats = {
     totalSentences: 40,
