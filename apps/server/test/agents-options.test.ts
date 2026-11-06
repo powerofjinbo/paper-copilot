@@ -64,6 +64,7 @@ describe('buildQueryOptions (real-mode SDK options, verified without a key)', ()
         CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
         CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS: '1',
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
         CLAUDE_AGENT_SDK_CLIENT_APP: 'paper-copilot',
       },
       includePartialMessages: false,

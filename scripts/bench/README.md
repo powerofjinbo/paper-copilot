@@ -16,8 +16,20 @@ api.anthropic.com may be blocked there). Run them on your own machine and record
    Both scripts refuse to run without a key and print how to set one. The key is never printed.
 3. Network: the scripts talk to `https://api.anthropic.com`. `ANTHROPIC_BASE_URL` is ignored on
    purpose (other tools set it for themselves); to go through a gateway set
-   `PAPER_ANTHROPIC_BASE_URL=https://...` instead.
-4. The skill is read from `$PAPER_SKILL_DIR`, else `./.skill` of this repository. The prefix also uses
+   `PAPER_ANTHROPIC_BASE_URL=https://...` instead. `ANTHROPIC_AUTH_TOKEN` and
+   `ANTHROPIC_CUSTOM_HEADERS` (often exported for Claude Code) are ignored too: the client sends only
+   the key above (as `Authorization: Bearer`, which `@anthropic-ai/sdk` 1.x uses for API keys; the
+   Agent SDK's Claude Code process sends it as `x-api-key`).
+4. Before spending money, check the plumbing without a key: the same client and the real Claude
+   Code binary run against a local mock of the Messages API in
+
+   ```bash
+   (cd apps/server && npx vitest run test/real-llm.test.ts test/real-agents.test.ts test/real-agents-isolation.test.ts)
+   ```
+
+   These validate every request body (thinking per model, effort, strict output schemas, cache
+   breakpoints, the max_tokens 0 rules) the way the API does.
+5. The skill is read from `$PAPER_SKILL_DIR`, else `./.skill` of this repository. The prefix also uses
    `fixtures/canto-demo` (paper, bibliography, analysis-repo notes).
 
 ## 1. Ghost latency: `ttft.ts`

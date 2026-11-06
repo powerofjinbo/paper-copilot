@@ -82,3 +82,34 @@ export function readSkillReferences(skillDir: string): Record<string, string> {
   refCache.set(dir, { stamp, refs });
   return refs;
 }
+
+/**
+ * Claude Code configuration that may sit in the agents' own folder (.paper/claude), which the CLI reads
+ * because `settingSources: ['project']` is needed for skill discovery. A settings file there could set
+ * `env` (ANTHROPIC_BASE_URL: the app's key would go to another host), an `apiKeyHelper` (a second
+ * credential), permissions or hooks; a CLAUDE.md or an .mcp.json would add instructions or tools. The
+ * folder belongs to the app and holds only `.claude/skills`, so anything else is moved aside (never
+ * deleted) into `quarantine-<timestamp>/` before every real run.
+ */
+const CWD_CONFIG = ['CLAUDE.md', 'CLAUDE.local.md', '.mcp.json'];
+
+export async function quarantineClaudeConfig(claudeCwd: string): Promise<{ moved: string[]; to: string | null }> {
+  const candidates: string[] = [];
+  for (const n of CWD_CONFIG) if (existsSync(join(claudeCwd, n))) candidates.push(n);
+  const dot = join(claudeCwd, '.claude');
+  let names: string[] = [];
+  try {
+    names = readdirSync(dot);
+  } catch {
+    names = [];
+  }
+  for (const n of names) if (n !== 'skills') candidates.push(join('.claude', n));
+  if (candidates.length === 0) return { moved: [], to: null };
+  const to = join(claudeCwd, `quarantine-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  for (const rel of candidates) {
+    const dest = join(to, rel);
+    await mkdir(join(dest, '..'), { recursive: true });
+    await rename(join(claudeCwd, rel), dest);
+  }
+  return { moved: candidates, to };
+}

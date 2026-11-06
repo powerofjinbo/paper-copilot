@@ -38,6 +38,11 @@ export const ISOLATION_ENV: Readonly<Record<string, string>> = {
   CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS: '1',
   /** No telemetry, error reporting or auto-update traffic from a tool that reads unpublished results. */
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+  /**
+   * No CLAUDE.md is loaded: not the author's own one in the paper folder or any parent folder (written
+   * for their Claude Code sessions, not for these agents), not a user-level one.
+   */
+  CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
   /** Identifies the app in the User-Agent header. */
   CLAUDE_AGENT_SDK_CLIENT_APP: 'paper-copilot',
 };

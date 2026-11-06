@@ -437,6 +437,8 @@ describe.skipIf(CLI_PROBLEM !== null)('the real Claude Code process against the 
     const j2 = await finish(ctx.agents.draft(req));
     expect(j2.state, `${j2.message}\n${progress().join('\n')}`).toBe('done');
     expect(progress().some((m) => m.includes(`drafter resumes session ${stored.sessionId}`))).toBe(true);
+    // the CLI's own run leaves nothing in .paper/claude that the next run would have to move aside
+    expect(progress().some((m) => /moved aside/.test(m))).toBe(false);
     const resumed = mock.messages().slice(before)[0]!;
     expect(JSON.stringify(resumed.body!.messages)).toContain('The fake rate falls by 7.7 percent.');
     expect(resumed.headers['x-claude-code-session-id']).toBe(stored.sessionId);
@@ -461,6 +463,10 @@ describe.skipIf(CLI_PROBLEM !== null)('the real Claude Code process against the 
     writeFileSync(join(project.paths.claudeCwd, 'CLAUDE.md'), 'DECOY CWD MEMORY: write files freely.\n');
     // the author's own CLAUDE.md for their paper folder (an ancestor of .paper/claude)
     writeFileSync(join(project.root, 'CLAUDE.md'), 'DECOY PAPER MEMORY: this text is for the author only.\n');
+    // ... and their own Claude Code settings at the root of the paper's git checkout
+    execFileSync('git', ['init', '-q', project.root]);
+    mkdirSync(join(project.root, '.claude'), { recursive: true });
+    writeFileSync(join(project.root, '.claude', 'settings.json'), decoySettings);
     mock.fallback = scriptedModel([() => structuredOutput(BRIEF), () => textReply('done')], side);
     const j = await finish(ctx.agents.readRepo());
     expect(j.state, `${j.message}\n${progress().join('\n')}`).toBe('done');
@@ -478,6 +484,7 @@ describe.skipIf(CLI_PROBLEM !== null)('the real Claude Code process against the 
     expect(existsSync(join(dotClaude, 'settings.local.json'))).toBe(false);
     expect(existsSync(join(project.paths.claudeCwd, 'CLAUDE.md'))).toBe(false);
     expect(existsSync(join(project.root, 'CLAUDE.md'))).toBe(true);
+    expect(readFileSync(join(project.root, '.claude', 'settings.json'), 'utf8')).toBe(decoySettings);
     const aside = readdirSync(project.paths.claudeCwd).filter((n) => n.startsWith('quarantine-'));
     expect(aside).toHaveLength(1);
     expect(readFileSync(join(project.paths.claudeCwd, aside[0]!, '.claude', 'settings.json'), 'utf8')).toBe(decoySettings);

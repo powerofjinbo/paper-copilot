@@ -64,7 +64,7 @@ import { ROLE_LIMITS, SKILL_NAME, buildQueryOptions, draftMaxTurns, type AgentAu
 import { resolveApiKey, resolveBaseUrl } from '../llm/apiKey';
 import { MAX_QUESTIONS, createMutex, readQuestions } from './questions';
 import { loadSdk, runAgentQuery, type RunOutcome } from './runner';
-import { ensureSkillLink, readSkillReferences } from './skill';
+import { ensureSkillLink, quarantineClaudeConfig, readSkillReferences } from './skill';
 import { deltaTotals, isEmpty, toCoreUsage, totalsByModel, type TokenTotals } from './usage';
 
 type DraftReq = z.infer<typeof DraftRequest>;
@@ -270,6 +270,14 @@ export function createAgentService(ctx: Ctx, opts: AgentServiceOptions = {}): Ag
     if (!dir) {
       if (required) throw new Error('No hep-paper-writing skill directory is configured (skillDir in .paper/project.json).');
       return;
+    }
+    if (!ctx.fakeLlm) {
+      // Only the app's skill link may configure the Claude Code process (skill.ts).
+      const q = await quarantineClaudeConfig(ctx.paths.claudeCwd);
+      if (q.moved.length) {
+        ctx.log.warn(`agents: moved Claude Code configuration out of ${ctx.paths.claudeCwd}`, q);
+        progress(`warning: moved aside ${q.moved.join(', ')} from ${ctx.paths.claudeCwd} to ${q.to} (it could change the agents' key, endpoint, permissions or instructions)`);
+      }
     }
     const r = await ensureSkillLink(ctx.paths.claudeCwd, dir);
     if (r.action !== 'ok') progress(`skill link ${r.action}: ${r.link} -> ${r.target}`);

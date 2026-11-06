@@ -51,6 +51,7 @@ import {
   type ClientMessage,
   type IntentLineInfo,
   type ReanchorReport,
+  type Part,
   type Segmentation,
   type SentenceUnit,
   type SentenceVersion,
@@ -60,6 +61,7 @@ import {
 import { HttpError, type Ctx, type DocService, type DocState } from '../contracts';
 import { writeFileAtomic } from '../infra';
 import { flattenTex } from '../services/build/flatten';
+import { stripComment } from '../services/sync/scan';
 import type { PaperDbExt } from '../store/db';
 import { createHistoryLog, type HistoryLog } from './history';
 import { fromDisk, isTexName, listFiles, resolveInTex, sortTexFiles, toDisk, type DiskForm } from './text';
@@ -247,6 +249,94 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
         throw e;
       }, undefined);
     }
+  };
+
+  /* ------------------------------------------------------------------------------------ */
+  /* Include context of \input files (multi-file projects)                                  */
+  /* ------------------------------------------------------------------------------------ */
+
+  /**
+   * A section file segmented on its own is a fragment: it cannot see that main.tex includes it after
+   * \appendix, inside \begin{abstract}, or under an Introduction heading, so its sentences would all be
+   * 'body'. The part decides the voice rules (abstract, introduction and conclusions are voice-critical:
+   * the ghost only completes the author's sentence there), the lint checks and the prompts. The context
+   * is read from the main file's flattened \input tree up to the first line of the file (mirror text for
+   * open files, disk otherwise; comments ignored) and applied to every segmentation of the file:
+   * after \appendix every prose part becomes 'app'; inside an open abstract environment 'abstract';
+   * text before the file's own first heading takes the part of the parent's last heading (intro/concl).
+   * Captions and footnotes keep their kinds' parts. Cached per set of open file versions for 1 s.
+   */
+  type IncludeContext = { appendix: boolean; abstract: boolean; leading: Part | null };
+  const includeCache = new Map<string, { key: string; at: number; ctx: IncludeContext | null }>();
+  const includeContext = (rel: string): IncludeContext | null => {
+    const main = ctx.config.mainFile || 'main.tex';
+    if (rel === main) return null;
+    const key = [...states.values()].filter((st) => st.file !== rel).map((st) => `${st.file}@${st.version}`).join('|');
+    const t = Date.now();
+    const hit = includeCache.get(rel);
+    if (hit && hit.key === key && t - hit.at < 1000) return hit.ctx;
+    const read = (f: string): string | null => {
+      const st = states.get(f);
+      if (st) return textOf(st);
+      try {
+        const abs = resolveInTex(ctx.paths.tex, f).abs;
+        return existsSync(abs) && isTexName(f) ? fromDisk(readFileSync(abs, 'utf8')).text : null;
+      } catch {
+        return null;
+      }
+    };
+    const value = soft(
+      'include context',
+      (): IncludeContext | null => {
+        const flat = flattenTex(main, { texRoot: ctx.paths.tex, read });
+        const first = flat.lines.findIndex((l) => l.file === rel);
+        if (first < 0) return null;
+        let prefix = flat.text.split('\n').slice(0, first).map(stripComment).join('\n');
+        const begin = prefix.search(/\\begin\s*\{document\}/);
+        if (begin >= 0) prefix = prefix.slice(begin);
+        const count = (re: RegExp) => (prefix.match(re) ?? []).length;
+        const appendix = /\\appendix(?![A-Za-z@])|\\begin\s*\{appendix\}/.test(prefix);
+        const abstract = count(/\\begin\s*\{abstract\}/g) > count(/\\end\s*\{abstract\}/g);
+        let leading: Part | null = null;
+        const heads = [...prefix.matchAll(/\\section\*?\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g)];
+        const last = heads.at(-1)?.[1];
+        if (last !== undefined) leading = /intro/i.test(last) ? 'intro' : /conclu|summary|outlook|discussion/i.test(last) ? 'concl' : null;
+        return appendix || abstract || leading ? { appendix, abstract, leading } : null;
+      },
+      null,
+    );
+    includeCache.set(rel, { key, at: t, ctx: value });
+    return value;
+  };
+
+  /** segment() plus the part context of the place where the main file includes `rel`. */
+  const segmentFile = (rel: string, text: string): Segmentation => {
+    const seg = segment(text);
+    const ic = includeContext(rel);
+    if (!ic) return seg;
+    const firstHeading = seg.sections.filter((x) => x.level > 0 && x.start >= 0 && x.start < text.length).reduce((m, x) => Math.min(m, x.start), Number.POSITIVE_INFINITY);
+    const fix = (part: Part, start: number): Part => {
+      if (part === 'caption' || part === 'footnote') return part;
+      if (ic.abstract) return 'abstract';
+      if (ic.appendix) return 'app';
+      if (ic.leading && part === 'body' && start < firstHeading) return ic.leading;
+      return part;
+    };
+    return {
+      ...seg,
+      sentences: seg.sentences.map((x) => {
+        const part = fix(x.part, x.start);
+        return part === x.part ? x : { ...x, part };
+      }),
+      paragraphs: seg.paragraphs.map((x) => {
+        const part = fix(x.part, x.start);
+        return part === x.part ? x : { ...x, part };
+      }),
+      sections: seg.sections.map((x) => {
+        const part = fix(x.part, x.start);
+        return part === x.part ? x : { ...x, part };
+      }),
+    };
   };
 
   const notify = (file: string, upserts: SentenceUnit[], removed: string[]): void => {
@@ -566,7 +656,7 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
     const text = textOf(st);
     segmenting = true;
     try {
-      const seg = soft('segment', () => segment(text), null);
+      const seg = soft('segment', () => segmentFile(st.file, text), null);
       if (!seg) {
         // Keep the mapped units; report the intent lines at least.
         st.intentLines = soft('findIntentLines', () => findIntentLines(text), st.intentLines).map((l) => ({ start: l.start, end: l.end, line: l.line, text: l.text }));
@@ -781,7 +871,7 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
     if (existing) return { state: existing, report: null };
     const { text, form } = fromDisk(raw);
     const st = newState(rel, abs, text, form);
-    const seg = soft('segment', () => segment(text), null) ?? emptySeg();
+    const seg = soft('segment', () => segmentFile(rel, text), null) ?? emptySeg();
     const stored = soft('db.units', () => db.units(rel), [] as SentenceUnit[]);
     const orphans = soft('db.orphans', () => db.orphans(rel), [] as SentenceUnit[]);
     const snapshot = soft('db.kvGet', () => db.kvGet(snapshotKey(rel)), undefined);
@@ -1007,7 +1097,7 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
       soft('db.kvSet snapshot', () => db.kvSet(snapshotKey(rel), disk.text), undefined);
       return { unchanged: st.units.length, edited: [], created: [], orphaned: [], split: [] };
     }
-    const seg = soft('segment', () => segment(target), null) ?? emptySeg();
+    const seg = soft('segment', () => segmentFile(rel, target), null) ?? emptySeg();
     const orphans = soft('db.orphans', () => db.orphans(rel), [] as SentenceUnit[]);
     const t = now();
     const res = soft('reanchor', () => reanchor(mirror, target, seg, { file: rel, prev: [...st.units, ...orphans], lastVersion, lastAiVersion, now: t }), null);

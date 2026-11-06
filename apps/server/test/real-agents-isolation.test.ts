@@ -200,6 +200,12 @@ const BRIEF = {
 };
 const MARKER = 'PAPER-COPILOT AGENT repo_reader SYSTEM';
 
+/** This process's environment with the CLI's writable locations moved into the temporary home. */
+function agentEnv(): Record<string, string | undefined> {
+  mkdirSync(join(home, 'tmp'), { recursive: true });
+  return { ...process.env, HOME: home, TMPDIR: join(home, 'tmp'), XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache'), XDG_DATA_HOME: join(home, '.local/share'), XDG_STATE_HOME: join(home, '.local/state') };
+}
+
 let mock: MockAnthropic;
 let project: TempProject;
 let home: string;
@@ -252,8 +258,8 @@ beforeEach(async () => {
     docs: { labels: () => [] } as unknown as DocService,
   });
   // The inherited environment is this process's own (this sandbox's ANTHROPIC_BASE_URL and CLAUDE_CODE_*
-  // variables included); only HOME points at the temporary home.
-  agents = createAgentService(ctx, { baseEnv: { ...process.env, HOME: home } });
+  // variables included); only HOME, TMPDIR and XDG_* point into the temporary home.
+  agents = createAgentService(ctx, { baseEnv: agentEnv() });
   ctx.agents = agents;
 });
 
@@ -368,7 +374,7 @@ describe.skipIf(!!CLI_PROBLEM)(`real Agent SDK: isolation and API errors${CLI_PR
       expect(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe('1');
       if (process.env.ANTHROPIC_BASE_URL) expect(env.ANTHROPIC_BASE_URL).not.toBe(process.env.ANTHROPIC_BASE_URL);
       // The SDK sets a few variables of its own (entrypoint, version); none is inherited from here.
-      const ours = new Set(['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_AGENT_SDK_CLIENT_APP']);
+      const ours = new Set(['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_DISABLE_CLAUDE_MDS', 'CLAUDE_AGENT_SDK_CLIENT_APP']);
       const sdkSets = new Set(['CLAUDE_AGENT_SDK_VERSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SDK_READS_SESSION_STATE']);
       const inherited = Object.keys(process.env).filter((k) => /^(CLAUDE|ANTHROPIC_)/.test(k) && !ours.has(k) && !sdkSets.has(k) && env[k] !== undefined && env[k] === process.env[k]);
       expect(inherited).toEqual([]);
@@ -391,7 +397,7 @@ describe.skipIf(!!CLI_PROBLEM)(`real Agent SDK: isolation and API errors${CLI_PR
     // A key the API rejects.
     mock.reset();
     process.env.ANTHROPIC_API_KEY = 'sk-ant-revoked-key';
-    const other = createAgentService(ctx, { baseEnv: { ...process.env, HOME: home } });
+    const other = createAgentService(ctx, { baseEnv: agentEnv() });
     extraServices.push(other);
     converse(mock, MARKER, [toolReply('StructuredOutput', BRIEF)]);
     const t0 = Date.now();
