@@ -392,3 +392,70 @@ describe('typing in sections/results.tex over the WebSocket', () => {
     expect(bad.status).toBeGreaterThanOrEqual(400);
   });
 });
+
+describe('scale: multi-file paths when only a section file is open', () => {
+  let root: string;
+  let ctx: AppCtx;
+
+  beforeAll(async () => {
+    root = mkdtempSync(join(tmpdir(), 'paper-scale-one-'));
+    cpSync(join(FX, 'tex'), join(root, 'tex'), { recursive: true });
+    cpSync(join(FX, 'repo'), join(root, 'repo'), { recursive: true });
+    // an abstract kept in its own file, as many papers do
+    const mainPath = join(root, 'tex', 'main.tex');
+    const main = readFileSync(mainPath, 'utf8');
+    const abs = /\\begin\{abstract\}\n([\s\S]*?)\\end\{abstract\}/.exec(main)!;
+    writeFileSync(join(root, 'tex', 'sections', 'abstract.tex'), abs[1]!);
+    writeFileSync(mainPath, main.replace(abs[0], '\\begin{abstract}\n\\input{sections/abstract}\n\\end{abstract}'));
+    await initProject(root, { repo: join(root, 'repo'), skill: SKILL_DIR });
+    ctx = await createCtx({ root, fake: true, logLevel: 'error', watch: false, lintSidecar: false, docs: { segmentDebounceMs: 20, writeDebounceMs: 50 } });
+    await ctx.start();
+    await ctx.docs.open('sections/results.tex');
+  }, 60_000);
+
+  afterAll(async () => {
+    await ctx?.close();
+    if (root) rmSync(root, { recursive: true, force: true });
+  });
+
+  it('knows the labels of files that are not open, so a \\ref to another file never reads as unknown', () => {
+    expect(ctx.docs.openFiles()).toEqual(['sections/results.tex']);
+    const labels = ctx.docs.labels();
+    for (const l of ['sec:results', 'sec:summary', 'app:stat', 'app:seeds', 'sec:method', 'eq:eff', 'fig:bootstrap']) expect(labels).toContain(l);
+    // the gate on a sentence of results.tex that refers to the appendix and to main.tex
+    const res = ctx.docs.get('sections/results.tex')!;
+    const u = res.units.find((x) => /\\ref\{app:seeds\}/.test(res.text.slice(x.start, x.end)))!;
+    const r = gateSentence(res.text.slice(u.start, u.end), { mode: 'rewrite', original: res.text.slice(u.start, u.end), facts: ctx.facts.all(), allowedCiteKeys: ctx.lit.bibKeys(), knownLabels: labels, fictionalNumbers: [], claimedFactIds: u.facts, intentText: null });
+    expect(r.issues.filter((i) => i.code === 'unknown_ref')).toEqual([]);
+  });
+
+  it('a label added in another file on disk is known without a restart', async () => {
+    const p = join(root, 'tex', 'sections', 'appendix.tex');
+    writeFileSync(p, readFileSync(p, 'utf8') + '\n\\section{Extra}\n\\label{app:extra}\nMore text follows here.\n');
+    // the disk part of labels() is cached for one second (a ghost request must not re-read the tree)
+    await new Promise((r) => setTimeout(r, 1100));
+    expect(ctx.docs.labels()).toContain('app:extra');
+  });
+
+  it('gives units of an \\input file the part of the place it is included: abstract, appendix', async () => {
+    const abs = await ctx.docs.open('sections/abstract.tex');
+    expect(abs.units.length).toBeGreaterThanOrEqual(5);
+    expect(abs.units.every((u) => u.part === 'abstract')).toBe(true);
+    const app = await ctx.docs.open('sections/appendix.tex');
+    const prose = app.units.filter((u) => u.kind === 'prose');
+    expect(prose.length).toBeGreaterThan(20);
+    expect(prose.every((u) => u.part === 'app')).toBe(true);
+    expect(app.units.filter((u) => u.kind === 'caption').every((u) => u.part === 'caption')).toBe(true);
+    const intro = await ctx.docs.open('sections/intro.tex');
+    expect(intro.units.filter((u) => u.kind === 'prose').every((u) => u.part === 'intro')).toBe(true);
+    const results = ctx.docs.get('sections/results.tex')!;
+    expect(results.units.filter((u) => u.kind === 'prose').every((u) => u.part === 'body')).toBe(true);
+    // parts survive typing (the re-segmentation pass applies the same context)
+    const st = ctx.docs.get('sections/appendix.tex')!;
+    const at = st.text.indexOf('The bootstrap resamples events');
+    const cs = ChangeSet.of({ from: at, insert: 'Note that ' }, st.text.length, '\n');
+    expect(await ctx.docs.applyClientChange({ type: 'doc.change', file: 'sections/appendix.tex', baseVersion: st.version, changes: cs.toJSON(), annotation: null })).toBe(true);
+    const after = ctx.docs.get('sections/appendix.tex')!;
+    expect(after.units.filter((u) => u.kind === 'prose').every((u) => u.part === 'app')).toBe(true);
+  });
+});
