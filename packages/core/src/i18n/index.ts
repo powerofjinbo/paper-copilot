@@ -26,14 +26,37 @@ export const I18N_TABLES: Readonly<Record<I18nNamespace, Readonly<Record<string,
 
 const NAMESPACES: readonly I18nNamespace[] = ['gate', 'lint', 'submission', 'consistency', 'caption'];
 
-/** The bilingual entry of a code ('ns.code' or a bare code), or null. */
+/**
+ * Other names the system uses for a code: the AI-ese linter's pattern kind ('pattern') and its flag
+ * source ('aiese', the excess-vocabulary check), style_check.py check numbers ('lint.7', 'lint.check7',
+ * as the sidecar reports them) and the gate issue for a flag the lint panel shows ('lint.unmatched_number').
+ */
+export const I18N_ALIASES: Readonly<Record<string, string>> = {
+  'lint.pattern': 'lint.ai_pattern',
+  pattern: 'lint.ai_pattern',
+  'lint.aiese': 'lint.excess_vocab',
+  aiese: 'lint.excess_vocab',
+  ...Object.fromEntries(
+    (['long', 'verb', 'connectors', 'vocab', 'hype', 'vague', 'acronyms', 'terms', 'figures', 'passive'] as const).flatMap((key, i) => [
+      [`lint.${i + 1}`, `lint.${key}`],
+      [`lint.check${i + 1}`, `lint.${key}`],
+    ]),
+  ),
+};
+
+/** The bilingual entry of a code ('ns.code', a bare code or an alias), or null. */
 export function i18nEntry(code: string): Bilingual | null {
-  const c = String(code ?? '');
+  const raw = String(code ?? '');
+  const c = Object.prototype.hasOwnProperty.call(I18N_ALIASES, raw) ? I18N_ALIASES[raw]! : raw;
   const dot = c.indexOf('.');
   if (dot > 0) {
     const ns = c.slice(0, dot) as I18nNamespace;
     const table = I18N_TABLES[ns];
-    if (table) return Object.prototype.hasOwnProperty.call(table, c.slice(dot + 1)) ? table[c.slice(dot + 1)]! : null;
+    if (table) {
+      if (Object.prototype.hasOwnProperty.call(table, c.slice(dot + 1))) return table[c.slice(dot + 1)]!;
+      // a lint flag that carries a gate issue code (the gate's hints in the lint panel)
+      return ns === 'lint' && Object.prototype.hasOwnProperty.call(I18N_TABLES.gate, c.slice(dot + 1)) ? I18N_TABLES.gate[c.slice(dot + 1)]! : null;
+    }
   }
   for (const ns of NAMESPACES) {
     const table = I18N_TABLES[ns];

@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { CaptionCheckKey, ConsistencyFlagKind, SubmissionItemId } from '../src/api';
-import { describeCode, i18nCodes, i18nEntry, I18N_TABLES, LINT_CHECK_KEYS, normalizeLang, t } from '../src/i18n/index';
+import { describeCode, i18nCodes, i18nEntry, I18N_ALIASES, I18N_TABLES, LINT_CHECK_KEYS, normalizeLang, t } from '../src/i18n/index';
 
 const CJK = /[一-鿿]/;
 const src = (p: string): string => readFileSync(fileURLToPath(new URL(p, import.meta.url)), 'utf8');
@@ -97,5 +97,20 @@ describe('t(code, lang)', () => {
 
   it('describeCode returns both strings', () => {
     expect(describeCode('submission.disclosure', 'zh')).toEqual({ label: 'AI 使用声明', explain: expect.stringMatching(/声明/) });
+  });
+});
+
+describe('aliases: the names the lint pipeline actually emits', () => {
+  it('style_check numbers, the AI-ese kinds and source, gate codes under lint', () => {
+    STYLE_CHECK_KEYS.forEach((key, i) => {
+      expect(t(`lint.${i + 1}`, 'zh')).toBe(t(`lint.${key}`, 'zh'));
+      expect(t(`lint.check${i + 1}`, 'en')).toBe(t(`lint.${key}`, 'en'));
+    });
+    expect(t('lint.pattern', 'en')).toBe(t('lint.ai_pattern', 'en'));
+    expect(t('pattern', 'zh')).toBe('AI 式句型');
+    expect(t('lint.aiese', 'zh')).toBe(t('lint.excess_vocab', 'zh'));
+    expect(t('lint.unmatched_number', 'en')).toBe(t('gate.unmatched_number', 'en'));
+    expect(t('lint.11', 'en')).toBe('lint.11');
+    for (const target of Object.values(I18N_ALIASES)) expect(i18nEntry(target), target).not.toBeNull();
   });
 });

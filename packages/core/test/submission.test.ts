@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { SubmissionItemId, SubmissionReport } from '../src/api';
-import { submissionCheck, SUBMISSION_MAX_ENTRIES, type SubmissionInput } from '../src/meta/submission';
+import { findDisclosureStatement, submissionCheck, SUBMISSION_MAX_ENTRIES, type SubmissionInput } from '../src/meta/submission';
+import { renderDisclosure, type DisclosureStats } from '../src/meta/disclosure';
 import type { ConsistencyUnit } from '../src/consistency/common';
 import { segment } from '../src/latex/segment';
 import { hashString } from '../src/text/hash';
@@ -249,5 +250,70 @@ describe('submissionCheck on fixtures/large-multifile', () => {
     expect(ai.items.every((e) => e.file === 'sections/results.tex')).toBe(true);
     expect(failing(r)).toEqual(expect.arrayContaining(['ai_unmatched_numbers', 'disclosure']));
     expect(r.ok).toBe(false);
+  });
+});
+
+describe('disclosure statement: a sentence that says who used which AI tool for what', () => {
+  const STATS: DisclosureStats = {
+    totalSentences: 40,
+    byState: { human: 30, 'ai-from-intent': 2, 'ai-drafted': 4, 'ai-edited': 3, proposed: 0, external: 1, placeholder: 0, unsupported: 0 },
+    everAi: 9,
+    aiDrafted: 4,
+    aiEdited: 3,
+    meanEditDistance: 0.25,
+    aiFromIntent: 2,
+    grammarFixed: 0,
+    imported: 0,
+    humanWritten: 30,
+    external: 1,
+    models: ['claude-opus-5-5'],
+    firstTs: '2026-10-01T00:00:00Z',
+    lastTs: '2026-11-01T00:00:00Z',
+    aiPendingReview: 0,
+  };
+  const OPTS = { toolName: 'paper-copilot', toolVersion: '0.1.0', recordPath: '.paper/history.jsonl' };
+  const GRAMMAR_ONLY: DisclosureStats = { ...STATS, everAi: 3, aiDrafted: 0, aiEdited: 0, aiFromIntent: 0, grammarFixed: 3, grammarOnly: 3, byState: { ...STATS.byState, 'ai-drafted': 0, 'ai-edited': 0, 'ai-from-intent': 0 } };
+
+  it('the generated statements count, for every venue that needs one', () => {
+    for (const venue of ['aps', 'springer', 'elsevier'] as const) {
+      const d = renderDisclosure(venue, STATS, OPTS);
+      expect(findDisclosureStatement(`\\begin{acknowledgments}\n${d.latex}\n\\end{acknowledgments}`, venue), venue).not.toBeNull();
+    }
+    expect(findDisclosureStatement(renderDisclosure('springer', GRAMMAR_ONLY, OPTS).latex, 'springer')).not.toBeNull();
+    expect(findDisclosureStatement('anything', 'arxiv')).toBeNull();
+  });
+
+  it('a hand-written statement counts; a language model of the analysis or a colleague named Claude does not', () => {
+    const yes = [
+      'We used ChatGPT (GPT-4o) to polish the language of this manuscript.',
+      'The authors used Claude to improve the readability of the text; they checked every sentence.',
+      'Large language models assisted us in editing the manuscript.',
+      'This paper was proofread with the help of Grammarly.',
+    ];
+    const no = [
+      'We train a transformer language model on the jet constituents and use it as a tagger.',
+      'Large language models have been applied to event generation~\\cite{x}.',
+      'We thank Claude Itzykson and Jean-Claude Brient for their help with the draft.',
+      'We use LLM-based anomaly scores in Section~2.',
+      '% We used ChatGPT to polish the language of this manuscript.',
+    ];
+    for (const s of yes) expect(findDisclosureStatement(s, 'aps'), s).not.toBeNull();
+    for (const s of no) expect(findDisclosureStatement(s, 'aps'), s).toBeNull();
+    // Elsevier wants its titled section, not a sentence
+    expect(findDisclosureStatement(yes[0]!, 'elsevier')).toBeNull();
+  });
+
+  it('submissionCheck: a statement in an \\input file of the main file counts; an unreached file does not', () => {
+    const ai = (u: ConsistencyUnit): ConsistencyUnit => (u.text.startsWith('This lead holds') ? { ...u, state: 'ai-drafted', everAi: true } : u);
+    const stmt = renderDisclosure('aps', STATS, OPTS).latex;
+    const withInput = CANTO_MAIN.replace('\\bibliography{refs}', '\\begin{acknowledgments}\n\\input{disclosure}\n\\end{acknowledgments}\n\\bibliography{refs}');
+    const base = canto({ text: withInput, edit: ai });
+    const r = submissionCheck({ ...base, files: [...base.files, { file: 'disclosure.tex', text: stmt }] });
+    expect(item(r, 'disclosure')).toMatchObject({ ok: true, note: 'Statement found in disclosure.tex.' });
+    const unreached = submissionCheck({ ...canto({ edit: ai }), files: [{ file: 'main.tex', text: CANTO_MAIN }, { file: 'disclosure.tex', text: stmt }] });
+    expect(item(unreached, 'disclosure')).toMatchObject({ ok: false, note: expect.stringMatching(/or a file it inputs/) });
+    // the Methods of an ML paper mention a language model: still no statement
+    const ml = CANTO_MAIN.replace('\\bibliography{refs}', 'We train a transformer language model on the hits of each event.\n\\bibliography{refs}');
+    expect(item(submissionCheck(canto({ text: ml, edit: ai })), 'disclosure').ok).toBe(false);
   });
 });

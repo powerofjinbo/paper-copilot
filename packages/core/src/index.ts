@@ -17,5 +17,5 @@ export * from './prompts/index';
 export * from './meta/index';
 export * from './consistency/index';
 export { derivedRelations, definitionStem, DEFAULT_MAX_DERIVED, type DerivedOptions, type DerivedKind } from './meta/derived';
-export { submissionCheck, SUBMISSION_MAX_ENTRIES, DISCLOSURE_PATTERNS, type SubmissionInput } from './meta/submission';
+export { submissionCheck, SUBMISSION_MAX_ENTRIES, DISCLOSURE_PATTERNS, findDisclosureStatement, type SubmissionInput } from './meta/submission';
 export * from './i18n/index';

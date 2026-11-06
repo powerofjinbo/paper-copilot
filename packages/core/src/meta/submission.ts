@@ -12,7 +12,7 @@
  *          Korean text outside comments), merge_conflicts, compile_errors (or not compiled yet),
  *          undefined_cites (\cite keys missing from the .bib), ai_unmatched_numbers (a number in an
  *          AI-touched sentence that matches no fact or derived relation), stale_facts (sentences stating a
- *          fact whose artifact changed), disclosure (AI was used and the main file lacks the venue's
+ *          fact whose artifact changed), disclosure (AI was used and neither the main file nor a file it inputs has the venue's
  *          statement; arXiv: info, the statement goes in the Comments field);
  *   warn:  unresolved_cites (in the .bib but not resolved on INSPIRE nor confirmed), unmatched_numbers
  *          (numbers in the authors' own sentences that match no fact), echo_drift (consistency flags:
@@ -32,6 +32,7 @@ import { echoCheck } from '../consistency/echo';
 import { figurePlan } from '../consistency/figures';
 import { terminologyReport } from '../consistency/terms';
 import { extractTitle, maskComments, orderUnits, projectFileOrder, shorten, type ConsistencyUnit, type ProjectFile } from '../consistency/common';
+import { plainText } from '../text/normalize';
 import { derivedRelations } from './derived';
 
 /** At most this many entries per item (`count` keeps the full number). */
@@ -63,13 +64,61 @@ export interface SubmissionInput {
   terminology?: TerminologyReport;
 }
 
-/** Phrases that show the venue's AI statement is in the manuscript. */
+/**
+ * Coarse phrase filter per venue (kept for callers that want a quick test). `submissionCheck` uses the
+ * stricter `findDisclosureStatement`, which for APS and Springer also wants the sentence to say who used
+ * the tool and for what, so "a transformer language model" in the Methods or "Claude Itzykson" in the
+ * acknowledgments does not count as a statement.
+ */
 export const DISCLOSURE_PATTERNS: Record<Venue, RegExp | null> = {
   aps: /\b(?:writing tool|large language models?|generative AI|AI[- ]assist(?:ed|ance)|language models?|LLMs?|Claude|ChatGPT|GPT-?\d)\b/i,
   springer: /\b(?:writing tool|large language models?|generative AI|AI[- ]assist(?:ed|ance)|language models?|LLMs?|Claude|ChatGPT|GPT-?\d)\b/i,
   elsevier: /Declaration\s+of\s+generative\s+AI\s+and\s+AI[-‐–\s]+assisted\s+technologies\s+in\s+the\s+writing\s+process/i,
   arxiv: null,
 };
+
+/** An AI writing tool or model, case-insensitive ("Claude" is matched separately: it is also a first name). */
+const AI_TOOL_RE = /\b(?:paper-copilot|writing\s+(?:tools?|assistants?)|(?:large\s+)?language\s+models?|LLMs?|generative\s+(?:AI|artificial\s+intelligence)|AI[-\s](?:assist(?:ed|ance|ant)?|based|powered|tools?|writing|technolog(?:y|ies))|artificial[-\s]intelligence\s+tools?|ChatGPT|GPT-?\d[\w.]*|Gemini|Copilot|Grammarly|DeepL|Writefull)\b/gi;
+/** "Claude" the model, not a person: not after a hyphen (Jean-Claude), not before a capitalized surname other than a model name. */
+const CLAUDE_RE = /(?<![-\p{L}])[Cc]laude\b(?!\s+(?!(?:Opus|Sonnet|Haiku|Fable|Instant|Code|AI)\b)\p{Lu}\p{Ll})/gu;
+/** What the tool did with the text (read after the tool phrases are removed: "writing tool" alone is not a use). */
+const ASSIST_RE = /\b(?:assist\w*|help(?:ed|s|ing)?|polish\w*|edit(?:ed|ing|s)?|proofread\w*|draft\w*|writ(?:e|es|ing|ten)|wrote|prepar(?:e|ed|es|ing|ation)|rephras\w*|reword\w*|translat\w*|grammar|language|readability|copy[- ]?edit\w*)\b/i;
+/** Who used it: the authors, this manuscript, or a passive "was assisted by" / "were edited with". */
+const AGENT_RE = /\b(?:we|our|us|the\s+authors?|this\s+(?:manuscript|paper|article|work|letter|text|note))\b|\b(?:was|were|been)\s+(?:\w+\s+){0,2}(?:assisted|edited|polished|proofread|improved|prepared|written|drafted|translated|checked)\s+(?:by|with|using)\b/i;
+const ELSEVIER_TITLE_RE = /Declaration\s+of\s+generative\s+AI\s+and\s+AI[-‐–\s]+assisted\s+technologies\s+in\s+the\s+writing\s+process/i;
+
+/**
+ * Does `latex` hold the venue's AI-use statement (outside comments)? Elsevier: the titled declaration.
+ * APS and Springer: one sentence that names an AI tool, says what it did with the text and who used it
+ * ("We used paper-copilot, a writing tool that calls Claude Opus 5.5, to assist with the text"). arXiv: the
+ * statement goes in the Comments field, so the manuscript never needs one (always null). Returns the
+ * matching sentence (plain text), or null.
+ */
+export function findDisclosureStatement(latex: string, venue: Venue): string | null {
+  if (venue === 'arxiv') return null;
+  const masked = maskComments(String(latex ?? ''));
+  if (venue === 'elsevier') {
+    const m = ELSEVIER_TITLE_RE.exec(masked.replace(/\s+/g, ' '));
+    return m ? m[0] : null;
+  }
+  let plain: string;
+  try {
+    plain = plainText(masked);
+  } catch {
+    plain = masked;
+  }
+  for (const sentence of plain.split(/(?<=[.!?])\s+(?=\p{Lu}|\\)|\n\s*\n/u)) {
+    const s = sentence.replace(/\s+/g, ' ').trim();
+    if (!s) continue;
+    AI_TOOL_RE.lastIndex = 0;
+    CLAUDE_RE.lastIndex = 0;
+    const tools = AI_TOOL_RE.test(s) || CLAUDE_RE.test(s);
+    if (!tools) continue;
+    const rest = s.replace(AI_TOOL_RE, ' ').replace(CLAUDE_RE, ' ');
+    if (ASSIST_RE.test(rest) && AGENT_RE.test(rest)) return shorten(s);
+  }
+  return null;
+}
 
 const NUMBER_CODES = new Set(['unmatched_number', 'unmatched_cut', 'percent_scale', 'fictional_number']);
 
@@ -257,14 +306,22 @@ export function submissionCheck(input: SubmissionInput): SubmissionReport {
   // disclosure
   {
     const aiUsed = units.some((u) => u.everAi);
-    const pat = DISCLOSURE_PATTERNS[input.venue] ?? null;
-    const main = maskComments(files.find((f) => f.file === input.mainFile)?.text ?? '');
     if (!aiUsed) item('disclosure', 'block', [], 'No AI-assisted sentence in the record; no statement needed.', true);
-    else if (!pat) item('disclosure', 'info', [], 'arXiv: report significant AI use in the Comments field of the submission (GET /api/disclosure?venue=arxiv).', true);
+    else if (input.venue === 'arxiv' || !(input.venue in DISCLOSURE_PATTERNS)) item('disclosure', 'info', [], 'arXiv: report significant AI use in the Comments field of the submission (GET /api/disclosure?venue=arxiv).', true);
     else {
-      const found = pat.test(main.replace(/\s+/g, ' '));
+      // the main file and every file it typesets (the generated statement is often kept in its own \input file)
+      let foundIn: string | null = null;
+      for (const o of order) {
+        if (!o.included) continue;
+        const text = files.find((f) => f.file === o.file)?.text ?? '';
+        if (findDisclosureStatement(text, input.venue) !== null) {
+          foundIn = o.file;
+          break;
+        }
+      }
       const where = input.venue === 'elsevier' ? 'a section titled "Declaration of generative AI and AI-assisted technologies in the writing process" before the references' : input.venue === 'aps' ? 'the acknowledgments or Methods' : 'the Methods section';
-      item('disclosure', 'block', found ? [] : [{ file: input.mainFile, sentenceId: null, line: null, text: `AI-assisted text without a disclosure statement; add it to ${where}.` }], found ? null : `Expected in ${input.mainFile}: ${where}.`);
+      const note = foundIn === null ? `Expected in ${input.mainFile} (or a file it inputs): ${where}.` : foundIn !== input.mainFile ? `Statement found in ${foundIn}.` : null;
+      item('disclosure', 'block', foundIn !== null ? [] : [{ file: input.mainFile, sentenceId: null, line: null, text: `AI-assisted text without a disclosure statement; add it to ${where}.` }], note);
     }
   }
   item(
