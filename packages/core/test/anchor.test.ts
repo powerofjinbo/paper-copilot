@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ChangeSet, Text } from '@codemirror/state';
 import { assignUnits, changedRanges, diffChanges, mapUnits, reanchor, type AssignInput, type AssignResult, type TextAnalysis } from '../src/anchor/units';
-import { fallbackAnalyze } from '../src/anchor/adapter';
+import { defaultAnalyze } from '../src/anchor/adapter';
 import type { ChangeAnnotation } from '../src/api';
 import { AI_ORIGINS, type SentenceState, type SentenceUnit, type SentenceVersion, type VersionOrigin } from '../src/schemas';
 import type { Segmentation, SegSentence } from '../src/latex/segment';
@@ -53,7 +53,7 @@ function seg(text: string, sectionTitle = 'Results'): Segmentation {
   return { sentences, sections: [], paragraphs, intentLines: [], labels: [], refs: [], cites: [], fragment: true };
 }
 
-const analyze = (t: string): TextAnalysis => fallbackAnalyze(t);
+const analyze = (t: string): TextAnalysis => defaultAnalyze(t);
 const NOW = '2026-11-06T10:00:00.000Z';
 
 function ann(origin: VersionOrigin, state: SentenceState | null, extra: Partial<ChangeAnnotation> = {}): ChangeAnnotation {

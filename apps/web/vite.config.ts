@@ -19,6 +19,23 @@ export default defineConfig({
       '/ws': { target: SERVER.replace(/^http/, 'ws'), ws: true, changeOrigin: false },
     },
   },
-  build: { outDir: 'dist', sourcemap: true, target: 'es2022' },
+  build: {
+    outDir: 'dist',
+    sourcemap: true,
+    target: 'es2022',
+    // pdf.js, CodeMirror and React in their own long-lived chunks: an app update re-downloads only the app.
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('pdfjs-dist')) return 'pdfjs';
+          if (id.includes('@codemirror') || id.includes('@lezer') || id.includes('style-mod') || id.includes('w3c-keyname') || id.includes('crelt')) return 'codemirror';
+          if (/[\\/](react|react-dom|scheduler|zustand)[\\/]/.test(id)) return 'react';
+          return 'vendor';
+        },
+      },
+    },
+  },
   worker: { format: 'es' },
 });

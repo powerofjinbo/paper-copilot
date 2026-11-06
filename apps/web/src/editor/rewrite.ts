@@ -18,6 +18,7 @@ import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, typ
 import type { SentenceUnit } from '@paper-copilot/core';
 import { changeAnnotation, makeAnnotation, remoteChange } from './annotations';
 import { unitsField } from './units';
+import { currentLang, edText } from './i18n';
 
 export interface RewriteState {
   id: string;
@@ -171,13 +172,13 @@ class RewriteHintWidget extends WidgetType {
     el.setAttribute('role', 'note');
     const lead = document.createElement('span');
     lead.className = 'pc-rewrite-lead';
-    lead.textContent = this.r.phase === 'selected' ? 'Rewrite in your own words: start typing' : 'Type your version; the struck words go when you type the final period';
+    lead.textContent = edText(currentLang(), this.r.phase === 'selected' ? 'rwSelected' : 'rwTyping');
     el.appendChild(lead);
     if (this.r.note) {
       const n = document.createElement('span');
       n.className = 'pc-rewrite-note';
       n.lang = 'zh';
-      n.textContent = `intent: ${this.r.note}`;
+      n.textContent = `${edText(currentLang(), 'rwIntent')}: ${this.r.note}`;
       el.appendChild(n);
     }
     for (const f of this.r.facts) {
@@ -188,7 +189,7 @@ class RewriteHintWidget extends WidgetType {
     }
     const esc = document.createElement('span');
     esc.className = 'pc-rewrite-keys';
-    esc.textContent = 'Esc to finish';
+    esc.textContent = edText(currentLang(), 'rwEsc');
     el.appendChild(esc);
     return el;
   }

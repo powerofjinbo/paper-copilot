@@ -118,6 +118,20 @@ const EN = {
   hAgo: '{n} h ago',
   dAgo: '{n} d ago',
   notApplied: 'The sentence changed or disappeared; the proposal was not applied.',
+  irTitle: 'Intent note: excluded from compile and lint. {mod}+Enter renders it into an English sentence.',
+  irHint: '{mod}+Enter → English · Alt+Enter → 3 options',
+  irGroup: 'English rendering of your note',
+  irHead: 'English, in your voice',
+  irHeadChoose: 'English, in your voice: choose one',
+  irLoading: 'Rendering your note…',
+  irLoading3: 'Rendering three options…',
+  irFailed: 'Rendering failed.',
+  irOptions: 'Proposed sentences',
+  ir3: '3 options',
+  rwSelected: 'Rewrite in your own words: start typing',
+  rwTyping: 'Type your version; the struck words go when you type the final period',
+  rwIntent: 'intent',
+  rwEsc: 'Esc to finish',
 } as const;
 
 export type EdKey = keyof typeof EN;
@@ -197,6 +211,20 @@ const ZH: Record<EdKey, string> = {
   hAgo: '{n} 小时前',
   dAgo: '{n} 天前',
   notApplied: '句子已改变或已不存在，提议没有应用。',
+  irTitle: '意图笔记：不参与编译和文风检查。{mod}+Enter 把它写成一句英文。',
+  irHint: '{mod}+Enter → 英文 · Alt+Enter → 3 个选项',
+  irGroup: '你的笔记的英文版本',
+  irHead: '英文，用你的口吻',
+  irHeadChoose: '英文，用你的口吻：选一句',
+  irLoading: '正在把笔记写成英文…',
+  irLoading3: '正在写三个选项…',
+  irFailed: '生成失败。',
+  irOptions: '提议的句子',
+  ir3: '3 个选项',
+  rwSelected: '用你自己的话重写：直接开始输入',
+  rwTyping: '输入你的版本；输入句末句号后，划掉的旧词会删除',
+  rwIntent: '意图',
+  rwEsc: 'Esc 结束',
 };
 
 /** The UI language right now (outside React, e.g. CodeMirror gutter markers). */

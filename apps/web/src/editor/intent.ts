@@ -10,6 +10,9 @@ import type { Proposal } from '@paper-copilot/core';
 import { changeAnnotation, makeAnnotation } from './annotations';
 import { ctxField } from './context';
 import { MOD_KEY } from './labels';
+import { currentLang, edText, type EdKey } from './i18n';
+
+const tr = (key: EdKey, vars?: Record<string, string | number>) => edText(currentLang(), key, vars);
 import { intentLinesOf, placeholdersOf, type IntentLine } from './safe';
 
 /* ------------------------------------------------------------------------------------ */
@@ -125,10 +128,10 @@ export function intentAcceptSpec(r: IntentRender, p: Proposal): TransactionSpec 
 /* Decorations                                                                           */
 /* ------------------------------------------------------------------------------------ */
 
-const intentLineDeco = Decoration.line({
-  class: 'pc-intent-line',
-  attributes: { title: `Intent note: excluded from compile and lint. ${MOD_KEY}+Enter renders it into an English sentence.` },
-});
+const intentLineDecos = {
+  en: Decoration.line({ class: 'pc-intent-line', attributes: { title: edText('en', 'irTitle', { mod: MOD_KEY }) } }),
+  zh: Decoration.line({ class: 'pc-intent-line', attributes: { title: edText('zh', 'irTitle', { mod: MOD_KEY }) } }),
+};
 
 class IntentHintWidget extends WidgetType {
   override eq(): boolean {
@@ -138,7 +141,7 @@ class IntentHintWidget extends WidgetType {
     const span = document.createElement('span');
     span.className = 'pc-intent-hint';
     span.setAttribute('aria-hidden', 'true');
-    span.textContent = `${MOD_KEY}+Enter → English · Alt+Enter → 3 options`;
+    span.textContent = tr('irHint', { mod: MOD_KEY });
     return span;
   }
 }
@@ -189,29 +192,29 @@ class IntentRenderWidget extends WidgetType {
     const box = document.createElement('div');
     box.className = 'pc-intent-render';
     box.setAttribute('role', 'group');
-    box.setAttribute('aria-label', 'English rendering of your note');
+    box.setAttribute('aria-label', tr('irGroup'));
     const head = document.createElement('div');
     head.className = 'pc-ir-head';
-    head.textContent = r.n > 1 ? 'English, in your voice: choose one' : 'English, in your voice';
+    head.textContent = r.n > 1 ? tr('irHeadChoose') : tr('irHead');
     box.appendChild(head);
     if (r.status === 'loading') {
       const l = document.createElement('div');
       l.className = 'pc-ir-loading';
       l.innerHTML = '<span class="pc-pulse" aria-hidden="true"></span>';
-      l.appendChild(document.createTextNode(r.n > 1 ? ' Rendering three options…' : ' Rendering your note…'));
+      l.appendChild(document.createTextNode(` ${r.n > 1 ? tr('irLoading3') : tr('irLoading')}`));
       l.setAttribute('role', 'status');
       box.appendChild(l);
     } else if (r.status === 'error') {
       const l = document.createElement('div');
       l.className = 'pc-ir-error';
       l.setAttribute('role', 'alert');
-      l.textContent = r.error ?? 'Rendering failed.';
+      l.textContent = r.error ?? tr('irFailed');
       box.appendChild(l);
     } else {
       const list = document.createElement('div');
       list.className = 'pc-ir-options';
       list.setAttribute('role', 'listbox');
-      list.setAttribute('aria-label', 'Proposed sentences');
+      list.setAttribute('aria-label', tr('irOptions'));
       r.proposals.forEach((p, i) => {
         const opt = document.createElement('div');
         opt.className = 'pc-ir-option' + (i === r.selected ? ' pc-selected' : '');
@@ -265,9 +268,9 @@ class IntentRenderWidget extends WidgetType {
       });
       keys.appendChild(b);
     };
-    mk('Accept', r.proposals.length > 1 ? `Tab · 1–${r.proposals.length}` : 'Tab', () => this.actions.accept(view, r.selected), r.status !== 'ready');
-    mk('3 options', 'Alt+Enter', () => this.actions.alternatives(view), r.status === 'loading');
-    mk('Discard', 'Esc', () => this.actions.discard(view));
+    mk(tr('accept'), r.proposals.length > 1 ? `Tab · 1–${r.proposals.length}` : 'Tab', () => this.actions.accept(view, r.selected), r.status !== 'ready');
+    mk(tr('ir3'), 'Alt+Enter', () => this.actions.alternatives(view), r.status === 'loading');
+    mk(tr('discard'), 'Esc', () => this.actions.discard(view));
     box.appendChild(keys);
     return box;
   }
@@ -284,7 +287,7 @@ export function intentDecorations(actions: IntentWidgetActions): Extension {
     const render = state.field(intentRenderField);
     for (const l of allIntentLines(state)) {
       const line = state.doc.line(Math.min(l.line, state.doc.lines));
-      ranges.push(intentLineDeco.range(line.from));
+      ranges.push(intentLineDecos[currentLang()].range(line.from));
       if (l.line === activeLine && !render && state.selection.main.empty) ranges.push(Decoration.widget({ widget: new IntentHintWidget(), side: 1 }).range(line.to));
     }
     return Decoration.set(ranges, true);

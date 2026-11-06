@@ -3,17 +3,21 @@
  * End-to-end check of the WHOLE web app (shell + editor + panels + PDF pane) in demo mode (`?mock=1`,
  * the in-browser MockApiClient on the canto-demo fixture; no server).
  *
- *   node apps/web/harness/e2e-app.mjs [--url http://127.0.0.1:5173] [--shots DIR] [--headed]
+ *   node apps/web/harness/e2e-app.mjs [--url http://127.0.0.1:5173] [--shots DIR] [--headed] [--only TEXT]
+ *
+ * --only runs the checks whose name contains TEXT; DEBUG_SCROLL=1 logs any element (other than the editor
+ * and panel scrollers) that scrolled after each check, e.g. the page itself.
  *
  * Starts `vite --port 5173` in apps/web when nothing answers at --url, runs the flows below, writes
  * screenshots (app-*.png, deviceScaleFactor 1) to --shots (default: $TMPDIR/paper-copilot-shots) and
  * exits non-zero if a check failed. Uses the dev-only `window.__paper` handle ({api, workspace, shell}).
  *
  * Flows: fixture render (sentence marks, gutter); status-bar review progress; sentence card by hover and
- * by Ctrl+.; Instruct (Chinese) + accept -> gutter shows an AI state; Grammar; Reject -> [claim: ...?]
+ * by Ctrl+.; Instruct (Chinese) + accept -> gutter shows an AI state; Grammar (Ctrl+G); Reject -> [claim: ...?]
  * placeholder listed in the Placeholders panel; Draft from the Outline panel -> proposed sentences in the
  * Review queue; Alt+Down / Ctrl+Enter; ghost via Ctrl+Space then Tab; a Chinese intent line (teal) rendered
- * by Ctrl+Enter; Facts panel; Sync panel blockers; UI language toggle; light and dark screenshots.
+ * by Ctrl+Enter; Facts panel; Sync panel blockers; UI language toggle (shell, card and editor bar in 中文);
+ * light and dark screenshots; a narrow window with no page scroll; no page errors.
  */
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
@@ -464,6 +468,24 @@ async function main() {
     await openTab('Sync');
     await shot('dark-sync');
     return `body ${bg}, editor ${edBg}, card ${cardBg}`;
+  });
+
+  await check('narrow window (1100x760): no page scroll, editor keeps a usable column', async () => {
+    await page.setViewportSize({ width: 1100, height: 760 });
+    await sleep(400);
+    const m = await pc(() => {
+      const se = document.scrollingElement;
+      const ed = document.querySelector('.cm-content')?.getBoundingClientRect();
+      return { sw: se.scrollWidth, sh: se.scrollHeight, w: innerWidth, h: innerHeight, edW: ed ? Math.round(ed.width) : 0 };
+    });
+    await shot('narrow-dark');
+    await page.emulateMedia({ colorScheme: 'light' });
+    await pc(() => window.__paper.shell.getState().setTheme?.('light'));
+    await sleep(300);
+    await shot('narrow-light');
+    assert(m.sw <= m.w && m.sh <= m.h, `page overflows: ${JSON.stringify(m)}`);
+    assert(m.edW >= 280, `editor column only ${m.edW}px`);
+    return `editor column ${m.edW}px`;
   });
 
   await check('no page errors', async () => {

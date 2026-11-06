@@ -222,10 +222,6 @@ export function lineTable(text: string): (offset: number) => number {
   };
 }
 
-function isNotImplemented(e: unknown): boolean {
-  return e instanceof Error && e.message.startsWith('not implemented');
-}
-
 /** Default sidecar factory: the LintSidecar client (./sidecar.ts) behind the LintSidecarLike shape. */
 async function defaultStartSidecar(o: StartSidecarOptions): Promise<LintSidecarLike> {
   const sc = await LintSidecar.start({ skillDir: o.skillDir, python: o.python, log: o.log });
@@ -403,28 +399,10 @@ export function createLintService(ctx: Ctx, opts: LintServiceOptions = {}): Lint
     }
   };
 
-  const toPlain = (latex: string): string => {
-    try {
-      return plainText(latex);
-    } catch (e) {
-      if (!isNotImplemented(e)) throw e;
-      return latex.replace(/\\[a-zA-Z]+\*?/g, ' ').replace(/[{}$~]/g, ' ').replace(/\s+/g, ' ').trim();
-    }
-  };
-
-  let aieseMissing = false;
-  let gateMissing = false;
+  const toPlain = (latex: string): string => plainText(latex);
 
   const aieseFor = (u: SentenceUnit, src: string): LintFlag[] => {
-    if (aieseMissing) return [];
-    let found;
-    try {
-      found = aieseFlags(toPlain(src));
-    } catch (e) {
-      if (!isNotImplemented(e)) throw e;
-      aieseMissing = true;
-      return [];
-    }
+    const found = aieseFlags(toPlain(src));
     const out: LintFlag[] = [];
     for (const a of found) {
       const isWord = a.kind === 'excess_vocab';
@@ -474,15 +452,9 @@ export function createLintService(ctx: Ctx, opts: LintServiceOptions = {}): Lint
   };
 
   const gateFor = (u: SentenceUnit, src: string, g: ReturnType<typeof gateContext>): LintFlag[] => {
-    if (gateMissing || u.kind === 'footnote') return [];
-    let res;
-    try {
-      res = gateSentence(src, { mode: 'draft', facts: g.facts, allowedCiteKeys: g.allowedCiteKeys, knownLabels: g.knownLabels, fictionalNumbers: [], claimedFactIds: u.facts, intentText: u.intentNote });
-    } catch (e) {
-      if (!isNotImplemented(e)) throw e;
-      gateMissing = true;
-      return [];
-    }
+    if (u.kind === 'footnote') return [];
+    // gateSentence fails closed (a 'gate_error' block issue) instead of throwing.
+    const res = gateSentence(src, { mode: 'draft', facts: g.facts, allowedCiteKeys: g.allowedCiteKeys, knownLabels: g.knownLabels, fictionalNumbers: [], claimedFactIds: u.facts, intentText: u.intentNote });
     return res.issues
       .filter((i) => i.code === 'claim_strength')
       .map((i) => {

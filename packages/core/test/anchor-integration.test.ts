@@ -1,5 +1,5 @@
 /**
- * Anchoring on the fixture paper with the real segmenter. Skipped while segment() is a stub.
+ * Anchoring on the fixture paper with the real segmenter.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -11,17 +11,6 @@ import type { ChangeAnnotation } from '../src/api';
 import { AI_ORIGINS, type SentenceState, type SentenceUnit, type SentenceVersion, type VersionOrigin } from '../src/schemas';
 
 const FIXTURE = readFileSync(fileURLToPath(new URL('../../../fixtures/canto-demo/tex/main.tex', import.meta.url)), 'utf8');
-
-function implemented(f: () => unknown): boolean {
-  try {
-    f();
-    return true;
-  } catch (e) {
-    // Any other error means the module exists but fails: let the tests run and show it.
-    return !(e instanceof Error && e.message.startsWith('not implemented'));
-  }
-}
-const segmentReady = implemented(() => segment('One sentence. Another one.'));
 
 const NOW = '2026-11-06T12:00:00.000Z';
 
@@ -96,7 +85,7 @@ class Doc {
   }
 }
 
-describe.skipIf(!segmentReady)('anchoring on the fixture paper (real segmenter)', () => {
+describe('anchoring on the fixture paper (real segmenter)', () => {
   it('imports every sentence as a human, imported unit with consistent spans', () => {
     const d = new Doc(FIXTURE);
     expect(d.units.length).toBeGreaterThan(15);

@@ -88,10 +88,21 @@
 
 .editor-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 4px;
+  padding: 0 24px;
+  text-align: center;
   color: var(--ink-3);
   font-size: 13px;
+}
+.editor-empty p {
+  margin: 0;
+}
+.editor-empty-hint {
+  max-width: 44ch;
+  line-height: 1.5;
 }
 
 /* ---------------------------------------------------------------------------------- */

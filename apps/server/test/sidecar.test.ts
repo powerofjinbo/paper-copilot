@@ -163,9 +163,12 @@ describe.skipIf(!hasPython || !SKILL)('LintSidecar start and close', () => {
     const inFlight = sc.ping();
     await new Promise((r) => setImmediate(r)); // let it be written to the process
     const queued = sc.ping();
+    // Attach the expectation before close(): close() rejects the queued call synchronously, and a rejection with no
+    // handler yet would be reported as unhandled.
+    const queuedRejects = expect(queued).rejects.toThrow(/closed/);
     await sc.close();
     await expect(inFlight).resolves.toBe(true);
-    await expect(queued).rejects.toThrow(/closed/);
+    await queuedRejects;
     await expect(sc.ping()).rejects.toThrow(/closed/);
     await sc.close();
     expect(() => process.kill(pid, 0)).toThrow();

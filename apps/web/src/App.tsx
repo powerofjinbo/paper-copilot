@@ -155,6 +155,7 @@ function Workspace({ api }: { api: ApiClient }) {
   useDevHandle(api);
   const lang = useShell((s) => s.lang);
   const file = useWorkspace((s) => s.file);
+  const connected = useWorkspace((s) => s.connected);
   const rightPane = useWorkspace((s) => s.rightPane);
   const pdfVersion = useWorkspace((s) => s.compile.pdfVersion);
   const leftCollapsed = useShell((s) => s.leftCollapsed);
@@ -194,7 +195,14 @@ function Workspace({ api }: { api: ApiClient }) {
           </>
         ) : null}
         <main className="shell-editor" lang="en">
-          {file ? <Editor key={file} api={api} file={file} onReady={onEditorReady} /> : <div className="editor-empty">{t('editor.noFile')}</div>}
+          {file ? (
+            <Editor key={file} api={api} file={file} onReady={onEditorReady} />
+          ) : (
+            <div className="editor-empty">
+              <p>{t('editor.noFile')}</p>
+              {!connected ? <p className="editor-empty-hint">{t('app.fatalHint')}</p> : null}
+            </div>
+          )}
         </main>
         {rightPane === 'pdf' ? (
           <>
