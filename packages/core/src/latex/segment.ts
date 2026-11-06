@@ -35,9 +35,10 @@
  * - Parts: inside \begin{abstract} -> 'abstract'; after \section{..} whose title matches
  *   /intro/i -> 'intro', /conclu|summary|outlook|discussion and conclu/i -> 'concl'; after \appendix
  *   (or inside an \begin{appendix}) -> 'app'; otherwise 'body'. Fragment mode -> 'body'.
- * - Section ids: `sec:<label>` if a \label follows the heading before any prose, else
- *   `sec:<slug(title)>` (lower-case, non-alphanumerics to '-'), de-duplicated with -2, -3 suffixes.
- *   Text before the first heading (after the abstract) gets 'front'. Abstract gets 'abstract'.
+ * - Section ids: the \label key itself if a \label follows the heading before any prose (e.g.
+ *   'sec:intro'), else 'sec:' + slug(title) (lower-case, runs of non-alphanumerics to '-'),
+ *   de-duplicated with -2, -3 suffixes. Text before the first heading (after the abstract) gets
+ *   'front'. The abstract gets 'abstract'. Fragment mode with no heading: 'body'.
  * - Sentence `start`/`end` are trimmed of surrounding whitespace; `end` is exclusive and includes the
  *   terminal punctuation and closing quotes/brackets and any attached \cite/\footnote.
  * - Headings (\section{..} etc.) are not sentences; they are reported in `sections`.
