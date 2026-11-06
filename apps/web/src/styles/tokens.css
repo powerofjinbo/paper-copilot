@@ -1,0 +1,79 @@
+/*
+ * Design tokens. Provenance colours follow docs/design.md "UI layout": state lives in the gutter;
+ * accepted text is full ink; proposed 60% ink; ghost 45% gray; intent lines teal; placeholders orange.
+ */
+:root {
+  --bg: #fbfaf7;
+  --bg-elev: #ffffff;
+  --bg-sunken: #f2f0eb;
+  --ink: #1d1c1a;
+  --ink-2: #4a4843;
+  --ink-3: #78756e;
+  --line: #e2dfd8;
+  --accent: #2f5fb3;
+  --accent-ink: #ffffff;
+  --focus: #2f5fb3;
+
+  --prov-human: transparent;
+  --prov-proposed: #9a968d;
+  --prov-ai-drafted: #7d8fa8;
+  --prov-ai-edited: #4f6687;
+  --prov-ai-from-intent: #2a9d8f;
+  --prov-external: #d08c2c;
+  --prov-unsupported: #c2412d;
+  --prov-placeholder: #e07a1f;
+
+  --ghost-ink: rgba(29, 28, 26, 0.45);
+  --proposed-ink: rgba(29, 28, 26, 0.6);
+  --intent-bg: rgba(42, 157, 143, 0.12);
+  --placeholder-bg: rgba(224, 122, 31, 0.14);
+  --active-sentence-bg: rgba(47, 95, 179, 0.04);
+  --lint-hint: #b59a2a;
+  --lint-warn: #c2412d;
+  --fact-underline: #2f5fb3;
+
+  --radius: 6px;
+  --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, 'Noto Sans Mono CJK SC', monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #1b1a18;
+    --bg-elev: #242320;
+    --bg-sunken: #151412;
+    --ink: #ece9e2;
+    --ink-2: #c4c0b7;
+    --ink-3: #8f8b82;
+    --line: #36342f;
+    --accent: #7ea6ef;
+    --accent-ink: #10131a;
+    --focus: #7ea6ef;
+    --prov-proposed: #8a867d;
+    --prov-ai-drafted: #8ea2bf;
+    --prov-ai-edited: #a9bddb;
+    --prov-ai-from-intent: #4cc2b4;
+    --prov-external: #e3a64e;
+    --prov-unsupported: #ef6b55;
+    --prov-placeholder: #f29a48;
+    --ghost-ink: rgba(236, 233, 226, 0.45);
+    --proposed-ink: rgba(236, 233, 226, 0.6);
+    --intent-bg: rgba(76, 194, 180, 0.14);
+    --placeholder-bg: rgba(242, 154, 72, 0.16);
+    --active-sentence-bg: rgba(126, 166, 239, 0.06);
+    --fact-underline: #7ea6ef;
+    color-scheme: dark;
+  }
+}
+:root[data-theme='dark'] {
+  --bg: #1b1a18; --bg-elev: #242320; --bg-sunken: #151412; --ink: #ece9e2; --ink-2: #c4c0b7; --ink-3: #8f8b82;
+  --line: #36342f; --accent: #7ea6ef; --accent-ink: #10131a; --focus: #7ea6ef; --prov-proposed: #8a867d;
+  --prov-ai-drafted: #8ea2bf; --prov-ai-edited: #a9bddb; --prov-ai-from-intent: #4cc2b4; --prov-external: #e3a64e;
+  --prov-unsupported: #ef6b55; --prov-placeholder: #f29a48; --ghost-ink: rgba(236, 233, 226, 0.45);
+  --proposed-ink: rgba(236, 233, 226, 0.6); --intent-bg: rgba(76, 194, 180, 0.14); --placeholder-bg: rgba(242, 154, 72, 0.16);
+  --active-sentence-bg: rgba(126, 166, 239, 0.06); --fact-underline: #7ea6ef; color-scheme: dark;
+}
+
+html, body, #root { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 14px; }
