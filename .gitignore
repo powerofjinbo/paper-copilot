@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.vite/
+coverage/
+*.log
+.DS_Store
+# per-paper sidecar data never belongs in this repo
+.paper/
+# test output
+test-results/
+playwright-report/
+e2e/.tmp/
+apps/server/test/.tmp/
+__pycache__/
+*.pyc
+.skill/

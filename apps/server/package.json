@@ -1,0 +1,33 @@
+{
+  "name": "@paper-copilot/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local backend: project store, sentence service, grounding, LLM services, compile, Overleaf sync",
+  "bin": { "paper": "./src/cli.ts" },
+  "scripts": {
+    "dev": "tsx watch src/cli.ts serve",
+    "start": "tsx src/cli.ts serve",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.318",
+    "@anthropic-ai/sdk": "^1.6.0",
+    "@codemirror/state": "^6.7.6",
+    "@fastify/static": "^10.1.10",
+    "@fastify/websocket": "^11.3.7",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@paper-copilot/core": "workspace:*",
+    "@retorquere/bibtex-parser": "^13.0.15",
+    "chokidar": "^4.0.3",
+    "diff-match-patch": "^1.0.5",
+    "fastify": "^5.12.8",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/diff-match-patch": "^1.0.36",
+    "@types/ws": "^8.18.2",
+    "ws": "^8.22.1"
+  }
+}

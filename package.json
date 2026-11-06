@@ -1,0 +1,33 @@
+{
+  "name": "paper-copilot",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A local-first, sentence-first, repo-grounded LaTeX writing platform for HEP papers",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @paper-copilot/server --filter @paper-copilot/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test && pnpm test:sidecar",
+    "test:sidecar": "python3 -m unittest discover -s sidecar -p 'test_*.py' -v",
+    "test:e2e": "playwright test --trace off",
+    "paper": "pnpm --filter @paper-copilot/server exec tsx src/cli.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "^4.1.12"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

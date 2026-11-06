@@ -1,0 +1,15 @@
+{
+  "name": "@paper-copilot/client-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Client-agnostic state machines (ghost text, review navigation) shared by the web client and a later VS Code client",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@paper-copilot/core": "workspace:*"
+  }
+}

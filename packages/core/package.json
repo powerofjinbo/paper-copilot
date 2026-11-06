@@ -1,0 +1,20 @@
+{
+  "name": "@paper-copilot/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure, isomorphic core: schemas, LaTeX segmentation, anchoring, faithfulness gate, prompt builders",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@codemirror/state": "^6.7.6",
+    "diff-match-patch": "^1.0.5",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/diff-match-patch": "^1.0.36"
+  }
+}

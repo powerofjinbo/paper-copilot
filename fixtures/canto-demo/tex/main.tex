@@ -1,0 +1,84 @@
+% SYNTHETIC TEST FIXTURE for paper-copilot.
+% Built from three artifacts of powerofjinbo/Displaced_tracks_GNN (results/addendum_g_g1_v1_claim.json,
+% results/addendum_g_g1_v1.csv, docs/definitions.md). It is not the Canto manuscript; it exercises
+% segmentation, grounding, linting and compilation.
+\documentclass[aps,prd,twocolumn,superscriptaddress,nofootinbib]{revtex4-2}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\newcommand{\ttbar}{\ensuremath{t\bar{t}}}
+
+\begin{document}
+
+\title{Fixture: tracking displaced particles with a graph neural network}
+\author{A. Fixture}
+\affiliation{Nowhere Institute}
+
+\begin{abstract}
+Charged particles from the decay of a long-lived particle start far from the collision point.
+Trackers tuned on prompt particles lose many of them.
+However, graph-neural-network trackers have not been trained without the signal they are meant to find.
+We study a tracker trained only on \ttbar{} events.
+On isolated displaced particles that neither model saw in training, it finds 96.94\% of the targets, compared with 94.62\% for the signal-trained baseline, at a fake-track rate of 0.55\% against 1.38\%.
+\end{abstract}
+
+\maketitle
+
+\section{Introduction}
+\label{sec:intro}
+Searches for long-lived particles look for tracks that do not point back to the beam line~\cite{Ju2022Zenodo}.
+Machine-learning pipelines such as Exa.TrkX were built for prompt tracks, and their large-radius extension was studied by Wang et al.~\cite{Wang2022LRT}.
+However, these studies trained on the signal they evaluate.
+In this paper, we train on generic events only and test on particles generated after the design freeze.
+Section~\ref{sec:method} describes the selection, and Sec.~\ref{sec:results} shows the result.
+
+\section{Method}
+\label{sec:method}
+A target particle has $p_T > 1$~GeV, $|\eta| < 4$ and at least five space points.
+A reconstructed track matches a particle if more than half of its hits come from that particle and more than half of the particle's hits are on the track, i.e., double majority.
+The efficiency is
+\begin{equation}
+  \epsilon = \frac{N_{\text{matched}}}{N_{\text{targets}}},
+  \label{eq:eff}
+\end{equation}
+where both counts use the same population.
+The uncertainty in Eq.~(\ref{eq:eff}) combines the event bootstrap and the spread of three training seeds.\footnote{The bootstrap uses one fixed list of resampled events per test set.}
+
+\section{Results}
+\label{sec:results}
+On the isolated gun particles, the tracker finds 2.32~$\pm$~0.28 points more than acorn (HNL) with the same track builder; see Fig.~\ref{fig:eff}.
+The test set holds 8,710 targets.
+The fake-track rate is 0.55\% against 1.38\% for the baseline.
+This lead holds for every particle species.
+
+\begin{figure}[t]
+  \centering
+  \fbox{\parbox{0.8\linewidth}{\centering placeholder artwork}}
+  \caption{Efficiency versus transverse displacement for the isolated gun particles. Solid: the \ttbar-trained tracker; dashed: acorn (HNL). A ratio above one means the new tracker finds more targets.}
+  \label{fig:eff}
+\end{figure}
+
+\begin{table}[b]
+  \caption{Efficiency on the isolated gun particles, in percent.}
+  \label{tab:eff}
+  \begin{tabular}{lc}
+    Model & Efficiency \\
+    tracker (\ttbar) & 96.94 \\
+    acorn (HNL) & 94.62 \\
+  \end{tabular}
+\end{table}
+
+\section{Conclusions}
+\label{sec:concl}
+We have shown that a tracker trained without the signal finds more displaced particles than one trained on it.
+The principal limitation is that all results are within one simulated detector without pileup.
+
+\appendix
+\section{Validation}
+\label{app:val}
+% A comment with a period. It must not create a sentence.
+On validation, the same comparison gave a smaller difference (see Table~\ref{tab:eff}).
+
+\bibliography{refs}
+
+\end{document}
