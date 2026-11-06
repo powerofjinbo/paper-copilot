@@ -370,3 +370,23 @@ describe('disclosure LaTeX', () => {
     150_000,
   );
 });
+
+describe('disclosure: rewrites on the authors\' instructions', () => {
+  it('counts an accepted rewrite of an author sentence apart from drafted sentences, in every venue text', () => {
+    const units = [
+      unit('w1', { state: 'ai-drafted', everAi: true, imported: true, cites: ['Wang2022LRT'] }),
+      unit('d1', { state: 'ai-drafted', everAi: true }),
+      unit('h1', { state: 'human', imported: true }),
+    ];
+    const versions = [ver('w1', 0, 'import'), ver('w1', 1, 'ai_rewrite', { instruction: '动词提前', lang: 'zh' }), ver('d1', 0, 'ai_ghost', { model: 'claude-haiku-5-5' })];
+    const s = computeDisclosureStats(units, versions);
+    expect(s.aiRewrittenOnRequest).toBe(1);
+    expect(s.aiDrafted).toBe(1);
+    expect(s.everAi).toBe(2);
+    const aps = renderDisclosure('aps', s, OPTS).plain;
+    expect(aps).toMatch(/1 of the authors' sentence was rewritten by the tool on the authors' instructions/);
+    expect(aps).toMatch(/1 sentence was drafted by the tool/);
+    expect(renderDisclosure('arxiv', s, OPTS).plain).toMatch(/1 rewritten with AI on the authors' instructions/);
+    expect(renderDisclosure('elsevier', s, OPTS).plain).toMatch(/rewrite the authors' sentences on their instructions/);
+  });
+});

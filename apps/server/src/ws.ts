@@ -17,6 +17,7 @@
  */
 import type { WebSocket } from 'ws';
 import { ClientMessage, type ServerMessage } from '@paper-copilot/core';
+import { publicConfig } from './config';
 import { HttpError, type Ctx } from './contracts';
 import { SERVER_VERSION } from './version';
 
@@ -108,15 +109,34 @@ export function createWsHub(ctx: Ctx, opts: WsHubOptions = {}): WsHub {
   };
 
   const handle = async (c: Client, msg: ClientMessage): Promise<void> => {
+    try {
+      ctx.llm.noteActivity?.();
+    } catch {
+      /* keep-alive bookkeeping only */
+    }
     switch (msg.type) {
-      case 'hello':
-        send(c, { type: 'welcome', serverVersion: SERVER_VERSION, fakeLlm: ctx.fakeLlm, project: ctx.config });
+      case 'hello': {
+        send(c, { type: 'welcome', serverVersion: SERVER_VERSION, fakeLlm: ctx.fakeLlm, project: publicConfig(ctx.config) });
+        // the last good PDF survives a restart: a (re)loaded page shows it without recompiling
+        try {
+          const st = ctx.build.status();
+          if (st.pdfVersion !== null && ctx.build.pdfPath()) send(c, { type: 'compile.status', state: st.state, pdfVersion: st.pdfVersion, errors: st.errors, logTail: st.logTail });
+        } catch (e) {
+          log.debug('compile status on hello failed', String(e));
+        }
         return;
+      }
       case 'doc.open': {
         const st = await ctx.docs.open(msg.file);
         snapshotOrNotice(c, st.file);
+        // The stored flags (lint passes run only on changes; a reloaded page must still see them).
         try {
-          void Promise.resolve(ctx.llm.prewarm()).catch((e) => log.debug('prewarm failed', String(e)));
+          send(c, { type: 'lint.update', file: st.file, version: st.version, flags: ctx.lint.flags(st.file), scope: 'document', sentenceIds: [] });
+        } catch (e) {
+          log.debug('lint flags on open failed', String(e));
+        }
+        try {
+          void Promise.resolve(ctx.llm.prewarm(st.file)).catch((e) => log.debug('prewarm failed', String(e)));
         } catch (e) {
           log.debug('prewarm failed', String(e));
         }

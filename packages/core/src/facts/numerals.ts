@@ -29,6 +29,21 @@ export interface NumeralDetail extends NumeralToken {
   pEnd: number;
   /** Plain index after attached scripts/compact uncertainty (where unit lookup starts). */
   pAfter: number;
+  /** Written in words ("ninety-seven", "twice", "a hundredfold", "an order of magnitude"). */
+  word: boolean;
+  /** Normalized wording of a word numeral ("ninety-seven percent", "hundredfold", "five times"); '' for digits. */
+  phrase: string;
+  /** "N out of M", "N in M", "N of M" (digits): the denominator M; the token stands for the ratio N/M. */
+  ratioDen: number | null;
+  /** The denominator of a ratio (consumed by the numerator token; structural). */
+  ratioPart: boolean;
+  /**
+   * A small digit integer (0-10) that counts something outside the list of structural countables
+   * ("8 GPUs", "3 fake tracks"); structural, but the gate checks it in ghost and draft modes.
+   */
+  smallCount: boolean;
+  /** The comparison word is a weak one ("over", "under", "within", "beyond"): "averaged over 3 seeds". */
+  weakComparison: boolean;
 }
 
 const STRUCT_WORDS = new Set(
@@ -55,6 +70,92 @@ const YEAR_WORDS = new Set(
 const COUNTED_NOUN =
   /^(?:events?|targets?|particles?|tracks?|hits?|samples?|jets?|muons?|electrons?|photons?|leptons?|vertices|vertex|seeds?|bins?|points?|entries|candidates?|layers?|cells?|channels?|modules?|iterations?|epochs?|steps?|trials?|toys?|simulations?|collisions?|signals?|backgrounds?|times|daughters?|pairs?|edges?|nodes?|graphs?|parameters?|runs?|files?|images?|examples?|objects?|clusters?|segments?|showers?|decays?|neutrinos?|protons?|pions?|kaons?|bunches?|crossings?|tracklets?)$/i;
 
+/** Nouns a small digit integer may count without a fact ("3 seeds", "2 panels"): structure, not results. */
+const COUNTABLE = new Set(
+  (
+    'seed seeds layer layers step steps stage stages panel panels bin bins column columns row rows figure figures fig figs ' +
+    'table tables section sections sec secs chapter chapters case cases class classes category categories region regions part parts ' +
+    'component components term terms type types kind kinds group groups set sets method methods model models approach approaches ' +
+    'option options variant variants scenario scenarios configuration configurations dimension dimensions dim axis axes criterion ' +
+    'criteria condition conditions question questions example examples equation equations eq eqs appendix appendices item items ' +
+    'line lines paragraph paragraphs sentence sentences word words author authors paper papers reference references ref refs ' +
+    'point points way ways reason reasons feature features input inputs output outputs head heads block blocks hidden ' +
+    'sub subsection subsections run runs version versions sample samples'
+  ).split(' '),
+);
+/** Words after a small integer that are not nouns ("3 and 4", "2 or more", "5 of them"). */
+const NON_NOUN = new Set(
+  (
+    'and or of to in on at by for with from than as is are was were be been the a an that which per each times nor but ' +
+    'if so then also only more less fewer most least other others such these those this its their our we it they ' +
+    'where when while after before above below between into onto via vs versus etc because since although though unless until ' +
+    'has have had do does did can could will would may might shall should must remain remains gives give shows show'
+  ).split(' '),
+);
+
+/* Word numerals. Cardinals 0-99 (compounds with a hyphen or a space), optionally times hundred/thousand/million. */
+const W_UNITS: Record<string, number> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+  thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
+};
+const W_TENS: Record<string, number> = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+const W_SCALE: Record<string, number> = { hundred: 100, thousand: 1000, million: 1e6, billion: 1e9 };
+const W_UNIT_RE = 'one|two|three|four|five|six|seven|eight|nine';
+const W_CARD_RE =
+  `(?:(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[- ](?:${W_UNIT_RE})(?![A-Za-z]))?` +
+  `|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|zero|ten|${W_UNIT_RE})(?![A-Za-z])`;
+const W_SCALE_RE = '(?:hundred|thousand|million|billion)(?![A-Za-z])';
+const W_SMALL: Record<string, number> = { an: 1, a: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, several: 2, many: 2 };
+
+/** Value of a cardinal phrase ("ninety-seven", "two hundred", "a thousand"). */
+function cardinalValue(phrase: string): number | null {
+  const words = phrase.toLowerCase().split(/[\s-]+/).filter(Boolean);
+  let total = 0;
+  let cur = 0;
+  let any = false;
+  for (const w of words) {
+    if (w === 'a' || w === 'an') {
+      cur = 1;
+      continue;
+    }
+    if (w in W_UNITS) cur += W_UNITS[w]!;
+    else if (w in W_TENS) cur += W_TENS[w]!;
+    else if (w in W_SCALE) {
+      const sc = W_SCALE[w]!;
+      total += (cur || 1) * sc;
+      cur = 0;
+    } else return null;
+    any = true;
+  }
+  return any ? total + cur : null;
+}
+
+/**
+ * Word-numeral patterns, tried in order at each word start of the plain view: [regex (sticky), kind].
+ * - 'magnitude': "an order of magnitude" (x10), "two orders of magnitude" (x100), "orders of magnitude".
+ * - 'fold': "a hundredfold", "tenfold", "three-fold", "five fold".
+ * - 'halve': "halves", "halved", "halving", "in half", "by half" (a factor of two).
+ * - 'half': "half of" (0.5).
+ * - 'twice': "twice"/"thrice" before as/the/that/... (a factor).
+ * - 'double': "doubles"/"doubled"/"tripled"/"quadruples", "double the" (a factor).
+ * - 'card': cardinals ("ninety-seven", "thirty", "two hundred", "a thousand").
+ */
+/** Cheap pre-test: could the text hold a word numeral at all? */
+const WORDISH =
+  /(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|teen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|twice|thrice|doubl|tripl|quadrupl|halv|half|fold|magnitude)/i;
+
+const WORD_PATTERNS: Array<[RegExp, string]> = [
+  [new RegExp(`(?:(an?|one|two|three|four|five|six|several|many)\\s+)?orders?\\s+of\\s+magnitude(?![A-Za-z])`, 'iy'), 'magnitude'],
+  [new RegExp(`(?:an?\\s+)?((?:${W_CARD_RE}\\s*)?${W_SCALE_RE}|${W_CARD_RE})[- ]?fold(?![A-Za-z])`, 'iy'), 'fold'],
+  [/(?:hundred|thousand|ten|two|three|four|five|six)fold(?![A-Za-z])/iy, 'fold1'],
+  [/(?:halv(?:es|ed|ing)|(?:in|by)\s+half)(?![A-Za-z])/iy, 'halve'],
+  [/half\s+of(?![A-Za-z])/iy, 'half'],
+  [/(twice|thrice)(?=\s+(?:as|the|that|its|their|this|these|those|what|our|his|her|a|an|than|more|less|fewer|larger|smaller|higher|lower)(?![A-Za-z]))/iy, 'twice'],
+  [/(doubl|tripl|quadrupl)(?:es|ed|ing)(?![A-Za-z])/iy, 'double'],
+  [/(double|triple)(?=\s+(?:the|its|their|our|that)(?![A-Za-z]))/iy, 'double'],
+  [new RegExp(`(?:(?:an?|${W_CARD_RE})\\s+)?${W_SCALE_RE}(?:\\s+(?:and\\s+)?${W_CARD_RE})?|${W_CARD_RE}`, 'iy'), 'card'],
+];
+
 /** Physical units recognized after a numeral: [regex (sticky, applied to the plain view), normalized unit]. */
 const UNIT_PATTERNS: Array<[RegExp, string]> = [
   [/(?:GeV|MeV|TeV|keV|PeV|eV)\s*\/\s*c\s*\^?\s*\{?2\}?(?![A-Za-z])/y, '@eVc2'],
@@ -71,6 +172,7 @@ const UNIT_PATTERNS: Array<[RegExp, string]> = [
   [/(mrad|µrad|μrad|rad)(?![A-Za-z])/y, '@1'],
   [/(kHz|MHz|GHz|THz|Hz)(?![A-Za-z])/y, '@1'],
   [/(?:°|deg(?:rees?)?(?![A-Za-z]))/y, 'deg'],
+  [/(TB|GB|MB|kB|KB|TiB|GiB|MiB)(?![A-Za-z])/y, '@1'],
   [/(?:σ|sigma(?![A-Za-z])|standard deviations?(?![A-Za-z]))/y, 'σ'],
   [/T(?![A-Za-z0-9])/y, 'T'],
   [/m(?![A-Za-z0-9])/y, 'm'],
@@ -196,12 +298,160 @@ function comparisonBefore(P: Plain, k: number): string | null {
   return null;
 }
 
+/** The comparison right before `k` is one of the weak words ("over", "under", "within", "beyond"). */
+function weakComparisonBefore(P: Plain, k: number): boolean {
+  const tail = P.s.slice(Math.max(0, k - 30), k).replace(/[\u0005\u0006\u2009$]/g, ' ');
+  return /(?:^|[^A-Za-z])(?:over|under|within|beyond)\s*$/i.test(tail);
+}
+
+type Mk = (pStart: number, pEnd: number, value: number, prec: { decimals: number; sigfigs: number }, exponent: number) => NumeralDetail;
+
+function sigfigsOfInt(v: number): number {
+  const d = String(Math.round(Math.abs(v))).replace(/0+$/, '');
+  return Math.max(1, d.length);
+}
+
+const isWordChar = (c: string | undefined): boolean => c !== undefined && (isAsciiLetter(c) || isDigit(c) || c === '_');
+
+/**
+ * Word numerals in the plain view (outside math, scripts and placeholders): cardinals, "percent" after
+ * them (classified later), factors ("twice", "halves", "a hundredfold", "three-fold", "an order of
+ * magnitude") and "half of". Compound adjectives ("two-step", "one-sentence") and ordinals are skipped.
+ */
+function wordNumerals(P: Plain, mk: Mk): NumeralDetail[] {
+  const s = P.s;
+  const out: NumeralDetail[] = [];
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i]!;
+    if (!isAsciiLetter(c) || isWordChar(s[i - 1]) || s[i - 1] === '-' || P.math[i] || P.script[i] || P.placeholder[i]) {
+      i++;
+      continue;
+    }
+    let hit: { end: number; value: number; factor: boolean; phrase: string } | null = null;
+    for (const [re, kind] of WORD_PATTERNS) {
+      re.lastIndex = i;
+      const m = re.exec(s);
+      if (!m) continue;
+      const whole = m[0];
+      const phrase = whole.toLowerCase().replace(/\s+/g, ' ').replace(/^an? /, '');
+      let value: number | null = null;
+      let factor = true;
+      let end = i + whole.length;
+      switch (kind) {
+        case 'magnitude': {
+          const n = m[1] ? (W_SMALL[m[1].toLowerCase()] ?? 1) : /orders/i.test(whole) ? 2 : 1;
+          value = Math.pow(10, n);
+          break;
+        }
+        case 'fold':
+          value = cardinalValue(m[1]!);
+          break;
+        case 'fold1':
+          value = cardinalValue(whole.replace(/fold$/i, ''));
+          break;
+        case 'halve':
+          value = 2;
+          break;
+        case 'half':
+          // "more than half of its hits" is a criterion (a definition), not a result
+          value = comparisonBefore(P, i) ? null : 0.5;
+          factor = false;
+          end = i + 4; // "half"; "of" stays outside the replaced span
+          break;
+        case 'twice':
+          value = m[1]!.toLowerCase() === 'twice' ? 2 : 3;
+          break;
+        case 'double': {
+          const r = m[1]!.toLowerCase();
+          value = r.startsWith('doubl') ? 2 : r.startsWith('tripl') ? 3 : 4;
+          break;
+        }
+        default: {
+          factor = false;
+          // a bare scale word ("1.5 million", "2 thousand") is a multiplier of a digit numeral, read there
+          value = /^(?:hundred|thousand|million|billion)/i.test(whole) ? null : cardinalValue(whole);
+          // compound adjectives and nouns: "two-step", "one-sentence", "three-body" (not "five-sigma")
+          const after = s.slice(end, end + 12);
+          if (/^-[A-Za-z]/.test(after) && !/^-(?:fold|sigma|percent|times|point|points)(?![A-Za-z])/i.test(after)) value = null;
+          // "one" as a pronoun ("one of", "no one", "one can") is never a quantity
+          if (value === 1 && /^one$/i.test(whole)) {
+            const prevWord = /([A-Za-z]+)[\s\u2009]*$/.exec(s.slice(Math.max(0, i - 12), i))?.[1]?.toLowerCase() ?? '';
+            const nextWord = /^[\s\u2009]*([A-Za-z]+)/.exec(after)?.[1]?.toLowerCase() ?? '';
+            if (['no', 'the', 'this', 'that', 'each', 'every', 'any', 'which', 'some'].includes(prevWord)) value = null;
+            if (['another', 'can', 'may', 'might', 'could', 'would', 'should', 'must', 'finds', 'gets', 'sees', 'obtains', 'expects', 'has', 'needs'].includes(nextWord)) value = null;
+          }
+        }
+      }
+      if (value === null || !Number.isFinite(value)) {
+        // skip the whole word so its parts are not read again
+        hit = null;
+        let e = end;
+        while (e < s.length && (isAsciiLetter(s[e]) || s[e] === '-')) e++;
+        i = e;
+        break;
+      }
+      hit = { end, value, factor, phrase: kind === 'half' ? 'half' : phrase };
+      break;
+    }
+    if (hit) {
+      const frac = hit.value > 0 && hit.value < 1;
+      const tok = mk(i, hit.end, hit.value, { decimals: frac ? 1 : 0, sigfigs: frac ? 1 : sigfigsOfInt(hit.value) }, 0);
+      tok.word = true;
+      tok.phrase = hit.phrase;
+      tok.factor = hit.factor;
+      out.push(tok);
+      i = hit.end;
+      continue;
+    }
+    // advance to the end of this word
+    if (isAsciiLetter(s[i])) {
+      while (i < s.length && isWordChar(s[i])) i++;
+    } else i++;
+  }
+  return out;
+}
+
+/** Classification of a word numeral: "percent"/"points"/"times"/a unit after it, "a factor of", a comparison. */
+function classifyWord(P: Plain, tok: NumeralDetail): void {
+  const s = P.s;
+  let k = tok.pEnd;
+  while (k < s.length && isSpaceLike(s[k])) k++;
+  const rest = s.slice(k, k + 40);
+  let m: RegExpExecArray | null;
+  if (!tok.factor) {
+    if ((m = /^(?:%|-?(?:per\s?cent|percent)(?![A-Za-z]))/i.exec(rest))) {
+      tok.percent = true;
+      tok.phrase += ' percent';
+      tok.replEnd = Math.max(tok.replEnd, P.b[k + m[0].length - 1] ?? tok.replEnd);
+    } else if ((m = /^(?:percentage[\s-]+points?|points?)(?![A-Za-z])/i.exec(rest)) && tok.value > 10) {
+      // "ninety points": "five points" is too often a count of points
+      tok.points = true;
+      tok.phrase += ' points';
+    } else if ((m = /^(?:times|[-\s]?fold)(?![A-Za-z])/i.exec(rest))) {
+      tok.factor = true;
+      tok.phrase += ' times';
+    } else {
+      let ku = k;
+      if (s[ku] === '-' && /[A-Za-zµμ°σ]/.test(s[ku + 1] ?? '')) ku++;
+      const u = readUnitAt(s, ku);
+      if (u && !/^[msT]$/.test(u.unit)) tok.unit = u.unit;
+    }
+  }
+  if (!tok.factor && /factor\s+of\s*$/i.test(s.slice(Math.max(0, tok.pStart - 16), tok.pStart).replace(/[\u0005\u0006\u2009]/g, ' '))) {
+    tok.factor = true;
+    tok.phrase = `factor of ${tok.phrase}`;
+  }
+  tok.comparison = comparisonBefore(P, tok.pStart);
+  if (tok.comparison) tok.weakComparison = weakComparisonBefore(P, tok.pStart);
+}
+
 /**
  * Extract detailed numeral tokens. Never throws (returns [] on pathological input).
  */
 export function extractNumeralDetails(input: string): NumeralDetail[] {
   const text = typeof input === 'string' ? input : String(input ?? '');
-  if (!/[0-9]/.test(text)) return [];
+  if (!/[0-9]/.test(text) && !WORDISH.test(text)) return [];
   let P: Plain;
   try {
     P = buildPlain(text);
@@ -241,6 +491,12 @@ export function extractNumeralDetails(input: string): NumeralDetail[] {
       pStart,
       pEnd,
       pAfter: pEnd,
+      word: false,
+      phrase: '',
+      ratioDen: null,
+      ratioPart: false,
+      smallCount: false,
+      weakComparison: false,
     };
   };
 
@@ -365,10 +621,31 @@ export function extractNumeralDetails(input: string): NumeralDetail[] {
     p = Math.max(after, pEnd);
   }
 
+  // ------------------------------------------------------------------ word numerals
+  {
+    const words = wordNumerals(P, mk);
+    if (words.length) {
+      const all = [...toks.map((tk, i) => ({ tk, i })), ...words.map((tk) => ({ tk, i: -1 }))];
+      all.sort((x, y) => x.tk.pStart - y.tk.pStart || x.tk.pEnd - y.tk.pEnd);
+      const at = new Map<number, number>();
+      all.forEach((x, k) => {
+        if (x.i >= 0) at.set(x.i, k);
+      });
+      const merged = all.map((x) => x.tk);
+      for (const tk of merged) if (tk.uncertaintyOf >= 0) tk.uncertaintyOf = at.get(tk.uncertaintyOf) ?? -1;
+      toks.length = 0;
+      toks.push(...merged);
+    }
+  }
+
   // ------------------------------------------------------------------ classification
   for (let t = 0; t < toks.length; t++) {
     const tok = toks[t]!;
     if (tok.structural) continue; // dates
+    if (tok.word) {
+      classifyWord(P, tok);
+      continue;
+    }
     // glued letters after the numeral: unit, ordinal, factor 'x', or an identifier (3D, 10K, 13a)
     const nextC = s[tok.pEnd];
     const glued = tok.pAfter === tok.pEnd && isAsciiLetter(nextC);
@@ -427,7 +704,13 @@ export function extractNumeralDetails(input: string): NumeralDetail[] {
       while (k < L && isSpaceLike(s[k])) k++;
       rest = s.slice(k, k + 40);
     }
-    if ((m = /^(?:%|‰)/.exec(rest))) {
+    if ((m = /^(?:个)?百分点/.exec(rest))) {
+      tok.points = true;
+    } else if ((m = /^[％]/.exec(rest))) {
+      tok.percent = true;
+    } else if ((m = /^倍/.exec(rest))) {
+      tok.factor = true;
+    } else if ((m = /^(?:%|‰)/.exec(rest))) {
       tok.percent = m[0] === '%';
       consumedEnd = k + m[0].length;
       const r2 = s.slice(consumedEnd).replace(/^[\s\u2009\u0005\u0006-]+/, '');
@@ -467,6 +750,7 @@ export function extractNumeralDetails(input: string): NumeralDetail[] {
     // factor written before: "a factor of 2.4", "factor 2"
     if (!tok.factor && /factor(?:\s+of)?\s*$/i.test(s.slice(Math.max(0, tok.pStart - 16), tok.pStart).replace(/[\u0005\u0006\u2009]/g, ' '))) tok.factor = true;
     tok.comparison = tok.isUncertainty ? null : comparisonBefore(P, tok.negative ? sp : tok.pStart);
+    if (tok.comparison) tok.weakComparison = weakComparisonBefore(P, tok.negative ? sp : tok.pStart);
   }
   // drop identifier pseudo-tokens
   const kept: NumeralDetail[] = [];
@@ -522,10 +806,33 @@ export function extractNumeralDetails(input: string): NumeralDetail[] {
     }
   }
 
+  // ------------------------------------------------------------------ ratios: "9 out of 10", "one in ten", "2 of 3"
+  for (let t = 0; t + 1 < kept.length; t++) {
+    const a = kept[t]!;
+    const b = kept[t + 1]!;
+    const intLike = (x: NumeralDetail): boolean =>
+      !x.structural && x.decimals === 0 && x.exponent === 0 && !x.percent && !x.points && !x.unit && !x.isUncertainty && !x.factor && !x.negative && x.uncertaintyOf < 0 && Number.isInteger(x.value);
+    if (!intLike(a) || !intLike(b) || !(b.value > a.value) || b.value < 2) continue;
+    const between = s.slice(a.pAfter, b.pStart).replace(/[\s\u2009\u0005\u0006~$]+/g, ' ').trim().toLowerCase();
+    const ok = between === 'out of' || between === 'in' || between === 'per' || (between === 'of' && !a.word && !b.word);
+    if (!ok) continue;
+    a.ratioDen = b.value;
+    a.end = b.end;
+    a.raw = text.slice(a.start, a.end);
+    a.replEnd = Math.max(a.replEnd, b.replEnd);
+    a.pAfter = b.pAfter;
+    if (a.word) a.phrase = `${a.phrase} ${between} ${b.phrase || b.raw}`;
+    b.structural = true;
+    b.ratioPart = true;
+    t++;
+  }
+
   // ------------------------------------------------------------------ structural
   for (let t = 0; t < kept.length; t++) {
     const tok = kept[t]!;
     if (tok.structural) continue;
+    // a ratio stands for a result ("9 out of 10 fake tracks"): always checked
+    if (tok.ratioDen !== null) continue;
     const isInt = tok.decimals === 0 && tok.exponent === 0 && !/[,\u2009]/.test(s.slice(tok.pStart, tok.pEnd));
     const plainInt = isInt && !tok.percent && !tok.points && !tok.unit && !tok.isUncertainty && !tok.factor;
     const followedByPm = (() => {
@@ -596,7 +903,18 @@ export function extractNumeralDetails(input: string): NumeralDetail[] {
     }
     // bare small integers 0-10
     if (plainInt && !tok.negative && !followedByPm && tok.value >= 0 && tok.value <= 10) {
+      // after a comparison ("at least 3 space points", "$|\eta| < 2$") it is a cut and must match one;
+      // "averaged over 3 seeds" (a weak comparison word) and "at least one" in words stay structural
+      if (tok.comparison && !tok.weakComparison && !(tok.word && tok.value < 2)) continue;
       tok.structural = true;
+      // "8 GPUs", "3 fake tracks": a count of something that is not structure (checked in ghost/draft)
+      // ("Phase-2 upgrade", "Run-3 data" are names, not counts)
+      if (!tok.word && !(s[tok.pStart - 1] === '-' && isAsciiLetter(s[tok.pStart - 2]))) {
+        const nm = /^[\s\u2009\u0005\u0006~]*([A-Za-z][A-Za-z-]*)(?:[\s\u2009\u0005\u0006~]+([A-Za-z][A-Za-z-]*))?/.exec(s.slice(tok.pAfter, tok.pAfter + 60));
+        const w1 = nm?.[1]?.toLowerCase() ?? '';
+        const w2 = nm?.[2]?.toLowerCase() ?? '';
+        if (w1 && !NON_NOUN.has(w1) && !COUNTABLE.has(w1) && !COUNTABLE.has(w2)) tok.smallCount = true;
+      }
       continue;
     }
   }

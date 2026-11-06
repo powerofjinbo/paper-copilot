@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { EditorProps } from '../contracts';
 import { useWorkspace } from '../state/store';
 import { EditorController } from './controller';
-import { STATE_ORDER } from './labels';
+import { ALT_KEY, STATE_ORDER } from './labels';
 import { stateShort, useEdT } from './i18n';
 import { reviewQueueOf } from './safe';
 import { useEditorUi } from './uiStore';
@@ -22,6 +22,8 @@ export function Editor(props: EditorProps) {
   const [live, setLive] = useState('');
   const heatmap = useEditorUi((s) => s.heatmap);
   const toggleHeatmap = useEditorUi((s) => s.toggleHeatmap);
+  const mono = useEditorUi((s) => s.mono);
+  const toggleMono = useEditorUi((s) => s.toggleMono);
   const { t, lang } = useEdT();
   const toReview = useWorkspace((s) => (s.file === null || s.file === file ? reviewQueueOf(s.units).length : 0));
 
@@ -48,7 +50,7 @@ export function Editor(props: EditorProps) {
   }, [api, file]);
 
   return (
-    <div className={`pc-editor${heatmap ? ' pc-heatmap' : ''}`} data-status={status} data-testid="editor">
+    <div className={`pc-editor${heatmap ? ' pc-heatmap' : ''}`} data-status={status} data-font={mono ? 'mono' : 'prose'} data-testid="editor">
       <div className="pc-editor-bar">
         {!online ? (
           <span className="pc-offline" role="status">
@@ -57,7 +59,7 @@ export function Editor(props: EditorProps) {
         ) : null}
         {toReview > 0 ? (
           <span className="pc-bar-review">
-            {t('toReview', { n: toReview })} · <kbd className="pc-kbd">Alt+↓</kbd>
+            {t('toReview', { n: toReview })} · <kbd className="pc-kbd">{ALT_KEY}+↓</kbd>
           </span>
         ) : null}
         <span className="pc-bar-spacer" />
@@ -81,8 +83,11 @@ export function Editor(props: EditorProps) {
         >
           <span aria-hidden="true">◐</span> {t('heatmap')}
         </button>
+        <button type="button" className="pc-toggle" aria-pressed={mono} title={t('monoTitle')} onClick={toggleMono}>
+          {t('mono')}
+        </button>
       </div>
-      <div ref={hostRef} className="pc-editor-host" />
+      <div ref={hostRef} className="pc-editor-host" data-loading={t('opening')} />
       <div className="pc-sr-only" aria-live="polite" role="status">
         {live}
       </div>

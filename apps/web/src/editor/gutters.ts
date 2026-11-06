@@ -15,7 +15,7 @@ import { ctxField, outlineFor, replanField } from './context';
 import { editorEnv } from './env';
 import { ghostField, ghostPending } from './ghost/ghostField';
 import { allIntentLines } from './intent';
-import { currentLang, stateLabel } from './i18n';
+import { currentLang, edText, stateLabel } from './i18n';
 import { lintTitle } from './decorations';
 import { unitAtPos, unitBefore, unitsField, unitsInRange } from './units';
 
@@ -147,7 +147,7 @@ class PlanMarker extends GutterMarker {
 
 export function planMarkerFor(state: EditorState, line: BlockInfo): PlanMarker | null {
   const pending = ghostPending(state);
-  if (pending && pending.pos >= line.from && pending.pos <= line.to) return new PlanMarker('', 'pending', 'Ghost suggestion requested…');
+  if (pending && pending.pos >= line.from && pending.pos <= line.to) return new PlanMarker('', 'pending', edText(currentLang(), 'ghostPending'));
   const units = lineUnits(state, line);
   const replans = state.field(replanField);
   for (const u of units) {

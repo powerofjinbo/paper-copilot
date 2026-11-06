@@ -18,9 +18,11 @@ interface Persisted {
   leftWidth: number;
   rightWidth: number;
   leftCollapsed: boolean;
+  /** The author asked for the PDF (PDF button, compile, forward search): never hidden for space. */
+  pdfPinned: boolean;
 }
 
-const DEFAULTS: Persisted = { lang: null, theme: 'system', leftWidth: 360, rightWidth: 520, leftCollapsed: false };
+const DEFAULTS: Persisted = { lang: null, theme: 'system', leftWidth: 360, rightWidth: 520, leftCollapsed: false, pdfPinned: false };
 
 export const LEFT_MIN = 280;
 export const LEFT_MAX = 640;
@@ -38,6 +40,7 @@ function load(): Persisted {
       leftWidth: clamp(Number(p.leftWidth) || DEFAULTS.leftWidth, LEFT_MIN, LEFT_MAX),
       rightWidth: clamp(Number(p.rightWidth) || DEFAULTS.rightWidth, RIGHT_MIN, RIGHT_MAX),
       leftCollapsed: p.leftCollapsed === true,
+      pdfPinned: p.pdfPinned === true,
     };
   } catch {
     return { ...DEFAULTS };
@@ -75,6 +78,15 @@ export interface ShellState {
   jobFinishedAt: Record<string, number>;
   /** Increments to ask the Sync panel to run a push check (top-bar Push button). */
   pushCheckRequest: number;
+  /**
+   * Panes hidden for now because the editor would get too narrow (App.tsx useAutoFit). Not persisted:
+   * they come back on their own when the window is wide enough.
+   */
+  fitHidden: { left: boolean; pdf: boolean };
+  /** Panes the user opened explicitly (the left one in this session; the PDF is remembered): never hidden for space. */
+  pinned: { left: boolean; pdf: boolean };
+  /** The keyboard-shortcut overlay ("?"). */
+  helpOpen: boolean;
 
   setLang(l: Lang, chosen?: boolean): void;
   defaultLang(l: Lang): void;
@@ -91,6 +103,11 @@ export interface ShellState {
   takeDrafts(): Array<ServerMessageOf<'draft.proposed'>>;
   markJobFinished(id: string, at: number): void;
   requestPushCheck(): void;
+  setFitHidden(f: { left: boolean; pdf: boolean }): void;
+  pinPdf(on: boolean): void;
+  /** Show the left panel (an explicit user action: it is pinned). */
+  showLeft(): void;
+  setHelpOpen(open: boolean): void;
 }
 
 function browserLang(): Lang {
@@ -106,7 +123,7 @@ const initial = load();
 export const useShell = create<ShellState>((set, get) => {
   const persist = () => {
     const s = get();
-    save({ lang: s.langChosen ? s.lang : null, theme: s.theme, leftWidth: s.leftWidth, rightWidth: s.rightWidth, leftCollapsed: s.leftCollapsed });
+    save({ lang: s.langChosen ? s.lang : null, theme: s.theme, leftWidth: s.leftWidth, rightWidth: s.rightWidth, leftCollapsed: s.leftCollapsed, pdfPinned: s.pinned.pdf });
   };
   return {
     lang: initial.lang ?? browserLang(),
@@ -123,6 +140,9 @@ export const useShell = create<ShellState>((set, get) => {
     pendingDrafts: [],
     jobFinishedAt: {},
     pushCheckRequest: 0,
+    fitHidden: { left: false, pdf: false },
+    pinned: { left: false, pdf: initial.pdfPinned },
+    helpOpen: false,
 
     setLang: (lang, chosen = true) => {
       set({ lang, langChosen: chosen || get().langChosen });
@@ -144,9 +164,21 @@ export const useShell = create<ShellState>((set, get) => {
       persist();
     },
     setLeftCollapsed: (leftCollapsed) => {
-      set({ leftCollapsed });
+      // expanding is always the user's explicit choice: the panel is then never hidden for space
+      set((s) => ({ leftCollapsed, pinned: { ...s.pinned, left: !leftCollapsed } }));
       persist();
     },
+    setFitHidden: (f) => {
+      const cur = get().fitHidden;
+      if (cur.left !== f.left || cur.pdf !== f.pdf) set({ fitHidden: f });
+    },
+    pinPdf: (on) => {
+      if (get().pinned.pdf === on) return;
+      set((s) => ({ pinned: { ...s.pinned, pdf: on } }));
+      persist();
+    },
+    showLeft: () => get().setLeftCollapsed(false),
+    setHelpOpen: (helpOpen) => set({ helpOpen }),
     setPdf: (pdf) => set({ pdf }),
     setFakeLlm: (fakeLlm) => set({ fakeLlm }),
     setServerVersion: (serverVersion) => set({ serverVersion }),

@@ -3,14 +3,17 @@ import { HighlightStyle } from '@codemirror/language';
 import { EditorView } from '@codemirror/view';
 import { tags as t } from '@lezer/highlight';
 
+/** LaTeX syntax (commands, arguments, braces, math) stays monospace; prose uses the text font. */
+const code = { fontFamily: 'var(--font-mono)', fontSize: 'var(--pc-code-size)' };
+
 export const texHighlight = HighlightStyle.define([
-  { tag: t.tagName, color: 'var(--pc-tok-cmd)' },
-  { tag: t.atom, color: 'var(--pc-tok-arg)' },
-  { tag: [t.string, t.standard(t.variableName)], color: 'var(--pc-tok-arg)' },
-  { tag: t.keyword, color: 'var(--pc-tok-math)' },
+  { tag: t.tagName, color: 'var(--pc-tok-cmd)', ...code },
+  { tag: t.atom, color: 'var(--pc-tok-arg)', ...code },
+  { tag: [t.string, t.standard(t.variableName)], color: 'var(--pc-tok-arg)', ...code },
+  { tag: t.keyword, color: 'var(--pc-tok-math)', ...code },
   { tag: t.special(t.variableName), color: 'var(--pc-tok-math)', fontStyle: 'italic' },
   { tag: t.number, color: 'var(--pc-tok-math)' },
-  { tag: t.bracket, color: 'var(--pc-tok-bracket)' },
+  { tag: t.bracket, color: 'var(--pc-tok-bracket)', ...code },
   { tag: t.comment, color: 'var(--pc-tok-comment)', fontStyle: 'italic' },
 ]);
 

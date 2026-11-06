@@ -28,3 +28,4 @@ export {
 export { Bm25Index, BM25_STOPWORDS, bm25Tokens, type Bm25Doc } from './bm25';
 export { KOBAK_2024_STYLE, KOBAK_SOURCE, KOBAK_UNMEASURED_INFLECTIONS } from './data/excessVocab';
 export * as STYLE_CHECK_LISTS from './data/styleCheckLists';
+export { capitalize as capitalizeFirst, plainWords, verbFirst, baselineFirst, splitSentence, simulatedRewrite, simulatedAlternatives, type Rewrite } from './simulate';

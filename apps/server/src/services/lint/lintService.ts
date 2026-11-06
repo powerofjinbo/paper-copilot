@@ -326,10 +326,54 @@ export function createLintService(ctx: Ctx, opts: LintServiceOptions = {}): Lint
     sc?.close().catch(() => undefined);
   };
 
+  const NO_SENTENCE = '\u0000none';
   const fileLint = (file: string): FileLint => {
     let f = store.get(file);
-    if (!f) store.set(file, (f = { sentences: new Map(), document: [] }));
+    if (!f) {
+      f = { sentences: new Map(), document: [] };
+      // Seed from the store so the first pass after a restart does not drop the other pass's flags.
+      try {
+        const seeded = typeof ctx.db.lintByScope === 'function' ? ctx.db.lintByScope(file) : null;
+        if (seeded) {
+          for (const flag of seeded.sentences) {
+            const k = flag.sentenceId ?? NO_SENTENCE;
+            f.sentences.set(k, [...(f.sentences.get(k) ?? []), flag]);
+          }
+          f.document = seeded.document;
+        }
+      } catch {
+        /* no db (tests) */
+      }
+      store.set(file, f);
+    }
     return f;
+  };
+
+  /** Ids of the file's current units when it is open (null: unknown, keep everything). */
+  const liveIdsOf = (file: string): Set<string> | null => {
+    try {
+      const d = ctx.docs.get(file);
+      return d ? new Set(d.units.map((u) => u.id)) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  /** The full list for a file: both passes merged, flags of sentences that no longer exist dropped. */
+  const fullFlags = (file: string): LintFlag[] => {
+    loadDismissals(file);
+    const fl = fileLint(file);
+    const live = liveIdsOf(file);
+    const all: LintFlag[] = [];
+    for (const [sid, list] of [...fl.sentences]) {
+      if (live && sid !== NO_SENTENCE && !live.has(sid)) {
+        fl.sentences.delete(sid);
+        continue;
+      }
+      all.push(...list);
+    }
+    for (const f of fl.document) if (!live || f.sentenceId === null || live.has(f.sentenceId)) all.push(f);
+    return withDismissed(dedupe(all));
   };
 
   const loadDismissals = (file: string) => {
@@ -560,7 +604,8 @@ export function createLintService(ctx: Ctx, opts: LintServiceOptions = {}): Lint
     } catch (e) {
       ctx.log.debug('lint: setLint (sentences) failed', String(e));
     }
-    ctx.bus.emit({ type: 'lint.update', file, version: docVersion(file), flags, scope: 'sentences', sentenceIds: ids });
+    // lint.update always carries the FULL list for the file (the client replaces its list).
+    ctx.bus.emit({ type: 'lint.update', file, version: docVersion(file), flags: fullFlags(file), scope: 'sentences', sentenceIds: ids });
   };
 
   /* ---------------------------------- document pass ---------------------------------- */
@@ -642,7 +687,7 @@ export function createLintService(ctx: Ctx, opts: LintServiceOptions = {}): Lint
       } catch (e) {
         ctx.log.debug('lint: setLint (document) failed', String(e));
       }
-      ctx.bus.emit({ type: 'lint.update', file, version: docVersion(file), flags, scope: 'document', sentenceIds: ids });
+      ctx.bus.emit({ type: 'lint.update', file, version: docVersion(file), flags: fullFlags(file), scope: 'document', sentenceIds: ids });
     }
   };
 
@@ -688,32 +733,46 @@ export function createLintService(ctx: Ctx, opts: LintServiceOptions = {}): Lint
   };
 
   const flags = (file: string): LintFlag[] => {
-    loadDismissals(file);
-    const fl = store.get(file);
-    if (fl) {
-      const all: LintFlag[] = [];
-      for (const f of fl.sentences.values()) all.push(...f);
-      all.push(...fl.document);
-      return withDismissed(dedupe(all));
+    if (!store.has(file) && typeof ctx.db.lintByScope !== 'function') {
+      loadDismissals(file);
+      try {
+        return withDismissed(dedupe(ctx.db.lint(file)));
+      } catch {
+        return [];
+      }
     }
-    try {
-      return withDismissed(dedupe(ctx.db.lint(file)));
-    } catch {
-      return [];
-    }
+    return fullFlags(file);
   };
 
-  const dismiss = (flagId: string) => {
+  const dismiss = (flagId: string): boolean => {
     dismissed.add(flagId);
-    for (const fl of store.values()) {
-      for (const [sid, list] of fl.sentences) fl.sentences.set(sid, list.map((f) => (f.id === flagId ? { ...f, dismissed: true } : f)));
-      fl.document = fl.document.map((f) => (f.id === flagId ? { ...f, dismissed: true } : f));
+    try {
+      for (const file of new Set(ctx.docs.allUnits().map((u) => u.file))) fileLint(file);
+    } catch {
+      /* no docs (tests) */
+    }
+    const touched: string[] = [];
+    for (const [file, fl] of store) {
+      let hit = false;
+      for (const [sid, list] of fl.sentences) {
+        if (list.some((f) => f.id === flagId)) {
+          hit = true;
+          fl.sentences.set(sid, list.map((f) => (f.id === flagId ? { ...f, dismissed: true } : f)));
+        }
+      }
+      if (fl.document.some((f) => f.id === flagId)) {
+        hit = true;
+        fl.document = fl.document.map((f) => (f.id === flagId ? { ...f, dismissed: true } : f));
+      }
+      if (hit) touched.push(file);
     }
     try {
       ctx.db.dismissLint(flagId);
     } catch (e) {
       ctx.log.debug('lint: dismissLint failed', String(e));
     }
+    for (const file of touched) ctx.bus.emit({ type: 'lint.update', file, version: docVersion(file), flags: fullFlags(file), scope: 'document', sentenceIds: [] });
+    return touched.length > 0;
   };
 
   const stop = async () => {

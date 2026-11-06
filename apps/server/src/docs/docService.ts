@@ -40,9 +40,12 @@ import {
   findIntentLines,
   hashString,
   mapUnits,
+  normalizeForHash,
   nowIso,
   reanchor,
   segment,
+  similarity,
+  editDistanceWords,
   type AssignResult,
   type ChangeAnnotation,
   type ClientMessage,
@@ -118,6 +121,23 @@ export const IMPORT_ANNOTATION: ChangeAnnotation = {
 const REPLAN_TRIGGERS: ReadonlySet<VersionOrigin> = new Set(['human_edit', 'human_typed', 'ai_rewrite', 'ai_ghost', 'ai_intent']);
 
 export const snapshotKey = (file: string): string => `doc.snapshot:${file}`;
+/**
+ * The text the units stored in paper.db refer to (their spans and textNorm). Written in the same
+ * transaction as every units upsert, so a crash between a segmentation pass and the debounced disk
+ * write cannot leave units whose spans belong to text that is not on disk (load re-anchors from it).
+ */
+export const unitsTextKey = (file: string): string => `doc.unitsText:${file}`;
+
+/** States holding AI text (mirrors core assign.ts). */
+const AI_TEXT_STATES: ReadonlySet<SentenceUnit['state']> = new Set(['ai-drafted', 'ai-from-intent', 'proposed', 'unsupported', 'ai-edited']);
+const AI_VERSION_ORIGINS: ReadonlySet<VersionOrigin> = new Set(['ai_ghost', 'ai_intent', 'ai_draft', 'ai_rewrite', 'grammar_fix', 'replan']);
+const aiTouched = (u: SentenceUnit): boolean => u.everAi || AI_TEXT_STATES.has(u.state);
+/** Shortest normalized text that is revived by exact hash / by near match. */
+const REVIVE_MIN_EXACT = 8;
+const REVIVE_MIN_NEAR = 24;
+const REVIVE_NEAR_SIMILARITY = 0.85;
+/** Removed AI-touched units remembered for revival (undo/redo, cut/paste). */
+const MAX_TOMBSTONES = 4000;
 
 interface FileState {
   file: string;
@@ -144,6 +164,8 @@ interface FileState {
   /** Mirror-form text of the write in progress (the watcher may see it before the write resolves). */
   writingText: string | null;
   writing: Promise<void> | null;
+  /** An external reload in progress (disk writes wait for it). */
+  reloading: Promise<unknown> | null;
 }
 
 function textOf(st: FileState): string {
@@ -254,6 +276,196 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
   };
 
   /* ------------------------------------------------------------------------------------ */
+  /* Provenance of re-inserted AI text (undo/redo, cut/paste, copies)                      */
+  /* ------------------------------------------------------------------------------------ */
+
+  /**
+   * Removed AI-touched units, by hash. CodeMirror's undo/redo and paste transactions carry no
+   * ChangeAnnotation, so without this an undo followed by a redo (or a cut and paste) of AI text would
+   * create fresh 'human' units: unreviewed drafts would become pushable and everAi would be laundered.
+   * Global across files (a sentence can be cut from one file and pasted into another).
+   */
+  const tombs = new Map<string, SentenceUnit[]>();
+  let tombCount = 0;
+  const tombOrder: SentenceUnit[] = [];
+  const addTomb = (u: SentenceUnit): void => {
+    if (!aiTouched(u) || u.textNorm.length < REVIVE_MIN_EXACT) return;
+    const list = tombs.get(u.hash) ?? [];
+    const i = list.findIndex((x) => x.id === u.id);
+    if (i >= 0) list[i] = u;
+    else {
+      list.push(u);
+      tombOrder.push(u);
+      tombCount++;
+    }
+    tombs.set(u.hash, list);
+    while (tombCount > MAX_TOMBSTONES && tombOrder.length) {
+      const old = tombOrder.shift()!;
+      dropTomb(old.id, old.hash);
+    }
+  };
+  const dropTomb = (id: string, hash: string): void => {
+    const list = tombs.get(hash);
+    if (!list) return;
+    const next = list.filter((x) => x.id !== id);
+    if (next.length !== list.length) tombCount--;
+    if (next.length) tombs.set(hash, next);
+    else tombs.delete(hash);
+  };
+  const seededTombs = new Set<string>();
+  /** Removed AI-touched units of a file from paper.db (a cut before a restart, a paste after). */
+  const seedTombs = (file: string): void => {
+    if (seededTombs.has(file)) return;
+    seededTombs.add(file);
+    const all = soft('db.allUnitsOf', () => db.allUnitsOf(file), [] as Array<{ unit: SentenceUnit; removed: boolean }>);
+    for (const { unit, removed } of all) if (removed && !unit.orphaned) addTomb(unit);
+  };
+
+  const liveIds = (): Set<string> => {
+    const ids = new Set<string>();
+    for (const st of states.values()) for (const u of st.units) ids.add(u.id);
+    return ids;
+  };
+
+  /**
+   * After a local pass: a new unit whose text is (or nearly is) known AI text gets that provenance back.
+   * Exact text of a removed unit or an orphan revives that unit (same id, state, everAi, versions);
+   * a near match revives it as edited AI text; exact text of a live AI unit (a copy) gets a new id but
+   * keeps everAi and the review state. Never applied to text an AI annotation already marked.
+   */
+  const reviveKnownText = (st: FileState, res: AssignResult, before: SentenceUnit[]): void => {
+    const beforeById = new Map(before.map((u) => [u.id, u]));
+    for (const id of res.removed) {
+      const u = beforeById.get(id);
+      if (u) addTomb(u);
+    }
+    const created = res.units.filter((u) => !beforeById.has(u.id) && !u.everAi && u.textNorm.length >= REVIVE_MIN_EXACT);
+    if (created.length === 0) return;
+    const orphans = soft('db.orphans', () => db.orphans(st.file), [] as SentenceUnit[]);
+    const live = liveIds();
+    for (const u of res.units) live.add(u.id);
+    const removedNow = new Set(res.removed);
+    const isFree = (id: string): boolean => removedNow.has(id) || !live.has(id);
+    const used = new Set<string>();
+    const liveAi = (hash: string): SentenceUnit | undefined => {
+      for (const u of res.units) if (u.hash === hash && aiTouched(u) && !created.includes(u)) return u;
+      for (const other of states.values()) {
+        if (other === st) continue;
+        const f = other.units.find((u) => u.hash === hash && aiTouched(u));
+        if (f) return f;
+      }
+      return undefined;
+    };
+
+    const replaceUnit = (n: SentenceUnit, r: SentenceUnit, versions: SentenceVersion[]): void => {
+      res.units = res.units.map((u) => (u === n ? r : u));
+      res.upserts = [...res.upserts.filter((u) => u.id !== n.id && u.id !== r.id), r];
+      res.versions = [...res.versions.filter((v) => v.sentenceId !== n.id), ...versions];
+      res.removed = res.removed.filter((id) => id !== r.id);
+      res.report.created = res.report.created.filter((id) => id !== n.id);
+      res.report.split = res.report.split.filter((x) => x.into !== n.id);
+      used.add(r.id);
+      live.add(r.id);
+    };
+    const positional = (n: SentenceUnit) => ({
+      file: n.file,
+      start: n.start,
+      end: n.end,
+      line: n.line,
+      ctxHash: n.ctxHash,
+      sectionId: n.sectionId,
+      paragraphId: n.paragraphId,
+      part: n.part,
+      kind: n.kind,
+      hash: n.hash,
+      textNorm: n.textNorm,
+      cites: n.cites,
+      placeholders: n.placeholders,
+      orphaned: false,
+    });
+
+    for (const n of created) {
+      const exact = [...(tombs.get(n.hash) ?? []), ...orphans.filter((o) => o.hash === n.hash)].find(
+        (t) => t.kind === n.kind && !used.has(t.id) && isFree(t.id),
+      );
+      if (exact) {
+        // Same text as a removed / orphaned unit: it is that unit again (undo + redo, cut + paste).
+        const r: SentenceUnit = { ...exact, ...positional(n), splitFrom: exact.splitFrom };
+        replaceUnit(n, r, []);
+        dropTomb(exact.id, exact.hash);
+        continue;
+      }
+      const copy = liveAi(n.hash);
+      if (copy) {
+        // A copy of live AI text: a new sentence that carries the source's provenance and review state.
+        const srcAi = lastAiVersion(copy.id) ?? lastVersion(copy.id);
+        const r: SentenceUnit = {
+          ...n,
+          state: copy.state,
+          everAi: true,
+          grammarFixed: copy.grammarFixed,
+          model: copy.model,
+          promptHash: copy.promptHash,
+          intentNote: copy.intentNote,
+          move: copy.move,
+          facts: [...copy.facts],
+          claims: [...copy.claims],
+          editDistance: copy.editDistance,
+          acceptedAt: copy.acceptedAt,
+        };
+        const versions = res.versions
+          .filter((v) => v.sentenceId === n.id)
+          .map((v) =>
+            srcAi && AI_VERSION_ORIGINS.has(srcAi.origin)
+              ? { ...v, origin: srcAi.origin, model: srcAi.model, promptHash: srcAi.promptHash, instruction: srcAi.instruction, lang: srcAi.lang }
+              : v,
+          );
+        replaceUnit(n, r, versions);
+        continue;
+      }
+      if (n.textNorm.length < REVIVE_MIN_NEAR) continue;
+      // Near match: the removed AI sentence came back slightly changed (a redo after a small edit, a
+      // paste that lost a word). It is that unit, edited by the author: AI provenance is kept.
+      let best: { t: SentenceUnit; sim: number } | null = null;
+      const pool: SentenceUnit[] = [...orphans.filter(aiTouched)];
+      for (const list of tombs.values()) pool.push(...list);
+      for (const t of pool) {
+        if (t.kind !== n.kind || used.has(t.id) || !isFree(t.id)) continue;
+        if (Math.abs(t.textNorm.length - n.textNorm.length) > Math.max(t.textNorm.length, n.textNorm.length) * 0.3) continue;
+        const sim = similarity(t.textNorm, n.textNorm);
+        if (sim >= REVIVE_NEAR_SIMILARITY && (!best || sim > best.sim)) best = { t, sim };
+      }
+      if (!best) continue;
+      const t = best.t;
+      const last = lastVersion(t.id);
+      const srcAi = lastAiVersion(t.id) ?? last;
+      const text = textOf(st).slice(n.start, n.end);
+      const dist = srcAi ? editDistanceWords(srcAi.text, text) : t.editDistance;
+      const r: SentenceUnit = {
+        ...t,
+        ...positional(n),
+        everAi: true,
+        state: AI_TEXT_STATES.has(t.state) ? 'ai-edited' : t.state,
+        acceptedAt: t.acceptedAt ?? (AI_TEXT_STATES.has(t.state) ? now() : null),
+        editDistance: dist,
+      };
+      const versions = res.versions
+        .filter((v) => v.sentenceId === n.id)
+        .map((v) => ({
+          ...v,
+          sentenceId: t.id,
+          origin: 'human_edit' as VersionOrigin,
+          version: last ? last.version + 1 : 0,
+          parentVersion: last ? last.version : null,
+          editDistance: last ? editDistanceWords(last.text, v.text) : null,
+        }))
+        .slice(0, 1);
+      replaceUnit(n, r, versions);
+      dropTomb(t.id, t.hash);
+    }
+  };
+
+  /* ------------------------------------------------------------------------------------ */
   /* Segmentation pass                                                                     */
   /* ------------------------------------------------------------------------------------ */
 
@@ -302,6 +514,7 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
       () =>
         db.transaction(() => {
           db.upsertUnits(res.upserts);
+          db.kvSet(unitsTextKey(st.file), text);
           if (res.removed.length) db.markRemoved(res.removed);
           if (o.external) db.replaceOrphans(st.file, res.orphaned);
           persistVersions(st.file, res.versions);
@@ -359,14 +572,32 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
         ctx.bus.emit({ type: 'sentences.patch', file: st.file, version: st.version, upserts: [], removed: [], intentLines: st.intentLines });
         return;
       }
+      const before = st.units;
       let prev = st.units;
-      if (pend && pend.range && pend.annotation.sentenceIds.length) {
-        // Widen named units over the annotated range so a full-sentence replacement keeps the id.
-        const named = new Set(pend.annotation.sentenceIds);
+      let annotation = pend?.annotation ?? null;
+      if (pend && annotation && pend.range && annotation.sentenceIds.length) {
+        // Widen named units over the annotated range so a full-sentence replacement keeps the id. Only a
+        // unit whose own text the change replaced (its mapped span collapsed, or the change lies inside
+        // it) is widened and stays named: a sentence the AI text was only inserted next to (a ghost
+        // accepted with the cursor at a sentence's end) keeps its text, its state and its everAi.
+        const named = new Set(annotation.sentenceIds);
         const r = pend.range;
-        prev = prev.map((u) =>
-          named.has(u.id) && touches(r, u.start, u.end) ? { ...u, start: Math.min(u.start, r.from), end: Math.max(u.end, r.to) } : u,
-        );
+        const keep = new Set<string>();
+        const known = new Set<string>();
+        prev = prev.map((u) => {
+          if (!named.has(u.id)) return u;
+          known.add(u.id);
+          const collapsed = u.start >= u.end;
+          const hit = collapsed
+            ? touches(r, u.start, u.end)
+            : r.from === r.to
+              ? u.start < r.from && r.from < u.end
+              : r.from < u.end && u.start < r.to;
+          if (!hit) return u;
+          keep.add(u.id);
+          return { ...u, start: Math.min(u.start, r.from), end: Math.max(u.end, r.to) };
+        });
+        if (keep.size !== known.size) annotation = { ...annotation, sentenceIds: annotation.sentenceIds.filter((id) => keep.has(id) || !known.has(id)) };
       }
       const res = soft(
         'assignUnits',
@@ -380,7 +611,7 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
             lastAiVersion,
             dirty,
             changeSource: 'local',
-            annotation: pend?.annotation ?? null,
+            annotation,
             annotatedRange: pend?.range ?? null,
             now: now(),
           }),
@@ -392,7 +623,8 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
         ctx.bus.emit({ type: 'sentences.patch', file: st.file, version: st.version, upserts: [], removed: [], intentLines: st.intentLines });
         return;
       }
-      commit(st, res, seg, { annotation: pend?.annotation ?? null, range: pend?.range ?? null, external: false, emitPatch: true });
+      soft('revive known text', () => reviveKnownText(st, res, before), undefined);
+      commit(st, res, seg, { annotation, range: pend?.range ?? null, external: false, emitPatch: true });
     } finally {
       segmenting = false;
     }
@@ -443,7 +675,11 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
   const writeNow = async (st: FileState): Promise<void> => {
     if (st.writeTimer) clearTimeout(st.writeTimer);
     st.writeTimer = null;
-    while (st.writing) await st.writing;
+    // an external reload owns the mirror until it has replaced it (its conflict copy is in flight)
+    while (st.reloading || st.writing) {
+      if (st.reloading) await st.reloading.catch(() => undefined);
+      if (st.writing) await st.writing;
+    }
     if (!st.unsaved) return;
     if (writeHolds > 0 && !closed) {
       // a sync operation owns the files right now; try again after it
@@ -460,6 +696,7 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
           db.transaction(() => {
             db.upsertUnits(st.units);
             db.kvSet(snapshotKey(st.file), text);
+            db.kvSet(unitsTextKey(st.file), text);
           }),
         undefined,
       );
@@ -506,7 +743,24 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
     diskText: text,
     writingText: null,
     writing: null,
+    reloading: null,
   });
+
+  /**
+   * Stored units checked against the text their spans should hold. A unit whose slice does not
+   * normalize to its textNorm gets a zero-width span: overlap matching then ignores it (no merge can
+   * hand its metadata to the sentence that now sits there) and only its text can re-anchor it.
+   */
+  const checkSpans = (units: SentenceUnit[], text: string): { units: SentenceUnit[]; bad: number } => {
+    let bad = 0;
+    const out = units.map((u) => {
+      const inRange = u.start >= 0 && u.end <= text.length && u.start <= u.end;
+      if (inRange && normalizeForHash(text.slice(u.start, u.end)) === u.textNorm) return u;
+      bad++;
+      return { ...u, start: 0, end: 0 };
+    });
+    return { units: out, bad };
+  };
 
   const clampUnits = (units: SentenceUnit[], len: number): SentenceUnit[] =>
     units.map((u) => (u.start <= len && u.end <= len && u.start <= u.end ? u : { ...u, start: Math.min(u.start, len), end: Math.min(Math.max(u.end, u.start), len) }));
@@ -530,6 +784,9 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
     const stored = soft('db.units', () => db.units(rel), [] as SentenceUnit[]);
     const orphans = soft('db.orphans', () => db.orphans(rel), [] as SentenceUnit[]);
     const snapshot = soft('db.kvGet', () => db.kvGet(snapshotKey(rel)), undefined);
+    // The text the stored units' spans refer to: the last segmented mirror (it differs from the
+    // snapshot when the process died between a pass and the debounced disk write).
+    const unitsText = soft('db.kvGet units text', () => db.kvGet(unitsTextKey(rel)), undefined) ?? snapshot;
     let report: ReanchorReport | null = null;
     let res: AssignResult | null = null;
     let external = false;
@@ -558,13 +815,23 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
           }),
         null,
       );
-    } else if (snapshot !== undefined && snapshot === text) {
-      // Unchanged since the last save: refresh positional fields only.
+    } else if (unitsText !== undefined && unitsText === text) {
+      // Unchanged since the units were stored: refresh positional fields only. A stored unit whose span
+      // does not hold its own text (it should not happen) is never trusted by position: it can only be
+      // re-anchored by its text, so no other sentence inherits its metadata.
+      const checked = checkSpans(stored, text);
       res = soft(
         'assignUnits (reopen)',
-        () => assignUnits({ file: rel, text, seg, prev: clampUnits(stored, text.length), lastVersion, lastAiVersion, dirty: [], changeSource: 'local', annotation: null, annotatedRange: null, now: t }),
+        () =>
+          checked.bad === 0
+            ? assignUnits({ file: rel, text, seg, prev: checked.units, lastVersion, lastAiVersion, dirty: [], changeSource: 'local', annotation: null, annotatedRange: null, now: t })
+            : reanchor(text, text, seg, { file: rel, prev: [...checked.units, ...orphans], lastVersion, lastAiVersion, now: t }),
         null,
       );
+      if (res && checked.bad > 0) {
+        external = true;
+        report = res.report;
+      }
     } else {
       // Changed on disk while the app was closed: re-anchor against the last-saved snapshot.
       external = true;
@@ -572,8 +839,8 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
       res = soft(
         'reanchor (open)',
         () =>
-          snapshot !== undefined
-            ? reanchor(snapshot, text, seg, { file: rel, prev: [...clampUnits(stored, snapshot.length), ...orphans], lastVersion, lastAiVersion, now: t })
+          unitsText !== undefined
+            ? reanchor(unitsText, text, seg, { file: rel, prev: [...checkSpans(stored, unitsText).units, ...orphans], lastVersion, lastAiVersion, now: t })
             : assignUnits({ file: rel, text, seg, prev: clampUnits(prev, text.length), lastVersion, lastAiVersion, changeSource: 'external', annotation: null, annotatedRange: null, now: t }),
         null,
       );
@@ -588,12 +855,25 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
       st.units = stored;
       st.intentLines = intentInfo(seg, text);
     }
-    soft('db.kvSet snapshot', () => db.kvSet(snapshotKey(rel), text), undefined);
+    soft(
+      'db.kvSet snapshot',
+      () =>
+        db.transaction(() => {
+          db.upsertUnits(st.units);
+          db.kvSet(snapshotKey(rel), text);
+          db.kvSet(unitsTextKey(rel), text);
+        }),
+      undefined,
+    );
+    seedTombs(rel);
     if (report && (report.edited.length || report.created.length || report.orphaned.length)) {
+      const unsavedLost = snapshot !== undefined && snapshot === text && unitsText !== text;
       ctx.bus.emit({
         type: 'notice',
         level: 'info',
-        message: `${rel} changed outside the app while it was closed: ${report.edited.length} sentence(s) edited, ${report.created.length} new, ${report.orphaned.length} could not be re-anchored (kept in the sidecar).`,
+        message: unsavedLost
+          ? `${rel}: the last session ended before its latest edits were written to disk. ${report.orphaned.length} sentence(s) not on disk are kept in the sidecar and re-attach when the editor sends the text again.`
+          : `${rel} changed outside the app while it was closed: ${report.edited.length} sentence(s) edited, ${report.created.length} new, ${report.orphaned.length} could not be re-anchored (kept in the sidecar).`,
       });
       history.event({ event: 'reanchor', ts: t, sentenceId: null, file: rel, source: 'open', report });
     }
@@ -631,13 +911,16 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
   /* External reload                                                                       */
   /* ------------------------------------------------------------------------------------ */
 
+  let conflictSeq = 0;
   const saveConflictCopy = async (st: FileState, text: string): Promise<string> => {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const path = join(ctx.paths.paper, 'conflicts', `${st.file.replace(/[\\/]/g, '__')}.${stamp}.tex`);
+    const seq = (conflictSeq++).toString(36);
+    const path = join(ctx.paths.paper, 'conflicts', `${st.file.replace(/[\\/]/g, '__')}.${stamp}-${seq}.tex`);
     await writeFileAtomic(path, toDisk(text, st.form));
     return path;
   };
 
+  /** External reloads of one file run one at a time; disk writes wait for them (see writeNow). */
   const reloadFromDisk = async (file: string, source: 'pull' | 'external'): Promise<ReanchorReport> => {
     const rel = resolveInTex(ctx.paths.tex, file).rel;
     const st0 = states.get(rel);
@@ -647,6 +930,20 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
       return report ?? { unchanged: state.units.length, edited: [], created: [], orphaned: [], split: [] };
     }
     const st = st0;
+    const prior = st.reloading;
+    const p = (async () => {
+      if (prior) await prior.catch(() => undefined);
+      return reloadNow(st, rel, source);
+    })();
+    st.reloading = p;
+    try {
+      return await p;
+    } finally {
+      if (st.reloading === p) st.reloading = null;
+    }
+  };
+
+  const reloadNow = async (st: FileState, rel: string, source: 'pull' | 'external'): Promise<ReanchorReport> => {
     while (st.writing) await st.writing;
     let raw: string;
     try {
@@ -658,30 +955,49 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
       }
       throw e;
     }
-    flushSegment(st);
     const disk = fromDisk(raw);
-    const mirror = textOf(st);
-    if (disk.text === st.diskText && !st.unsaved) {
-      return { unchanged: st.units.length, edited: [], created: [], orphaned: [], split: [] };
-    }
+    // From here on, everything up to the mirror replacement must see the mirror the editor will lose:
+    // client changes can arrive during any await (the conflict-copy write), so the plan is recomputed
+    // after each await until the copy holds exactly the text that is replaced.
+    let mirror = '';
     let target = disk.text;
     let keepUnsaved = false;
-    if (st.unsaved && mirror !== st.diskText && disk.text !== st.diskText) {
-      // Local edits not yet written AND a change on disk: merge the disk change into the mirror.
-      const dmp = new DiffMatchPatch();
-      dmp.Diff_Timeout = 0;
-      const patches = dmp.patch_make(st.diskText, disk.text);
-      const [merged, applied] = dmp.patch_apply(patches, mirror);
-      if (applied.every(Boolean)) {
-        target = merged;
-        keepUnsaved = merged !== disk.text;
-      } else {
-        const copy = await saveConflictCopy(st, mirror);
-        ctx.bus.emit({ type: 'notice', level: 'warn', message: `${rel} changed on disk while you had unsaved edits that could not be merged. The disk version is now open; your text was saved to ${copy}.` });
+    let conflict = false;
+    const plan = (): 'unchanged' | 'touch' | 'go' => {
+      flushSegment(st);
+      mirror = textOf(st);
+      target = disk.text;
+      keepUnsaved = false;
+      conflict = false;
+      if (disk.text === st.diskText && !st.unsaved) return 'unchanged';
+      if (st.unsaved && mirror !== st.diskText && disk.text !== st.diskText) {
+        // Local edits not yet written AND a change on disk: merge the disk change into the mirror.
+        const dmp = new DiffMatchPatch();
+        dmp.Diff_Timeout = 0;
+        const patches = dmp.patch_make(st.diskText, disk.text);
+        const [merged, applied] = dmp.patch_apply(patches, mirror);
+        if (applied.every(Boolean)) {
+          target = merged;
+          keepUnsaved = merged !== disk.text;
+        } else conflict = true;
+      } else if (st.unsaved && disk.text === st.diskText) {
+        // Disk did not really change (e.g. a touch); keep the local edits.
+        return 'touch';
       }
-    } else if (st.unsaved && disk.text === st.diskText) {
-      // Disk did not really change (e.g. a touch); keep the local edits.
-      return { unchanged: st.units.length, edited: [], created: [], orphaned: [], split: [] };
+      return 'go';
+    };
+    let step = plan();
+    const copies: string[] = [];
+    while (step === 'go' && conflict) {
+      const saved = mirror;
+      copies.push(await saveConflictCopy(st, saved));
+      if (textOf(st) === saved && !needsSegment(st)) break;
+      step = plan(); // the author typed during the write: copy (or merge) the newer text too
+    }
+    if (step !== 'go') return { unchanged: st.units.length, edited: [], created: [], orphaned: [], split: [] };
+    if (conflict) {
+      const copy = copies[copies.length - 1]!;
+      ctx.bus.emit({ type: 'notice', level: 'warn', message: `${rel} changed on disk while you had unsaved edits that could not be merged. The disk version is now open; your text was saved to ${copy}.` });
     }
     st.form = disk.form;
     if (target === mirror) {
@@ -716,14 +1032,17 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
     soft('db.kvSet snapshot', () => db.transaction(() => {
       db.upsertUnits(st.units);
       db.kvSet(snapshotKey(rel), disk.text);
+      db.kvSet(unitsTextKey(rel), target);
     }), undefined);
     if (keepUnsaved) scheduleWrite(st);
     else st.unsaved = false;
     ctx.bus.emit({ type: 'doc.replace', file: rel, version: st.version, text: target, units: st.units, intentLines: st.intentLines, report });
     history.event({ event: 'reanchor', ts: t, sentenceId: null, file: rel, source, report });
     const changed = report.edited.length + report.created.length;
-    if (changed || report.orphaned.length) {
-      const who = source === 'pull' ? 'Co-authors changed' : 'Changed on disk:';
+    // A pull answers its caller with the reports (the UI shows them in its language); an edit on disk
+    // has no caller, so every client gets a notice.
+    if (source !== 'pull' && (changed || report.orphaned.length)) {
+      const who = 'Changed on disk:';
       ctx.bus.emit({
         type: 'notice',
         level: report.orphaned.length ? 'warn' : 'info',

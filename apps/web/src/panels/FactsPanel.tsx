@@ -1,8 +1,8 @@
 /** Fact store: searchable table, confirm/exclude, unresolved numerals, rescan, repository reader. */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { renderFact, type Fact } from '@paper-copilot/core';
 import type { ApiClient } from '../contracts';
-import { revealSentence } from '../components/actions';
+import { refetchFacts, revealSentence } from '../components/actions';
 import { isJobActive, useAction, useJob, useUnitText } from '../components/hooks';
 import { IconFacts, IconRefresh, IconSearch, Spinner } from '../components/Icons';
 import { Badge, Button, EmptyState, Highlight, PanelHeader, PanelSection, displayLatex } from '../components/ui';
@@ -74,6 +74,12 @@ export function FactsPanel({ api }: { api: ApiClient }) {
       }),
     [facts, query, filter, usage],
   );
+
+  // Keep the unresolved list in step with the text while the panel is open (debounced).
+  useEffect(() => {
+    const timer = setTimeout(() => void refetchFacts(api).catch(() => undefined), 500);
+    return () => clearTimeout(timer);
+  }, [api, units]);
 
   const rescan = useAction(async () => {
     const r = await api.rescanFacts();

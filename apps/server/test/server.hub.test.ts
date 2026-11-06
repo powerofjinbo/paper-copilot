@@ -178,11 +178,17 @@ describe('server (fake AI, fixture project)', () => {
     expect(typeof info.stats.units).toBe('number');
   });
 
-  it('outline: GET empty, PUT validates and broadcasts plan.updated', async () => {
+  it('outline: GET empty (with the document headings offered as sections), PUT validates and broadcasts plan.updated', async () => {
     const c = await connect(port, ctx.token);
     try {
       const g = await req(port, 'GET', '/api/outline', { headers: auth() });
-      expect(g.json()).toEqual(emptyOutline());
+      expect({ ...g.json(), sections: [] }).toEqual(emptyOutline());
+      const secs = g.json().sections as Array<{ id: string; title: string; template: string; ghostMode: string; paragraphs: unknown[] }>;
+      expect(secs.map((x) => x.id)).toEqual(['abstract', 'sec:intro', 'sec:method', 'sec:results', 'sec:concl', 'app:val']);
+      expect(secs.find((x) => x.id === 'sec:results')).toMatchObject({ title: 'Results', template: 'results', ghostMode: 'auto-propose', paragraphs: [] });
+      expect(secs.find((x) => x.id === 'sec:intro')).toMatchObject({ template: 'introduction', ghostMode: 'complete-my-sentence' });
+      // offered, not saved: the file is untouched until the author saves
+      expect(existsSync(ctx.paths.outline) ? JSON.parse(readFileSync(ctx.paths.outline, 'utf8')).sections : []).toEqual([]);
       expect((await req(port, 'PUT', '/api/outline', { headers: auth(), body: { story: 'nope' } })).status).toBe(400);
       const o = { ...emptyOutline(), story: { text: 'A tracker trained without signal.', keyPhrase: 'without signal', provenance: 'author' } };
       const p = await req(port, 'PUT', '/api/outline', { headers: auth(), body: o });

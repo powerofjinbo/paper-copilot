@@ -1,6 +1,6 @@
 /*
  * Design tokens. Provenance colours follow docs/design.md "UI layout": state lives in the gutter;
- * accepted text is full ink; proposed 60% ink; ghost 45% gray; intent lines teal; placeholders orange.
+ * accepted text is full ink; proposed 60% ink; ghost 58% gray (light, >= 3:1) / 45% (dark), italic; intent lines teal; placeholders orange.
  */
 :root {
   --bg: #fbfaf7;
@@ -23,7 +23,7 @@
   --prov-unsupported: #c2412d;
   --prov-placeholder: #e07a1f;
 
-  --ghost-ink: rgba(29, 28, 26, 0.45);
+  --ghost-ink: rgba(29, 28, 26, 0.58);
   --proposed-ink: rgba(29, 28, 26, 0.6);
   --intent-bg: rgba(42, 157, 143, 0.12);
   --placeholder-bg: rgba(224, 122, 31, 0.14);
@@ -35,6 +35,8 @@
   --radius: 6px;
   --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, 'Noto Sans Mono CJK SC', monospace;
+  /* Prose in the editor: a text face that reads like the paper; CJK (intent notes) falls back to a sans */
+  --font-prose: 'Source Serif 4', 'Source Serif Pro', Charter, 'Bitstream Charter', 'Sitka Text', Cambria, 'Noto Serif', 'DejaVu Serif', 'PingFang SC', 'Noto Sans CJK SC', 'Microsoft YaHei', Georgia, serif;
   color-scheme: light;
 }
 

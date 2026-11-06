@@ -24,6 +24,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { UNREVIEWED_STATES, type PushCheck, type ReanchorReport, type SentenceUnit } from '@paper-copilot/core';
 import { HttpError, type Ctx, type SyncService } from '../../contracts';
+import { maskRemoteUrl } from '../../config';
 import { writeFileAtomic } from '../../infra';
 import { isBibName, isTexName, listFiles } from '../../docs/text';
 import { createGit, describeProc, runProc, type Git, type ProcResult } from './proc';
@@ -88,8 +89,9 @@ export function createSyncService(ctx: Ctx, opts: SyncServiceOptions = {}): Sync
   const mode = () => ctx.config.sync.mode;
   const baseOf = (file: string) => join(ctx.paths.syncBase, ...file.split('/'));
 
+  const SYNC_OFF = 'Sync is off for this project (sync mode "none"). Set "sync" in .paper/project.json, or re-run `paper init` with --sync git --remote <Overleaf git URL>.';
   const unavailable = (): never => {
-    throw new HttpError(409, 'Sync is off for this project (sync mode "none"). Set "sync" in .paper/project.json, or re-run `paper init` with --sync git --remote <Overleaf git URL>.');
+    throw new HttpError(409, SYNC_OFF);
   };
 
   /** Pause the watcher and defer editor disk writes while git/ols rewrite the tree. */
@@ -485,7 +487,10 @@ export function createSyncService(ctx: Ctx, opts: SyncServiceOptions = {}): Sync
     } else {
       ({ files, diff } = baseChanges());
     }
-    return { ok: blockers.length === 0, blockers, diff, files };
+    // Sync mode "none": the guard still lists blockers and the diff since the last sync, but a push is
+    // impossible, so the check never reports ok.
+    if (mode() === 'none') return { ok: false, blockers, diff, files, unavailable: SYNC_OFF };
+    return { ok: blockers.length === 0, blockers, diff, files, unavailable: null };
   };
 
   const summarizeRefusal = (check: PushCheck): string => {
@@ -499,7 +504,7 @@ export function createSyncService(ctx: Ctx, opts: SyncServiceOptions = {}): Sync
     async status() {
       const m = mode();
       if (m === 'none') return { mode: 'none', remote: null, branch: '', ahead: 0, behind: 0, dirty: false };
-      if (m === 'ols') return { mode: 'ols', remote: ctx.config.sync.remote, branch: '', ahead: 0, behind: 0, dirty: changedVsBase().length > 0 };
+      if (m === 'ols') return { mode: 'ols', remote: maskRemoteUrl(ctx.config.sync.remote), branch: '', ahead: 0, behind: 0, dirty: changedVsBase().length > 0 };
       const g = git();
       await ensureRepo(g);
       const branch = (await g.run(['symbolic-ref', '--short', '-q', 'HEAD'])).stdout.trim() || 'HEAD';
@@ -514,7 +519,7 @@ export function createSyncService(ctx: Ctx, opts: SyncServiceOptions = {}): Sync
         behind = Number(r[1] ?? 0) || 0;
       }
       const dirty = (await g.run(['status', '--porcelain=v1', '--untracked-files=no'])).stdout.trim().length > 0;
-      return { mode: 'git', remote: remoteUrl, branch, ahead, behind, dirty };
+      return { mode: 'git', remote: maskRemoteUrl(remoteUrl), branch, ahead, behind, dirty };
     },
 
     pull() {

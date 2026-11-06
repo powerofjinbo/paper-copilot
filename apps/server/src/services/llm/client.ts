@@ -258,11 +258,16 @@ export interface RealClientOptions {
   maxRetries?: number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /**
-   * Pre-warm shape (decided by scripts/bench/prewarm-format.ts on the author's account):
-   *   'zero'             max_tokens 0 without output_config.format (default; documented as accepted),
-   *   'zero-with-format' max_tokens 0 with the format (only if the API accepts it),
-   *   'one-with-format'  max_tokens 1 with the format (one output token billed).
-   * Default: PAPER_PREWARM_MODE, else 'zero'. A 400 on a zero-token warm falls back to 'one-with-format'.
+   * Pre-warm shape:
+   *   'one-with-format'  max_tokens 1, non-streaming, with the route's output_config.format (default:
+   *                      one output token billed). Structured outputs inject the schema into the prompt
+   *                      and setting or changing the format is a cache breaker, so only a warm that
+   *                      carries the same format as the real ghost/actions requests writes an entry they
+   *                      read; max_tokens 0 rejects output_config.format (prompt-caching docs).
+   *   'zero'             max_tokens 0 without the format (cheaper, but its entry is likely never read;
+   *                      scripts/bench/prewarm-format.ts measures it),
+   *   'zero-with-format' max_tokens 0 with the format (documented as rejected; bench only).
+   * Default: PAPER_PREWARM_MODE, else 'one-with-format'. A 400 on a zero-token warm falls back to 'one-with-format'.
    */
   prewarmMode?: PrewarmMode;
   /** Request timeouts per route class, ms. */
@@ -274,7 +279,7 @@ export type PrewarmMode = 'zero' | 'zero-with-format' | 'one-with-format';
 
 export function prewarmModeFromEnv(env: NodeJS.ProcessEnv = process.env): PrewarmMode {
   const v = env.PAPER_PREWARM_MODE?.trim();
-  return v === 'zero-with-format' || v === 'one-with-format' ? v : 'zero';
+  return v === 'zero' || v === 'zero-with-format' ? v : 'one-with-format';
 }
 
 export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -372,9 +377,9 @@ export function createRealLlmClient(opts: RealClientOptions): LlmClient {
       try {
         if (prewarmMode !== 'one-with-format' && !prewarmNeedsOne.has(req.model)) {
           try {
-            // max_tokens 0 is documented to reject output_config.format, so the default zero-token warm
-            // omits it. Whether that entry is read by requests that do carry the format is what
-            // scripts/bench/prewarm-format.ts measures (PAPER_PREWARM_MODE switches the shape).
+            // Opt-in (PAPER_PREWARM_MODE): max_tokens 0 is documented to reject output_config.format, so
+            // the zero-token warm omits it; whether requests that carry the format read that entry is
+            // what scripts/bench/prewarm-format.ts measures.
             return await send(0, prewarmMode === 'zero-with-format');
           } catch (e) {
             if (!(e instanceof Anthropic.BadRequestError)) throw e;

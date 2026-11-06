@@ -259,7 +259,9 @@ async function main() {
   });
 
   await check('Ctrl+. opens the card with focus', async () => {
-    instructId = await cursorIn('Trackers tuned on prompt particles');
+    // a sentence the simulated rewrite can change ("compared with" -> baseline first); an identical
+    // proposal is a no-op and leaves the sentence the author's
+    instructId = await cursorIn('On isolated displaced particles that neither');
     await page.keyboard.press('Control+.');
     await page.waitForSelector('[data-testid="sentence-card"]', { timeout: 2000 });
     const inCard = await pc(() => !!document.activeElement?.closest('[data-testid="sentence-card"]'));
@@ -270,7 +272,7 @@ async function main() {
 
   await check('Instruct with a Chinese instruction, accept, gutter shows the AI state', async () => {
     const before = await gutterStateFor(instructId);
-    await cursorIn('Trackers tuned on prompt particles');
+    await cursorIn('On isolated displaced particles that neither');
     await page.keyboard.press('Control+i');
     await page.waitForSelector('.pc-card input.pc-input', { timeout: 2000 });
     await page.keyboard.insertText('把基线放在前面');
@@ -328,13 +330,18 @@ async function main() {
   let drafted = 0;
   await check('Draft from the Outline panel inserts proposed sentences that appear in the Review queue', async () => {
     await openTab('Outline');
+    // anti-anchoring: Draft is locked until the author wrote the five items
+    const story = page.locator('.five-items textarea').first();
+    await story.scrollIntoViewIfNeeded();
+    await story.fill('A tracker trained without the signal finds more displaced particles than the baseline.');
+    await page.locator('.attest input[type="checkbox"]').first().check();
     const before = await pc(() => window.__paper.workspace.getState().units.filter((u) => u.state === 'proposed' || u.state === 'unsupported').length);
     // open the Results section card
     const sec = page.locator('.section-card').filter({ hasText: /Results/ }).first();
     await sec.scrollIntoViewIfNeeded();
     const head = sec.locator('button').first();
     await head.click();
-    const draftBtn = sec.getByRole('button', { name: /Draft from (outline|my notes)/ }).first();
+    const draftBtn = sec.getByRole('button', { name: /Draft from outline/ }).first();
     await draftBtn.scrollIntoViewIfNeeded();
     await shot('outline-draft');
     await draftBtn.click();

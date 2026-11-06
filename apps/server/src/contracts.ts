@@ -148,6 +148,8 @@ export interface PaperDb {
   allVersions(): SentenceVersion[];
   setLint(file: string, flags: LintFlag[], scope: 'sentences' | 'document', sentenceIds: string[]): void;
   lint(file: string): LintFlag[];
+  /** The stored flags split by the pass that produced them (seeds the lint service after a restart). */
+  lintByScope?(file: string): { sentences: LintFlag[]; document: LintFlag[] };
   dismissLint(id: string): void;
   kvGet(key: string): string | undefined;
   kvSet(key: string, value: string): void;
@@ -288,8 +290,10 @@ export interface LintService {
   /** Debounced (2 s) whole-document pass (sidecar lint.document on the flattened, shadowed text); emits lint.update scope 'document'. */
   scheduleDocument(file: string): void;
   lintDocumentNow(file: string): Promise<void>;
+  /** The FULL current list for a file (both passes merged, flags of removed sentences dropped); every lint.update carries it. */
   flags(file: string): LintFlag[];
-  dismiss(flagId: string): void;
+  /** Mark a flag dismissed (persisted); emits lint.update with the full list of each file that holds it. Returns whether the flag was known. */
+  dismiss(flagId: string): boolean;
   status(): { sidecar: boolean; reason: string | null; styleCheckVersion: string | null };
 }
 
@@ -343,8 +347,12 @@ export interface LlmService {
   renderIntent(req: z.infer<typeof IntentRenderRequest>): Promise<Proposal[]>;
   /** Re-plan downstream proposed sentences after an edit; emits replan.proposed and plan.updated. */
   replanAfterEdit(file: string, sentenceId: string): Promise<void>;
-  /** Pre-warm caches for the ghost and actions routes (on document open). */
-  prewarm(): Promise<void>;
+  /** Pre-warm caches for the ghost and actions routes (on document open; the template is the open file's dominant one). */
+  prewarm(file?: string): Promise<void>;
+  /** The author did something (any client message): keeps the cache keep-alive running. */
+  noteActivity?(): void;
+  /** Stop timers (keep-alive) and wait for the queued cost-log writes. */
+  close?(): void | Promise<void>;
   skill(): SkillBundle | null;
   /** Build the shared system blocks for a task (same code path for every route). */
   systemFor(task: TaskKind, opts: { sectionType: string; template?: string | null; query?: string; factIds?: string[] }): PromptBlock[];

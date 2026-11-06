@@ -107,6 +107,8 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
 
   private token: string | null = null;
   private tokenSource: 'meta' | 'session' | null = null;
+  /** The page's <meta> token was rejected or its server went away: use GET /api/session from now on. */
+  private metaStale = false;
   private tokenPromise: Promise<string> | null = null;
 
   private ws: WebSocketLike | null = null;
@@ -296,8 +298,11 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
       if (this.ws !== ws) return;
       this.ws = null;
       this.setConnected(false);
-      // A dev-mode token dies with the server process; fetch a fresh one on reconnect.
-      if (this.tokenSource === 'session') {
+      // A launch token dies with the server process. After a restart the page's <meta> token is stale,
+      // so reconnects ask GET /api/session (same origin, custom header) for the current one; the editor
+      // then re-sends its queued changes and nothing typed while the server was down is lost.
+      if (this.tokenSource === 'session' || this.tokenSource === 'meta') {
+        if (this.tokenSource === 'meta') this.metaStale = true;
         this.token = null;
         this.tokenSource = null;
       }
@@ -357,7 +362,7 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
     if (this.token) return Promise.resolve(this.token);
     if (this.tokenPromise) return this.tokenPromise;
     const p = (async () => {
-      const meta = this.readMeta();
+      const meta = this.metaStale ? null : this.readMeta();
       if (meta) {
         this.token = meta;
         this.tokenSource = 'meta';
@@ -399,8 +404,9 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
     }
     const res = await this.fetchImpl(`${this.baseUrl}${path}${queryString(opts.query)}`, init);
     const body = await readBody(res);
-    if (res.status === 401 && !retried && this.tokenSource === 'session') {
-      // The dev server restarted with a new token: fetch it once and retry.
+    if (res.status === 401 && !retried && (this.tokenSource === 'session' || this.tokenSource === 'meta')) {
+      // The server restarted with a new token: fetch it once and retry.
+      if (this.tokenSource === 'meta') this.metaStale = true;
       this.token = null;
       this.tokenSource = null;
       return this.request<T>(method, path, opts, true);
@@ -517,7 +523,7 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
   }
 
   pdfUrl(pdfVersion: number): string {
-    return `${this.baseUrl}${ROUTES.pdf}?v=${encodeURIComponent(String(pdfVersion))}&token=${encodeURIComponent(this.token ?? this.readMeta() ?? '')}`;
+    return `${this.baseUrl}${ROUTES.pdf}?v=${encodeURIComponent(String(pdfVersion))}&token=${encodeURIComponent(this.token ?? (this.metaStale ? '' : this.readMeta()) ?? '')}`;
   }
 
   async synctexForward(file: string, line: number): Promise<{ page: number; x: number; y: number; w: number; h: number } | null> {
@@ -586,6 +592,10 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
 
   cost(): Promise<CostTotals> {
     return this.request('GET', ROUTES.cost);
+  }
+
+  async dismissLint(flagId: string): Promise<void> {
+    await this.request<unknown>('POST', route(ROUTES.lintDismiss, { id: flagId }), { body: {} });
   }
 }
 

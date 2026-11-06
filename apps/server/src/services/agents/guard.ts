@@ -14,7 +14,7 @@
  * A permitted call returns `{}` (no opinion), so the CLI's own deny rules and `dontAsk` still apply.
  * The guard never throws: an internal error is a denial.
  */
-import { realpathSync } from 'node:fs';
+import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import type { HookCallback, HookJSONOutput } from '@anthropic-ai/claude-agent-sdk';
 
@@ -87,8 +87,33 @@ export function isSecretPath(p: string): boolean {
   return SECRET_NAMES.some((re) => re.test(name));
 }
 
+function statKind(p: string): 'dir' | 'file' | 'missing' {
+  try {
+    return statSync(p).isDirectory() ? 'dir' : 'file';
+  } catch {
+    return 'missing';
+  }
+}
+
+/** A Grep glob the folder check can apply exactly: a plain basename pattern ("*.json", "fit_*.csv"). */
+function simpleGlob(glob: string | null): string | null {
+  return glob !== null && /^[A-Za-z0-9_*?-][A-Za-z0-9_.*?-]*$/.test(glob) ? glob : null;
+}
+
 function str(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
+/** Most entries a Grep folder check walks before it refuses (search a smaller folder). */
+const GREP_WALK_LIMIT = 20_000;
+
+/**
+ * A Grep `glob` filter that may select secret or hidden files: any piece (path segments and brace
+ * alternatives) that is a secret name or folder, or that starts with "." (hidden files: .env, .e*).
+ */
+function globTargetsSecrets(glob: string): boolean {
+  const pieces = glob.replace(/^!/, '').split(/[\\/,{}]+/).filter(Boolean);
+  return pieces.some((p) => p.startsWith('.') || SECRET_SEGMENTS.has(p) || SECRET_NAMES.some((re) => re.test(p)) || /^id_/i.test(p));
 }
 
 /** Glob patterns may not climb out of their base directory. */
@@ -147,6 +172,55 @@ export class ReadOnlyPolicy {
     return { allow: true };
   }
 
+  /**
+   * A Grep over a repo folder returns content from every file below it (ripgrep's hidden/ignore flags
+   * of the bundled CLI are not known here), so each file must be in the confirmed reading scope and
+   * not secret; a symlink must stay inside the scope too. `nameGlob` (a plain basename pattern such as
+   * "*.json") narrows the files that count, as ripgrep's --glob does.
+   */
+  private checkRepoFolder(dirReal: string, rootReal: string, raw: string, nameGlob: string | null): GuardDecision {
+    const stack = [dirReal];
+    let seen = 0;
+    while (stack.length) {
+      const dir = stack.pop()!;
+      let names: string[];
+      try {
+        names = readdirSync(dir);
+      } catch {
+        return { allow: false, reason: `Grep: cannot list ${raw}` };
+      }
+      for (const name of names) {
+        if (++seen > GREP_WALK_LIMIT) return { allow: false, reason: `Grep: ${raw} holds too many files to check against the reading scope; search a smaller folder` };
+        const p = join(dir, name);
+        let isDir = false;
+        let isLink = false;
+        try {
+          const l = lstatSync(p);
+          isLink = l.isSymbolicLink();
+          isDir = l.isDirectory();
+        } catch {
+          continue;
+        }
+        if (isLink) {
+          const target = realOrNearest(p);
+          if (statKind(target) === 'dir') {
+            if (!inside(target, dirReal)) return { allow: false, reason: `Grep: ${raw} contains a link to a folder outside it (${relative(rootReal, p)}); search inside the confirmed scope instead` };
+            continue; // its files are walked where they really are
+          }
+        }
+        if (isDir) {
+          if (SECRET_SEGMENTS.has(name)) return { allow: false, reason: `Grep: ${raw} contains ${name}/, which agents never read; search a subfolder` };
+          stack.push(p);
+          continue;
+        }
+        if (nameGlob !== null && !posix.matchesGlob(name, nameGlob)) continue;
+        const d = this.checkPath(p, 'Grep', { file: true });
+        if (!d.allow) return { allow: false, reason: `Grep: ${raw} contains files outside the reading scope the author confirmed (${relative(rootReal, p).split(sep).join('/')}); search a folder inside it (${this.policy.repoGlobs.join(', ')})` };
+      }
+    }
+    return { allow: true };
+  }
+
   check(toolName: string, input: unknown): GuardDecision {
     const args = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
     if (NEVER.has(toolName)) return { allow: false, reason: `paper-copilot agents are read-only: ${toolName} is never allowed` };
@@ -179,10 +253,20 @@ export class ReadOnlyPolicy {
       case 'Grep': {
         const glob = str(args.glob);
         if (glob !== null && (climbs(glob) || isAbsolute(glob))) return { allow: false, reason: 'Grep: the glob filter may not leave the search folder' };
+        if (glob !== null && globTargetsSecrets(glob)) return { allow: false, reason: `Grep: the glob filter ${glob} may select hidden or secret files; agents never read them` };
         const base = str(args.path) ?? this.policy.cwd;
-        // A single file is a read: apply the file rules. A folder is a search: apply the folder rules.
-        const looksLikeFile = /\.[A-Za-z0-9]{1,8}$/.test(base) && !GLOB_CHARS.test(base);
-        return this.checkPath(base, 'Grep', { file: looksLikeFile });
+        if (GLOB_CHARS.test(base)) return { allow: false, reason: 'Grep: the search path may not contain glob characters (use the glob filter)' };
+        // A single file is a read: apply the file rules. A folder is a search over every file below it:
+        // inside the analysis repo with a confirmed scope, every one of those files must be readable.
+        const abs = isAbsolute(base) ? base : resolve(this.policy.cwd, base);
+        const kind = statKind(realOrNearest(abs));
+        if (kind !== 'dir') return this.checkPath(base, 'Grep', { file: true });
+        const folder = this.checkPath(base, 'Grep', { file: false });
+        if (!folder.allow) return folder;
+        const real = realOrNearest(abs);
+        const root = this.rootOf(real);
+        if (root?.kind === 'repo' && this.policy.repoGlobs.length > 0) return this.checkRepoFolder(real, root.real, base, simpleGlob(glob));
+        return { allow: true };
       }
       default:
         return { allow: false, reason: `${toolName} is not available to paper-copilot agents (read-only: Read, Glob, Grep, Skill)` };

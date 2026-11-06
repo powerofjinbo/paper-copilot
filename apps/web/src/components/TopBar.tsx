@@ -49,7 +49,9 @@ function CompileStatus() {
           ? compile.pdfVersion === null
             ? t('compile.okNoPdf')
             : t('compile.ok')
-          : t('compile.idle');
+          : compile.pdfVersion !== null
+            ? t('compile.lastPdf')
+            : t('compile.idle');
   const icon = compile.state === 'running' ? <Spinner size={12} /> : compile.state === 'error' ? <IconWarn size={14} /> : compile.state === 'ok' ? <IconCheck size={14} /> : <span className="dot dot-idle" aria-hidden="true" />;
   return (
     <div className="compile-status" ref={ref}>
@@ -145,10 +147,13 @@ export function TopBar({ api }: { api: ApiClient }) {
   const file = useWorkspace((s) => s.file);
   const rightPane = useWorkspace((s) => s.rightPane);
   const setRightPane = useWorkspace((s) => s.setRightPane);
+  const pdfFitHidden = useShell((s) => s.fitHidden.pdf);
+  const pdfShown = rightPane === 'pdf' && !pdfFitHidden;
   const fakeShell = useShell((s) => s.fakeLlm);
   const fake = fakeShell ?? project?.fakeLlm ?? false;
   const mock = isMockClient(api);
   const [pulling, setPulling] = useState(false);
+  const syncOff = project?.config.sync.mode === 'none';
 
   return (
     <header className="topbar" lang={htmlLang(lang)}>
@@ -190,7 +195,8 @@ export function TopBar({ api }: { api: ApiClient }) {
         <Button
           icon={<IconPull size={14} />}
           busy={pulling}
-          title={t('top.pullTitle')}
+          disabled={syncOff}
+          title={syncOff ? t('sync.offShort') : t('top.pullTitle')}
           aria-label={t('top.pull')}
           onClick={async () => {
             setPulling(true);
@@ -203,7 +209,7 @@ export function TopBar({ api }: { api: ApiClient }) {
         >
           {t('top.pull')}
         </Button>
-        <Button icon={<IconPush size={14} />} onClick={openPush} title={t('top.pushTitle')} aria-label={t('top.push')}>
+        <Button icon={<IconPush size={14} />} onClick={openPush} title={syncOff ? t('sync.offShort') : t('top.pushTitle')} aria-label={t('top.push')}>
           {t('top.push')}
         </Button>
         <span className="topbar-divider" aria-hidden="true" />
@@ -211,7 +217,16 @@ export function TopBar({ api }: { api: ApiClient }) {
         <LangToggle />
         <ThemeToggle />
         <IconButton label={t('pdf.forward')} icon={<IconLocate />} onClick={() => void forwardSync(api)} aria-keyshortcuts="Control+Shift+J Meta+Shift+J" />
-        <IconButton label={rightPane === 'pdf' ? t('pdf.hide') : t('pdf.show')} icon={<IconPdf />} aria-pressed={rightPane === 'pdf'} onClick={() => setRightPane(rightPane === 'pdf' ? 'none' : 'pdf')} />
+        <IconButton
+          label={pdfShown ? t('pdf.hide') : t('pdf.show')}
+          icon={<IconPdf />}
+          aria-pressed={pdfShown}
+          onClick={() => {
+            // an explicit "show" pins the pane (it is then never hidden to make room for the editor)
+            useShell.getState().pinPdf(!pdfShown);
+            setRightPane(pdfShown ? 'none' : 'pdf');
+          }}
+        />
       </div>
     </header>
   );

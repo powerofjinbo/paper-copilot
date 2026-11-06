@@ -587,6 +587,8 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   /* Lint (the server runs the skill's style_check in a sidecar; the demo uses core only) */
   /* ---------------------------------------------------------------------------------- */
 
+  private readonly dismissedLint = new Set<string>();
+
   private lintFlags(): LintFlag[] {
     const flags: LintFlag[] = [];
     const mk = (u: SentenceUnit, text: string, check: string, source: LintFlag['source'], msg: string, word: string | null, severity: LintFlag['severity']): LintFlag => ({
@@ -601,7 +603,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
       corpusRate: null,
       userRate: null,
       severity,
-      dismissed: false,
+      dismissed: this.dismissedLint.has(hashString(source + check + u.id + (word ?? '') + msg)),
     });
     const facts = this.promptFacts();
     for (const u of this.units) {
@@ -980,6 +982,10 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
 
   async draft(req: { sectionId: string; paragraphIds: string[] | null; fromNotes: boolean; file: string; afterSentenceId: string | null }): Promise<{ jobId: string }> {
     await this.rest();
+    // anti-anchoring, as for framings(): the AI drafts only after the author wrote the five items
+    if (!this.outlineState.authorFilled) {
+      throw new ApiError('Write the five items yourself and tick "I wrote these myself" first: the AI never drafts before the author writes (anti-anchoring).', 409);
+    }
     const section = this.outlineState.sections.find((s) => s.id === req.sectionId);
     const title = section?.title ?? req.sectionId;
     const jobId = this.startJob('draft', async (progress) => {
@@ -1219,6 +1225,12 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   async cost(): Promise<CostTotals> {
     await this.rest();
     return { ...this.costTotals };
+  }
+
+  async dismissLint(flagId: string): Promise<void> {
+    await this.rest();
+    this.dismissedLint.add(flagId);
+    this.emitLint();
   }
 
   /* Convenience for tests and the demo. */

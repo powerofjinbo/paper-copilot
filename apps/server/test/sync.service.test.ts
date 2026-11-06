@@ -210,7 +210,8 @@ describe('SyncService (git mode against a bare remote)', () => {
     expect(after.text).toContain('signal-trained baseline');
     expect(after.text).toContain('This lead holds for each particle species.');
     expect(ctx.events.some((e: ServerMessage) => e.type === 'doc.replace' && e.report.edited.includes(target.id))).toBe(true);
-    expect(ctx.events.some((e: ServerMessage) => e.type === 'notice' && /Co-authors changed 1 sentence/.test(e.message))).toBe(true);
+    // the caller of pull shows the report (in the UI language); no second, English-only toast
+    expect(ctx.events.some((e: ServerMessage) => e.type === 'notice' && /Co-authors changed/.test(e.message))).toBe(false);
     expect(sync.syncBaseText('main.tex')).toBe(git(project.paths.tex, 'show', 'HEAD:main.tex') + '\n');
     expect(existsSync(join(project.paths.tex, '.git', 'rebase-merge'))).toBe(false);
     // nothing to pull now
@@ -257,6 +258,10 @@ describe('SyncService (git mode against a bare remote)', () => {
     await expect(sync.pull()).rejects.toMatchObject({ status: 409 });
     await expect(sync.push('x')).rejects.toMatchObject({ status: 409 });
     expect((await sync.status()).mode).toBe('none');
+    // the guard never pretends a push is possible without a remote
+    const offCheck = await sync.pushCheck();
+    expect(offCheck.ok).toBe(false);
+    expect(offCheck.unavailable).toMatch(/sync mode "none"/);
     const ols = createSyncService(ctx, { olsBin: 'ols-not-installed-here' });
     await ctx.saveConfig({ ...ctx.config, sync: { mode: 'ols', remote: null, branch: 'master' } });
     await expect(ols.pull()).rejects.toMatchObject({ status: 501 });

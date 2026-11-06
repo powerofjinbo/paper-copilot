@@ -52,6 +52,7 @@ const EXPECTED: Record<RouteKey, Method[]> = {
   voiceCorpus: ['POST'],
   cost: ['GET'],
   questions: ['GET'],
+  lintDismiss: ['POST'],
 };
 
 /** Server routes outside ROUTES that the web client calls directly. */
@@ -60,6 +61,7 @@ const EXTRA: Array<[Method, string]> = [
   ['PATCH', `${ROUTES.voiceCorpus}/:id`],
   ['GET', '/api/panels'],
   ['GET', '/api/jobs/:id'],
+  ['GET', '/api/lint'],
 ];
 
 describe('route table coverage', () => {

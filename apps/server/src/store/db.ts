@@ -323,6 +323,15 @@ export function createPaperDb(path: string, log?: Logger): PaperDbExt {
       }
       return out;
     },
+    lintByScope(file) {
+      const dismissed = dismissedSet();
+      const out = { sentences: [] as LintFlag[], document: [] as LintFlag[] };
+      for (const r of st('SELECT json, dismissed, scope FROM lint WHERE file = ?').all(file) as Array<{ json: string; dismissed: number; scope: string }>) {
+        const f = parseFlag(r.json, log);
+        if (f) (r.scope === 'document' ? out.document : out.sentences).push({ ...f, dismissed: f.dismissed || Number(r.dismissed) === 1 || dismissed.has(f.id) });
+      }
+      return out;
+    },
     dismissLint(id) {
       transaction(() => {
         st('INSERT OR IGNORE INTO lint_dismissed(id) VALUES (?)').run(id);

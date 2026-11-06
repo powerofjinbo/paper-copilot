@@ -25,6 +25,8 @@ beforeAll(() => {
   for (const d of ['repo/results', 'repo/docs', 'repo/src', 'tex', '.paper/claude/.claude/skills', 'skill/references', 'outside']) mkdirSync(join(base, d), { recursive: true });
   writeFileSync(join(base, 'repo/README.md'), '# r\n');
   writeFileSync(join(base, 'repo/results/a_claim.json'), '{"x": 1}');
+  mkdirSync(join(base, 'repo/results/fits'), { recursive: true });
+  writeFileSync(join(base, 'repo/results/fits/b.json'), '{"y": 2}');
   writeFileSync(join(base, 'repo/src/train.py'), 'print(1)\n');
   writeFileSync(join(base, 'repo/.env'), 'ANTHROPIC_API_KEY=sk-ant-xxx\n');
   writeFileSync(join(base, 'tex/main.tex'), '\\documentclass{article}\n');
@@ -100,7 +102,15 @@ describe('read-only PreToolUse guard', () => {
     expect((await decide('Glob', { pattern: '../../**' , path: join(base, 'repo') })).denied).toBe(true);
     expect((await decide('Glob', { pattern: '/etc/*' })).denied).toBe(true);
     expect((await decide('Glob', { pattern: '*', path: '/home' })).denied).toBe(true);
-    expect((await decide('Grep', { pattern: 'eff', path: join(base, 'repo/results') })).denied).toBe(false);
+    expect((await decide('Grep', { pattern: 'eff', path: join(base, 'repo/results/fits') })).denied).toBe(false);
+    expect((await decide('Grep', { pattern: 'eff', path: join(base, 'repo/results/a_claim.json') })).denied).toBe(false);
+    // results/ holds a link to a folder outside every root: a folder search there could follow it
+    expect((await decide('Grep', { pattern: 'eff', path: join(base, 'repo/results') })).reason).toMatch(/link to a folder outside/);
+    // a folder search reads every file below it: src/train.py is outside the confirmed scope
+    expect((await decide('Grep', { pattern: 'x', path: join(base, 'repo') })).denied).toBe(true);
+    expect((await decide('Grep', { pattern: 'x', path: join(base, 'repo/src/train.py') })).reason).toMatch(/reading scope/);
+    expect((await decide('Grep', { pattern: 'x', path: join(base, 'repo/results/fits'), glob: '{.env,*.json}' })).denied).toBe(true);
+    expect((await decide('Grep', { pattern: 'x', path: join(base, 'tex'), glob: '*.tex' })).denied).toBe(false);
     expect((await decide('Grep', { pattern: 'KEY', path: join(base, 'repo/.env') })).denied).toBe(true);
     expect((await decide('Grep', { pattern: 'x', path: join(base, 'outside') })).denied).toBe(true);
     expect((await decide('Grep', { pattern: 'x', path: join(base, 'repo'), glob: '../**' })).denied).toBe(true);

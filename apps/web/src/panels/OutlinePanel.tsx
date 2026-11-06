@@ -391,7 +391,9 @@ function SectionCard({
   draftJob,
   drafting,
   claimOptions,
+  authorFilled,
 }: {
+  authorFilled: boolean;
   s: OutlineSection;
   index: number;
   edit: (fn: Edit) => void;
@@ -404,7 +406,11 @@ function SectionCard({
   const t = useT();
   const qid = useId();
   const gid = useId();
-  const hasNotes = s.paragraphs.some((p) => p.intentNotes.length > 0);
+  // notes the author wrote (an AI-proposed paragraph's notes do not count): drafting from them anchors on
+  // the author's own words
+  const hasNotes = s.paragraphs.some((p) => p.provenance === 'author' && p.intentNotes.some((n) => n.trim().length > 0));
+  // anti-anchoring (docs/design.md): the author writes the five items before the AI drafts anything
+  const locked = !authorFilled;
   const sectionEdit = (fn: (x: OutlineSection) => void) =>
     edit((o) => {
       const x = o.sections[index];
@@ -482,14 +488,43 @@ function SectionCard({
       </div>
 
       <div className="draft-row">
-        <Button size="sm" variant={hasNotes ? 'primary' : 'default'} icon={<IconDraft size={13} />} disabled={active} onClick={() => onDraft(true)}>
+        <Button
+          size="sm"
+          variant={hasNotes && !locked ? 'primary' : 'default'}
+          icon={<IconDraft size={13} />}
+          disabled={active || locked || !hasNotes}
+          title={locked ? t('outline.draftLocked') : !hasNotes ? t('outline.draftNotesLocked') : undefined}
+          onClick={() => onDraft(true)}
+        >
           {t('outline.draftNotes')}
         </Button>
-        <Button size="sm" variant={hasNotes ? 'default' : 'primary'} icon={<IconDraft size={13} />} disabled={active} onClick={() => onDraft(false)}>
+        <Button
+          size="sm"
+          variant={hasNotes || locked ? 'default' : 'primary'}
+          icon={<IconDraft size={13} />}
+          disabled={active || locked}
+          title={locked ? t('outline.draftLocked') : undefined}
+          onClick={() => onDraft(false)}
+        >
           {t('outline.draftOutline')}
         </Button>
       </div>
-      {draftJob && isJobActive(draftJob) ? (
+      {locked ? (
+        <p className="muted small draft-locked">
+          {t('outline.draftLocked')}{' '}
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => {
+              const el = document.querySelector('.five-items');
+              el?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+              (el?.querySelector('textarea, input') as HTMLElement | null)?.focus({ preventScroll: true });
+            }}
+          >
+            {t('outline.toStep0')}
+          </button>
+        </p>
+      ) : draftJob && isJobActive(draftJob) ? (
         <div className="job-line" role="status">
           <Spinner size={12} /> <span>{draftJob.message === 'running' || draftJob.message === 'queued' ? t('job.draft') : draftJob.message}</span>
         </div>
@@ -777,6 +812,7 @@ export function OutlinePanel({ api }: { api: ApiClient }) {
               onGhostMode={(m) => void ghostMode.run(s.id, m)}
               onDraft={(fromNotes) => void draft.run(s.id, fromNotes)}
               drafting={draft.busy}
+              authorFilled={o.authorFilled}
               draftJob={draftJobs[s.id] ? (jobs[draftJobs[s.id]!] ?? null) : null}
             />
           ))}

@@ -60,7 +60,8 @@ import { DraftCollector, MAX_PARAGRAPH_ATTEMPTS, PROPOSE_TOOL, createGateHook, t
 import { EDITOR_TOOL_NAMES, buildEditorServer, editorHandlers, type EditorContext } from './editor';
 import { fakeFramings, fakeMemo, fakeParagraph, fakeReferee, fakeRepoBrief, fakeRevise, simLabel, unsupportedSentence, type FakeDraftHint, type Lang } from './fake';
 import { createReadOnlyGuard } from './guard';
-import { ROLE_LIMITS, SKILL_NAME, buildQueryOptions, draftMaxTurns, type AgentRole } from './options';
+import { ROLE_LIMITS, SKILL_NAME, buildQueryOptions, draftMaxTurns, type AgentAuth, type AgentRole } from './options';
+import { resolveApiKey, resolveBaseUrl } from '../llm/apiKey';
 import { MAX_QUESTIONS, createMutex, readQuestions } from './questions';
 import { loadSdk, runAgentQuery, type RunOutcome } from './runner';
 import { ensureSkillLink, readSkillReferences } from './skill';
@@ -72,8 +73,13 @@ type Progress = (message: string) => void;
 export interface AgentServiceOptions {
   /** Steers the fake drafter (tests). A per-request `fakeHint` on the DraftRequest object overrides it. */
   fakeHint?: { draft?: FakeDraftHint };
-  /** Environment for the Claude Code process (default: process.env). */
+  /** Environment the Claude Code process inherits from, allowlisted (default: process.env). */
   baseEnv?: Record<string, string | undefined>;
+  /**
+   * The key and endpoint of real agent runs (default: resolveApiKey() and resolveBaseUrl(), exactly the
+   * direct client's: env or OS keychain; PAPER_ANTHROPIC_BASE_URL or the public API).
+   */
+  auth?: () => { apiKey: string | null; baseUrl: string };
   /** Test seams: replace core gateSentence / extractFictionalNumbers (default: the core functions). */
   testing?: { gate?: typeof gateSentence; extractFictionalNumbers?: typeof extractFictionalNumbers };
 }
@@ -215,10 +221,29 @@ export function createAgentService(ctx: Ctx, opts: AgentServiceOptions = {}): Ag
   const readOutline = () => ctx.files.readJson(ctx.paths.outline, Outline, emptyOutline());
 
   /**
+   * The app's own key and endpoint for the Claude Code process. Without a key no real agent starts:
+   * the CLI would otherwise fall back to whatever Claude login the machine has (another account).
+   */
+  let authCache: AgentAuth | null = null;
+  const agentAuth = (): AgentAuth => {
+    if (authCache) return authCache;
+    const a = opts.auth ? opts.auth() : { apiKey: resolveApiKey().key, baseUrl: resolveBaseUrl() };
+    if (!a.apiKey) {
+      throw new HttpError(
+        503,
+        'No Anthropic API key: set ANTHROPIC_API_KEY or store the key in the OS keychain under "paper-copilot" (see the README). Agents never run on another Claude login.',
+      );
+    }
+    authCache = { apiKey: a.apiKey, baseUrl: a.baseUrl };
+    return authCache;
+  };
+
+  /**
    * Start a job unless one with the same key is running: 'reuse' returns the running job's id (the
    * same request again), 'conflict' refuses with 409 (a different request would race on shared state).
    */
   function startJob(kind: JobKind, key: string, onBusy: 'reuse' | 'conflict', run: (progress: Progress, jobId: string) => Promise<unknown>): string {
+    if (!ctx.fakeLlm) agentAuth(); // refuse up front (503) rather than as a failed job
     const existing = running.get(key);
     if (existing) {
       const j = ctx.jobs.get(existing);
@@ -369,6 +394,7 @@ export function createAgentService(ctx: Ctx, opts: AgentServiceOptions = {}): Ag
     },
   ): Promise<RunOutcome> {
     const cfg = ctx.config;
+    const auth = agentAuth();
     const abortController = new AbortController();
     controllers.add(abortController);
     const guard = createReadOnlyGuard(
@@ -410,6 +436,7 @@ export function createAgentService(ctx: Ctx, opts: AgentServiceOptions = {}): Ag
       persistSession: r.persistSession ?? false,
       abortController,
       baseEnv: opts.baseEnv ?? process.env,
+      auth,
       stderr: (d) => ctx.log.debug(`claude[${role}] ${d.trimEnd()}`),
     });
     try {
@@ -658,6 +685,10 @@ export function createAgentService(ctx: Ctx, opts: AgentServiceOptions = {}): Ag
       safeJoin(ctx.config.texRoot, req.file);
     } catch (e) {
       throw new HttpError(400, `Invalid file "${req.file}": ${e instanceof Error ? e.message : String(e)}`);
+    }
+    // anti-anchoring (docs/design.md), as for framings(): the AI drafts only after the author wrote the five items
+    if (!readOutline().authorFilled) {
+      throw new HttpError(409, 'Write the five outline items yourself and tick "I wrote these myself" first: the AI drafts only after the author has written the story (anti-anchoring).');
     }
     const { section, paragraphs } = draftPlan(req);
     return startJob('draft', 'draft', 'conflict', async (progress, jobId) => {

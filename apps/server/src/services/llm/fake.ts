@@ -7,6 +7,7 @@
  * are labelled with model `fake-<model>` and cost nothing. Latency simulation is off unless
  * `latencyMs` > 0 (the server may set PAPER_FAKE_LATENCY_MS for UI work).
  */
+import { simulatedRewrite } from '@paper-copilot/core';
 import type { LlmClient, LlmRequest, LlmResponse } from '../../contracts';
 
 /* ------------------------------------------------------------------------------------ */
@@ -20,6 +21,8 @@ export interface FakeGhostHint {
   step: { id: string; intent: string; factIds: string[] } | null;
   /** Renderings of facts the sentence may state (id -> prose rendering such as "2.3 points"). */
   facts: Array<{ id: string; rendering: string }>;
+  /** Labels of the project (fig:..., tab:...) a simulated sentence may point to; the gate checks \\ref targets. */
+  refs?: string[];
 }
 export interface FakeInstructHint {
   task: 'instruct';
@@ -89,30 +92,53 @@ function wordCount(s: string): number {
   return s.split(/\s+/).filter(Boolean).length;
 }
 
+/** Finite verbs and auxiliaries that tell a clause ("We train on generic events") from a bare noun phrase ("The gain"). */
+const VERBISH = /\b(is|are|was|were|be|been|being|has|have|had|do|does|did|can|could|will|would|may|might|must|shall|should|finds?|shows?|gives?|holds?|uses?|trains?|stud(?:y|ies)|compares?|reach(?:es)?|keeps?|loses?|starts?|looks?|describes?|combines?|match(?:es)?|measures?|improves?|reduces?|increases?|exceeds?|remains?|yields?|provides?|reports?|tests?|evaluates?|lies|lie|depends?|follows?|leads?|[a-z]{3,}ed)\b/i;
+
+/** A prefix ending in a copula wants a complement ("The gain is" -> "... 2.32 points."). */
+const COPULA = new Set(['is', 'are', 'was', 'were', 'be', 'been', 'remains', 'remain', 'becomes', 'become']);
+/** Prepositions, articles and transitive verbs that also want a complement. */
+const OPEN_END = new Set(['the', 'a', 'an', 'of', 'by', 'with', 'than', 'to', 'in', 'on', 'at', 'for', 'from', 'about', 'finds', 'find', 'gives', 'give', 'shows', 'show', 'reaches', 'reach', 'yields', 'yield', 'reports', 'report']);
+
+/** `Fig.~\\ref{fig:x}` / `Table~\\ref{tab:x}` for the first figure or table label the project defines. */
+function refPhrase(refs: readonly string[] | undefined): string | null {
+  const fig = refs?.find((r) => /^fig:/i.test(r));
+  if (fig) return `Fig.~\\ref{${fig}}`;
+  const tab = refs?.find((r) => /^tab:/i.test(r));
+  if (tab) return `Table~\\ref{${tab}}`;
+  return null;
+}
+
+/**
+ * The simulated ghost: grammatical, deterministic and built only from the paragraph plan, the facts the
+ * service allowed (step facts only) and labels that exist in the project, so it always passes the gate.
+ *   prefix "The gain"                 -> "The gain is shown in Fig.~\\ref{fig:eff}." (or "is <fact>" when the plan step names one)
+ *   prefix "We train on generic events" -> "We train on generic events (see Fig.~\\ref{fig:eff})."
+ *   empty prefix                       -> "The next point of this paragraph is <plan intent>."
+ * Returns the WHOLE sentence (prefix verbatim + continuation), like the real model.
+ */
 function fakeGhost(h: FakeGhostHint): unknown {
   const prefix = h.prefix ?? '';
-  const prefixWords = wordCount(prefix);
-  const budget = Math.max(3, 28 - prefixWords);
-  const intent = safeWords(h.step?.intent ?? '', budget);
-  const words = intent.length > 0 ? intent : ['continues', 'the', 'argument', 'of', 'this', 'paragraph'];
   const fact = h.step ? h.facts.find((f) => h.step!.factIds.includes(f.id)) : undefined;
-  let body: string;
+  const ref = refPhrase(h.refs);
+  const factIds = fact ? [fact.id] : [];
+  const fulfilled = h.step ? [h.step.id] : [];
+  if (/[.!?]\s*$/.test(prefix)) return { text: prefix, fact_ids: [], cite_keys: [], fulfilled_move_ids: [] };
+  let text: string;
   if (prefix.trim().length === 0) {
-    const ws = words[0]!.toLowerCase() === 'we' && words.length > 1 ? words.slice(1) : words;
-    body = `We ${ws[0]!.toLowerCase()} ${ws.slice(1).join(' ')}`.trim();
-  } else if (/[.!?]\s*$/.test(prefix)) {
-    return { text: prefix, fact_ids: [], cite_keys: [], fulfilled_move_ids: [] };
+    const topic = safeWords(h.step?.intent ?? '', 16).join(' ').toLowerCase();
+    text = `The next point of this paragraph is ${topic || 'the claim it still owes'}${fact ? ` (${fact.rendering})` : ''}${ref ? `; see ${ref}` : ''}.`;
   } else {
-    // The prefix stays verbatim (including a trailing space the author typed).
-    body = `${prefix}${/\s$/.test(prefix) ? '' : ' '}relates to ${words.join(' ').toLowerCase()}`;
+    const sep = /\s$/.test(prefix) ? '' : ' ';
+    const last = (/([A-Za-z]+)[\s~]*$/.exec(prefix)?.[1] ?? '').toLowerCase();
+    let cont: string;
+    if (COPULA.has(last)) cont = fact ? `${fact.rendering}${ref ? ` (see ${ref})` : ''}` : ref ? `shown in ${ref}` : 'discussed below';
+    else if (OPEN_END.has(last)) cont = fact ? `${fact.rendering}${ref ? ` (see ${ref})` : ''}` : ref ? `the result shown in ${ref}` : 'the result discussed below';
+    else if (VERBISH.test(prefix)) cont = fact ? `(${fact.rendering}${ref ? `; see ${ref}` : ''})` : ref ? `(see ${ref})` : 'as discussed below';
+    else cont = fact ? `is ${fact.rendering}${ref ? ` (see ${ref})` : ''}` : ref ? `is shown in ${ref}` : 'is discussed below';
+    text = `${prefix}${sep}${cont}.`; // the prefix stays verbatim (trailing space included)
   }
-  const text = `${body}${fact ? ` (${fact.rendering})` : ''}.`;
-  return {
-    text,
-    fact_ids: fact ? [fact.id] : [],
-    cite_keys: [],
-    fulfilled_move_ids: h.step ? [h.step.id] : [],
-  };
+  return { text, fact_ids: factIds, cite_keys: [], fulfilled_move_ids: fulfilled };
 }
 
 function note(lang: 'zh' | 'en', zh: string, en: string): string {
@@ -126,14 +152,24 @@ function fakeFor(hint: FakeHint): unknown {
   switch (hint.task) {
     case 'ghost':
       return fakeGhost(hint);
-    case 'instruct':
+    case 'instruct': {
+      // A fixed, keyword-chosen, LaTeX-safe edit (core simulatedRewrite), never a model's reading of the instruction.
+      const r = simulatedRewrite(hint.sentence, hint.instruction);
+      const text = tidySentence(r.text);
+      const what =
+        r.text !== hint.sentence
+          ? note(hint.notesLanguage, r.zh, r.en)
+          : text !== hint.sentence.trim()
+            ? note(hint.notesLanguage, '只做了措辞整理', 'only wording was tidied')
+            : note(hint.notesLanguage, '模拟改写找不到可改之处，句子没有改动', 'the simulated rewrite found nothing to change; the sentence is unchanged');
       return {
-        text: tidySentence(hint.sentence),
-        notes: note(hint.notesLanguage, `模拟模式（未调用模型）：已收到指令“${hint.instruction}”，句子只做了措辞整理。`, `Simulated mode (no model call): received the instruction "${hint.instruction}"; only wording was tidied.`),
+        text,
+        notes: note(hint.notesLanguage, `模拟模式（未调用模型）：已收到指令“${hint.instruction}”；${what}。`, `Simulated mode (no model call): received the instruction "${hint.instruction}"; ${what}.`),
         drift: { actor: false, scope: false, direction: false, condition: false },
         fact_ids: [...hint.factIds],
         cite_keys: [...hint.citeKeys],
       };
+    }
     case 'alternatives': {
       const n = Math.max(1, Math.min(ALT_OPENERS.length, Math.floor(hint.n)));
       const base = tidySentence(hint.sentence);

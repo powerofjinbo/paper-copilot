@@ -202,7 +202,8 @@ describe('HttpApiClient REST', () => {
 
 describe('HttpApiClient WebSocket', () => {
   function client(log = vi.fn()) {
-    const f = makeFetch(() => json({}));
+    // after a dropped socket the page's <meta> token may be stale (server restart): /api/session answers
+    const f = makeFetch((url, init) => (url.endsWith('/api/session') && header(init, 'x-paper-client') === '1' ? json({ token: 'tok/2' }) : json({})));
     const api = new HttpApiClient({ fetch: f.fn, metaToken: () => 'tok/1', WebSocket: FakeWS, wsBase: 'ws://127.0.0.1:5173', clientId: 'web-test', log, backoff: { initialMs: 100, maxMs: 5000 } });
     return { api, log };
   }
@@ -303,6 +304,8 @@ describe('HttpApiClient WebSocket', () => {
     }
     await vi.advanceTimersByTimeAsync(5000);
     const ws = FakeWS.instances.at(-1)!;
+    // the reconnect uses the server's current token, not the page's stale <meta> one
+    expect(ws.url).toBe('ws://127.0.0.1:5173/ws?token=tok%2F2');
     ws.open();
     expect(api.connected).toBe(true);
     expect(ws.messages.map((m) => m.type)).toEqual(['hello', 'doc.open', 'doc.flush']);

@@ -135,6 +135,11 @@ export const PushCheck = z.object({
   /** Unified diff of what co-authors will see. */
   diff: z.string(),
   files: z.array(z.string()),
+  /**
+   * Set when pushing is impossible whatever the blockers (sync mode "none": no remote to push to);
+   * `ok` is then false. Optional so older servers and fixtures stay valid.
+   */
+  unavailable: z.string().nullable().optional(),
 });
 export type PushCheck = z.infer<typeof PushCheck>;
 
@@ -333,6 +338,7 @@ export const ROUTES = {
   voiceCorpus: '/api/voice/corpus',
   cost: '/api/cost',
   questions: '/api/questions', // ?sectionId=
+  lintDismiss: '/api/lint/:id/dismiss',
   ws: '/ws',
 } as const;
 

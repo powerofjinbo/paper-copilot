@@ -19,6 +19,7 @@ import { ctxField, draftNotesEffect, draftNotesField, replanEffect, replanField,
 import { sentenceDecorations } from './decorations';
 import { editorEnv, type EditorEnv, type EditorOps } from './env';
 import { ghostNoteEffect } from './ghost/ghostField';
+import { currentLang, edText } from './i18n';
 import { ghostExtension, handleGhostMessage } from './ghost/ghostPlugin';
 import { paperGutters } from './gutters';
 import { acceptIntent } from './keymap';
@@ -48,6 +49,8 @@ function errText(err: unknown): string {
 export class EditorController {
   readonly view: EditorView;
   readonly sync: DocSync;
+  /** The selection the last review step made (Alt+Down/Up), to tell an extra press from a "move line". */
+  private lastReviewSel: { from: number; to: number } | null = null;
   readonly handle: EditorHandle;
   readonly ops: EditorOps;
   private readonly editable = new Compartment();
@@ -58,7 +61,16 @@ export class EditorController {
   constructor(private readonly opts: ControllerOptions) {
     const { api, file } = opts;
     this.ops = this.makeOps();
-    const env: EditorEnv = { api, file, version: () => this.sync.core.localVersion, ops: this.ops };
+    // The editor's messages that refer to the local text (ghost.request: version + cursor) go out after the
+    // document changes made before them (DocSync sends one change at a time).
+    const orderedApi = new Proxy(api, {
+      get: (target, prop) => {
+        if (prop === 'send') return (m: Parameters<ApiClient['send']>[0]) => (this.sync ? this.sync.sendOrdered(m) : target.send(m));
+        const v = Reflect.get(target, prop, target) as unknown;
+        return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+      },
+    });
+    const env: EditorEnv = { api: orderedApi, file, version: () => this.sync.core.localVersion, ops: this.ops };
     this.sync = new DocSync(api, file, {
       view: () => (this.destroyed ? null : this.view),
       loaded: () => {
@@ -172,10 +184,16 @@ export class EditorController {
         const sel = state.selection.main;
         const target = nextInQueueOf(units, dir === 1 ? sel.to : sel.from, dir);
         if (!target) {
-          view.dispatch({ effects: ghostNoteEffect.of({ pos: sel.head, text: 'nothing left to review', kind: 'info' }) });
-          ops.announce('Nothing left to review.');
-          return false;
+          // Right after a review step (the selection is still the sentence it selected) the key is
+          // consumed with a note: an impatient extra press must not move a sentence. Otherwise it falls
+          // through to the standard Alt+Up/Down "move line" (reordering sentences).
+          const last = this.lastReviewSel;
+          if (!last || last.from !== sel.from || last.to !== sel.to) return false;
+          view.dispatch({ effects: ghostNoteEffect.of({ pos: sel.head, text: edText(currentLang(), 'noReview'), kind: 'info' }) });
+          ops.announce(edText(currentLang(), 'noReview'));
+          return true;
         }
+        this.lastReviewSel = { from: target.start, to: target.end };
         const focusCard = !!document.activeElement?.closest('.pc-card');
         view.dispatch({
           selection: EditorSelection.range(target.start, target.end),
@@ -250,13 +268,19 @@ export class EditorController {
         const req = ++this.intentReq;
         const lineNo = state.doc.lineAt(range.from).number;
         const base = { from: range.from, to: range.to, line: lineNo, note: range.note, n, selected: 0, req };
-        view.dispatch({ effects: intentRenderEffect.of({ ...base, status: 'loading', proposals: [], error: null }) });
+        // the options open as a block below the note line: keep them in view
+        view.dispatch({ effects: [intentRenderEffect.of({ ...base, status: 'loading', proposals: [], error: null }), EditorView.scrollIntoView(range.to, { y: 'nearest', yMargin: 140 })] });
         this.opts.api
           .renderIntent(this.opts.file, lineNo, range.note, n)
           .then((proposals) => {
             const cur = this.destroyed ? null : view.state.field(intentRenderField);
             if (!cur || cur.req !== req) return;
-            view.dispatch({ effects: intentRenderEffect.of({ ...cur, status: proposals.length ? 'ready' : 'error', proposals, error: proposals.length ? null : 'No grounded rendering came back.' }) });
+            view.dispatch({
+              effects: [
+                intentRenderEffect.of({ ...cur, status: proposals.length ? 'ready' : 'error', proposals, error: proposals.length ? null : 'No grounded rendering came back.' }),
+                EditorView.scrollIntoView(Math.min(cur.to, view.state.doc.length), { y: 'nearest', yMargin: 160 + 60 * Math.max(1, proposals.length) }),
+              ],
+            });
             if (proposals[0]) ops.announce(`Proposed: ${proposals[0].text}. Tab to accept.`);
           })
           .catch((err: unknown) => {
@@ -268,7 +292,7 @@ export class EditorController {
       },
       toggleHeatmap: () => useEditorUi.getState().toggleHeatmap(),
       flush: () => {
-        if (this.sync.core.initialized) this.opts.api.send({ type: 'doc.flush', file: this.opts.file, version: this.sync.core.localVersion });
+        if (this.sync.core.initialized) this.sync.sendOrdered({ type: 'doc.flush', file: this.opts.file, version: this.sync.core.localVersion });
       },
       announce: (message) => this.opts.announce(message),
     };

@@ -51,3 +51,27 @@ export function loadConfig(paths: PaperPaths): ProjectConfig | null {
 export async function saveConfig(paths: PaperPaths, config: ProjectConfig): Promise<void> {
   await writeFileAtomic(paths.config, JSON.stringify(ProjectConfig.parse(config), null, 2) + '\n');
 }
+
+/**
+ * A remote URL with its credentials hidden: `https://git:olp_xxx@host/...` -> `https://git:***@host/...`,
+ * `https://ghp_xxx@host/...` -> `https://***@host/...` (a lone user part may itself be a token; only
+ * the conventional `git` user is shown). Anything without `scheme://userinfo@` is returned unchanged.
+ */
+export function maskRemoteUrl(url: string): string;
+export function maskRemoteUrl(url: string | null): string | null;
+export function maskRemoteUrl(url: string | null): string | null {
+  if (url === null) return null;
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)([^@/?#]*)@/i, (_m, scheme: string, cred: string) => {
+    const i = cred.indexOf(':');
+    const user = i >= 0 ? cred.slice(0, i) : cred;
+    if (i >= 0) return `${scheme}${user === 'git' ? user : '***'}:***@`;
+    return `${scheme}${user === 'git' ? user : '***'}@`;
+  });
+}
+
+/** The project config as it may leave the server (browser, WebSocket): no credentials in sync.remote. */
+export function publicConfig(config: ProjectConfig): ProjectConfig {
+  if (!config.sync?.remote) return config;
+  const remote = maskRemoteUrl(config.sync.remote);
+  return remote === config.sync.remote ? config : { ...config, sync: { ...config.sync, remote } };
+}

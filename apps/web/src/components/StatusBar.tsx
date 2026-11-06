@@ -93,6 +93,9 @@ export function StatusBar({ api }: { api: ApiClient }) {
         <span className="status-item muted">{t('status.units', { n: units.length })}</span>
       </div>
       <div className="status-right">
+        <button type="button" className="status-item status-btn status-help" aria-label={t('status.help')} title={t('status.help')} onClick={() => useShell.getState().setHelpOpen(true)}>
+          ?
+        </button>
         {active ? (
           <span className="status-item status-sentence">
             <StateTag state={active.state} />

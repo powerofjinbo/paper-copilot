@@ -173,7 +173,9 @@ describe('referencesFor', () => {
         expect(r.length).toBeLessThanOrEqual(2);
         expect(new Set(r).size).toBe(r.length);
       }
-      expect(referencesFor(t)).toEqual(t === 'draft' ? ROUTING.draft : ROUTING[t]);
+      const actions = ['intent', 'instruct', 'alternatives', 'grammar', 'replan'];
+      // the actions route shares one reference set (one cached block A per template)
+      expect(referencesFor(t)).toEqual(actions.includes(t) ? ['sentences-and-words.md', 'layering-and-flow.md'] : t === 'draft' ? ROUTING.draft : ROUTING[t]);
     }
   });
 
@@ -193,7 +195,8 @@ describe('referencesFor', () => {
     expect(referencesFor('instruct', 'results')).toEqual(['sentences-and-words.md', 'figures-and-evidence.md']);
     expect(referencesFor('ghost', 'introduction')).toEqual(['sentences-and-words.md']);
     expect(referencesFor('ghost', 'results')).toEqual(['sentences-and-words.md']);
-    expect(referencesFor('grammar', 'caption')).toEqual([]);
+    expect(referencesFor('grammar', 'caption')).toEqual(referencesFor('instruct', 'caption'));
+    expect(referencesFor('replan', 'results')).toEqual(referencesFor('instruct', 'results'));
     expect(referencesFor('memo', 'results')).toEqual([]);
     expect(referencesFor('referee', 'introduction')).toEqual(['figures-and-evidence.md', 'story-and-structure.md']);
     expect(referencesFor('repo_reader')).toEqual(['story-and-structure.md']);
@@ -219,8 +222,9 @@ describe('buildSystemBlocks', () => {
 
   it('places cache_control: A 1h, B 5m, C 5m', () => {
     const blocks = buildSystemBlocks(sysInput());
-    expect(blocks).toHaveLength(3);
-    expect(blocks.map((b) => b.type)).toEqual(['text', 'text', 'text']);
+    expect(blocks).toHaveLength(4); // A, B, C, then the small uncached task rules
+    expect(blocks.map((b) => b.type)).toEqual(['text', 'text', 'text', 'text']);
+    expect(blocks[3]!.cache_control).toBeUndefined();
     expect(blocks[0]!.cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
     expect(blocks[1]!.cache_control).toEqual({ type: 'ephemeral', ttl: '5m' });
     expect(blocks[2]!.cache_control).toEqual({ type: 'ephemeral', ttl: '5m' });
@@ -229,8 +233,8 @@ describe('buildSystemBlocks', () => {
   });
 
   it('omits block C when there are no exemplars (or only blank ones)', () => {
-    expect(buildSystemBlocks(sysInput({ exemplars: [] }))).toHaveLength(2);
-    expect(buildSystemBlocks(sysInput({ exemplars: ['  ', '\n'] }))).toHaveLength(2);
+    expect(buildSystemBlocks(sysInput({ exemplars: [] }))).toHaveLength(3);
+    expect(buildSystemBlocks(sysInput({ exemplars: ['  ', '\n'] }))).toHaveLength(3);
     const two = buildSystemBlocks(sysInput({ exemplars: [] }));
     expect(two[1]!.cache_control).toEqual({ type: 'ephemeral', ttl: '5m' });
     expect(textOf(two)).not.toContain('<author_exemplars');
@@ -353,7 +357,7 @@ describe('buildSystemBlocks', () => {
     expect(none).not.toMatch(/<reference [^>]*name="/);
   });
 
-  it('puts the task rules for the requested task into block A', () => {
+  it('puts the task rules for the requested task into the last, uncached block', () => {
     const rules: Record<TaskKind, string> = {
       ghost: '<task name="ghost">',
       intent: '<task name="intent">',
@@ -368,14 +372,19 @@ describe('buildSystemBlocks', () => {
       referee: 'at most four questions',
       memo: '400 words',
     };
-    for (const task of TASK_KINDS) expect(buildSystemBlocks(sysInput({ task }))[0]!.text).toContain(rules[task]);
+    for (const task of TASK_KINDS) {
+      const blocks = buildSystemBlocks(sysInput({ task }));
+      expect(blocks[blocks.length - 1]!.text).toContain(rules[task]);
+      expect(blocks[blocks.length - 1]!.cache_control).toBeUndefined();
+      expect(blocks[0]!.text).not.toContain(rules[task]);
+    }
   });
 
   it('survives an empty skill bundle and empty project state', () => {
     const blocks = buildSystemBlocks(
       sysInput({ skill: { dir: '', skillMd: '', references: {}, version: '' }, memo: '', authorNorms: '', repoBrief: '', litBrief: '', outline: emptyOutline(), terminology: [], citeKeys: [], facts: [], exemplars: [] }),
     );
-    expect(blocks).toHaveLength(2);
+    expect(blocks).toHaveLength(3);
     expect(blocks[1]!.text).toContain('(no resolved keys yet: write [ref] wherever a citation is needed)');
     expect(blocks[1]!.text).toContain('id | rendering | kind | definition | validation');
     expect(blocks[1]!.text).toContain('(not written yet)');

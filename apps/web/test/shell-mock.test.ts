@@ -190,11 +190,20 @@ describe('MockApiClient document protocol', () => {
   });
 });
 
+/** The author writes the story and attests the five items (the anti-anchoring gate for AI drafting). */
+async function authorWrote(api: ReturnType<typeof demo>) {
+  const o = await settle(api.outline());
+  o.story.text = 'We show that a tracker trained without the signal finds more displaced particles.';
+  o.authorFilled = true;
+  await settle(api.saveOutline(o));
+}
+
 describe('MockApiClient review flow', () => {
   async function drafted() {
     const api = demo();
     const rec = record(api);
     const snap = await opened(api, rec);
+    await authorWrote(api);
     const { jobId } = await settle(api.draft({ sectionId: 'sec:results', paragraphIds: null, fromNotes: false, file: 'main.tex', afterSentenceId: null }));
     await vi.advanceTimersByTimeAsync(400);
     const d = rec.last('draft.proposed')!;
@@ -273,6 +282,17 @@ describe('MockApiClient AI guards', () => {
     expect(plan.outline.framings).toHaveLength(3);
     expect(plan.outline.framings.every((f) => f.provenance === 'ai-proposed' && !f.adopted)).toBe(true);
     expect(rec.all('job.progress').filter((j) => j.jobId === jobId).at(-1)?.state).toBe('done');
+  });
+
+  it('drafting is refused (409) until the author wrote the five items, like framings (UX-3)', async () => {
+    const api = demo();
+    const rec = record(api);
+    await opened(api, rec);
+    const req = { sectionId: 'sec:results', paragraphIds: null, fromNotes: false, file: 'main.tex', afterSentenceId: null };
+    await expect(settle(api.draft(req))).rejects.toMatchObject({ status: 409 });
+    expect(rec.all('draft.proposed')).toEqual([]);
+    await authorWrote(api);
+    await expect(settle(api.draft(req))).resolves.toHaveProperty('jobId');
   });
 
   it('ghost continues the typed prefix (only the continuation is sent) with a real fact number', async () => {

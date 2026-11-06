@@ -99,7 +99,7 @@ beforeEach(async () => {
       labels: () => [],
     } as unknown as DocService,
   });
-  ctx.agents = createAgentService(ctx, { baseEnv: { PATH: '/usr/bin' } });
+  ctx.agents = createAgentService(ctx, { baseEnv: { PATH: '/usr/bin' }, auth: () => ({ apiKey: 'sk-ant-test-key', baseUrl: 'https://api.anthropic.com' }) });
 });
 
 afterEach(() => project.cleanup());
@@ -150,7 +150,7 @@ describe('real mode with a scripted SDK session', () => {
       persistSession: false,
       systemPrompt: 'BLOCK A for repo_reader\n\nBLOCK B',
       additionalDirectories: [project.repoDir, project.paths.tex, ctx.config.skillDir],
-      env: expect.objectContaining({ PATH: '/usr/bin', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }),
+      env: expect.objectContaining({ PATH: '/usr/bin', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', ANTHROPIC_API_KEY: 'sk-ant-test-key', ANTHROPIC_BASE_URL: 'https://api.anthropic.com' }),
     });
     expect(options.permissionMode).not.toBe('bypassPermissions');
     // The absolute artifact path never reached the facts service.
@@ -160,6 +160,13 @@ describe('real mode with a scripted SDK session', () => {
     expect(readFileSync(project.paths.repoBrief, 'utf8')).toContain('## Unknowns');
     expect(recorded).toEqual([{ model: 'claude-sonnet-5-5', route: 'reader', input: 1000 }]);
     expect(ctx.events.some((e) => e.type === 'job.progress' && /Read: .*README\.md/.test(e.message))).toBe(true);
+  });
+
+  it('refuses to start a real agent without the app key (the CLI would fall back to another Claude login)', async () => {
+    const before = h.calls.length;
+    const agents = createAgentService(ctx, { baseEnv: { PATH: '/usr/bin' }, auth: () => ({ apiKey: null, baseUrl: 'https://api.anthropic.com' }) });
+    expect(() => agents.readRepo()).toThrow(/No Anthropic API key/);
+    expect(h.calls.length).toBe(before);
   });
 
   it('draft: editor MCP handler -> PostToolUse gate -> draft.proposed; the session is stored and resumed with usage deltas', async () => {
@@ -205,6 +212,7 @@ describe('real mode with a scripted SDK session', () => {
 
   it('fails clearly when the run stops before any paragraph, and warns when the skill is not discovered', async () => {
     const o = emptyOutline();
+    o.authorFilled = true;
     o.sections = [{ id: 'sec:r', title: 'Results', question: 'q', template: null, ghostMode: 'auto-propose', provenance: 'author', paragraphs: [{ pid: 'p1', job: 'j', moves: [], claimIds: [], intentNotes: [], provenance: 'author', plan: { job: 'j', claimIds: [], said: {}, remaining: [] } }] }];
     await ctx.files.writeJson(project.paths.outline, Outline.parse(o));
     h.script = async function* () {

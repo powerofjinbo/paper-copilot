@@ -158,7 +158,9 @@ describe('gateSentence: numbers', () => {
   });
 
   it('requires a cut fact for a unit next to a comparison', () => {
-    expect(gateSentence('A target particle has $p_T > 1$~GeV, $|\\eta| < 4$ and at least five space points.', ctx())).toMatchObject({ ok: true, factIds: ['f.definitions.pT_gt_1GeV', 'f.definitions.abs_eta_lt_4'] });
+    // "at least five space points" (a word numeral after a comparison) links its cut too
+    expect(gateSentence('A target particle has $p_T > 1$~GeV, $|\\eta| < 4$ and at least five space points.', ctx())).toMatchObject({ ok: true, factIds: ['f.definitions.pT_gt_1GeV', 'f.definitions.abs_eta_lt_4', 'f.definitions.ge_5_space_points'] });
+    expect(codes(gateSentence('Tracks need at least three space points.', ctx()))).toEqual(['unmatched_cut:block']);
     const r = gateSentence('A target particle has $p_T > 2$~GeV.', ctx());
     expect(codes(r)).toEqual(['unmatched_cut:block']);
     // a number fact with the right value is not a cut
@@ -225,6 +227,17 @@ describe('gateSentence: citations and references', () => {
     expect(r.repaired).toBe('Earlier trackers were tuned on prompt tracks~[ref].');
     expect(r.citeKeys).toEqual([]);
     expect(r.placeholders).toEqual(['[ref]']);
+  });
+
+  it('a rewrite may keep the citations of the original (unresolved but the author\'s), not add new ones', () => {
+    const original = 'Searches look for tracks that do not point back to the beam line~\\cite{Ju2022Zenodo}.';
+    const kept = gateSentence('Searches look for tracks that miss the beam line~\\cite{Ju2022Zenodo}.', ctx({ mode: 'rewrite', original, allowedCiteKeys: ['Wang2022LRT'] }));
+    expect(codes(kept).filter((c) => c.startsWith('unknown_cite'))).toEqual([]);
+    expect(kept.repaired).toContain('\\cite{Ju2022Zenodo}');
+    const added = gateSentence('Searches look for tracks that miss the beam line~\\cite{Ju2022Zenodo,Smith2019}.', ctx({ mode: 'rewrite', original, allowedCiteKeys: ['Wang2022LRT'] }));
+    expect(codes(added)).toContain('unknown_cite:block');
+    // drafting never inherits keys
+    expect(codes(gateSentence('Searches look for displaced tracks~\\cite{Ju2022Zenodo}.', ctx({ mode: 'draft', original, allowedCiteKeys: ['Wang2022LRT'] })))).toContain('unknown_cite:block');
   });
 
   it('keeps the known keys of a mixed \\cite', () => {

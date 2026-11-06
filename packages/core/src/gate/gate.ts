@@ -14,7 +14,8 @@
  * 2. cuts/definitions: a numeral with a unit (GeV, mm, ...) next to a comparison (`>`, `<`, `\geq`,
  *    "above", "below", "at least") must match a fact of kind 'cut'/'definition'/'setting', else
  *    'unmatched_cut' (block).
- * 3. citations: every \cite key must be in ctx.allowedCiteKeys, else 'unknown_cite' (block) and the
+ * 3. citations: every \cite key must be in ctx.allowedCiteKeys (in rewrite | grammar mode also the keys
+ *    the original sentence already cites), else 'unknown_cite' (block) and the
  *    \cite{..} is replaced by `[ref]` in `repaired`. Every \ref target must be in ctx.knownLabels, else
  *    'unknown_ref' (block).
  * 4. LaTeX invariance (mode rewrite | grammar): compareLatexInvariance(ctx.original, text) must be ok,
@@ -38,14 +39,34 @@
  *   the rewrite (the skill: keep every number; dropping one is not an invention but must be reread).
  * - 'bad_latex' (block): an unescaped `%` after a number, which comments out the rest of the line.
  * - 'gate_error' (block): an internal failure; the gate fails closed.
+ * - 'loose_number' (warn): a result restated in words ("ninety-seven percent") or as a rough ratio
+ *   ("9 out of 10") that does match a fact; linked, and the author is asked for the measured numeral.
+ * - 'direction' (block or warn): an unsigned numeral linked to a signed difference fact whose nearest
+ *   direction word ("rises", "lower", "fewer") contradicts the sign (block when the fact is negative or
+ *   the "A minus B" definition shows which side the sentence speaks from; warn otherwise), or the
+ *   magnitude of a negative fact with no direction word (warn).
+ * - 'meaning_changed': grammar mode (block) when the "fix" adds or removes a negation, flips a
+ *   direction word, or substitutes more than a few content words (gate/meaning.ts; offer it as a
+ *   rewrite instead); rewrite mode (warn) when a negation or direction word changed.
  * Each numeral gets at most one number issue, in this order: fictional_number, percent_scale,
- * unmatched_cut, unmatched_number. Structural numerals (Sec. 3, Fig. 2, years next to a citation,
- * list markers, bare integers 0-10) are never checked.
+ * unmatched_cut, then the intent note (whose percent/points form must agree with the text, else
+ * percent_scale), unmatched_number. Word numerals ("thirty percent", "twice", "halves", "a hundredfold",
+ * "an order of magnitude") are numerals like any other; a factor only matches a dimensionless
+ * non-fraction fact or a derived relation. An uncertainty (± u, compact, asymmetric) only matches an
+ * uncertainty recorded for the fact its value is linked to (or a standalone uncertainty fact), never an
+ * unrelated fact that happens to have the same value. Structural numerals (Sec. 3, Fig. 2, years next
+ * to a citation, list markers, bare integers 0-10 such as "three seeds") are not checked, except: a
+ * small integer after a comparison ("at least 3 space points", "$|\eta| < 2$") must match a cut,
+ * definition or setting fact (else 'unmatched_cut'); a ratio "N out of M" must match a fraction fact;
+ * a small digit count of something that is not structure ("8 GPUs") must match a fact in ghost and
+ * draft modes (else 'unmatched_number' block) and is warned in the other modes unless the original
+ * sentence already has it.
  */
 import type { Fact } from '../schemas';
 import { compareLatexInvariance, findPlaceholders, latexTokensOf, scanLatex } from '../latex/tokens';
-import { extractNumeralDetails, relaxedOnlyMatches, resolveLinks, type NumeralDetail, type TokenLink } from '../facts/numbers';
+import { extractNumeralDetails, normalizeUnit as normUnit, relaxedOnlyMatches, resolveLinks, type NumeralDetail, type TokenLink } from '../facts/numbers';
 import { claimStrengthIssues, confidenceLevelOf } from './claims';
+import { directionWords, grammarOnlyReasons, meaningChange, type Direction } from './meaning';
 import { cleanWords, countWords, findCjk, findReasoningLeak, placeholderSafe } from './text';
 
 export type GateMode = 'ghost' | 'draft' | 'rewrite' | 'grammar' | 'intent';
@@ -68,6 +89,9 @@ export type GateIssueCode =
   | 'unlinked_number'
   | 'number_changed'
   | 'bad_latex'
+  | 'loose_number'
+  | 'direction'
+  | 'meaning_changed'
   | 'gate_error';
 
 export interface GateIssue {
@@ -260,6 +284,15 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
   }
 
   // ---------------------------------------------------------------- 3. citations and references
+  // A rewrite or grammar fix may keep the author's own citations (the author put them there; the
+  // invariance check below already requires the same multiset of keys). New keys still need resolving.
+  if ((mode === 'rewrite' || mode === 'grammar') && typeof ctx.original === 'string') {
+    try {
+      for (const kc of scanLatex(ctx.original).keyCommands) if (kc.kind === 'cite') for (const k of kc.keys) allowed.add(k);
+    } catch {
+      /* an unreadable original adds nothing */
+    }
+  }
   for (const kc of scan.keyCommands) {
     const raw = t.slice(kc.start, kc.end);
     if (kc.kind === 'cite') {
@@ -320,7 +353,8 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
   if (badPct) {
     issues.push({ code: 'bad_latex', severity: 'block', message: 'A bare % after a number starts a LaTeX comment and hides the rest of the line; write \\%.', start: badPct.start, end: badPct.start + 1, raw: '%' });
   }
-  const links = resolveLinks(toks, facts, claimed);
+  const links = resolveLinks(toks, facts, claimed, { strictCounts: mode === 'ghost' || mode === 'draft' });
+  const originalRaws = (mode === 'rewrite' || mode === 'grammar') && typeof ctx.original === 'string' ? extractNumeralDetails(ctx.original).map((x) => normRaw(x.raw)) : [];
   const byId = new Map(facts.map((f) => [f.id, f] as const));
   const intentNums = typeof ctx.intentText === 'string' && ctx.intentText ? extractNumeralDetails(ctx.intentText) : [];
   const fictional = arr<string>(ctx.fictionalNumbers)
@@ -351,18 +385,30 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
     issues.push({ code, severity: 'block', message, start: l.tok.start, end: l.tok.end, raw: l.tok.raw });
     reps.push({ start: l.tok.replStart, end: l.tok.replEnd, text: placeholderFor(l.tok) });
   };
+  const shown = (tok: NumeralDetail): string => (tok.word ? tok.phrase : `${tok.raw}${tok.percent ? '%' : ''}${tok.unit ? ' ' + tok.unit : ''}${tok.points ? ' points' : ''}`);
+  /** A comparison that makes the numeral a cut: with a physical unit, or a bare small integer ("at least 3 space points"). */
+  const cutComparison = (tok: NumeralDetail): boolean => {
+    if (!tok.comparison) return false;
+    if (tok.unit && tok.unit !== '%' && tok.unit !== 'points') return true;
+    return !tok.weakComparison && !tok.percent && !tok.points && !tok.unit && !tok.factor && tok.ratioDen === null && tok.decimals === 0 && Math.abs(tok.value) <= 10;
+  };
+  const cutText = (tok: NumeralDetail): string => `"${tok.word ? tok.phrase : tok.raw}${tok.unit ? ' ' + tok.unit : ''}" after "${tok.comparison}"`;
+  const formOf = (tok: NumeralDetail): string => (tok.percent ? '%' : tok.points ? 'points' : tok.factor ? 'factor' : (tok.unit ?? ''));
 
   for (const l of links) {
     const tok = l.tok;
     if (l.status === 'structural') {
       if (l.linked) linked.push(l.linked);
+      // a small count ("8 GPUs") outside ghost/draft: not blocked, but the author is told
+      if (tok.smallCount && !l.linked && !originalRaws.includes(normRaw(tok.raw))) {
+        issues.push({ code: 'unmatched_number', severity: 'warn', message: `"${tok.raw}" counts something that is not in the fact store; check it against the analysis.`, start: tok.start, end: tok.end, raw: tok.raw });
+      }
       continue;
     }
     if (l.candidates.length > 0) {
-      // 2. cuts: a unit next to a comparison must be a cut/definition/setting fact
-      const physUnit = tok.unit && tok.unit !== '%' && tok.unit !== 'points';
-      if (tok.comparison && physUnit && !l.candidates.some((id) => cutLike(byId.get(id)))) {
-        flagNumber(l, 'unmatched_cut', `"${tok.raw} ${tok.unit}" after "${tok.comparison}" reads as a cut, but it matches no cut or definition fact (only ${l.candidates.join(', ')}).`);
+      // 2. cuts: a unit (or a bare small integer) next to a comparison must be a cut/definition/setting fact
+      if (cutComparison(tok) && !l.candidates.some((id) => cutLike(byId.get(id)))) {
+        flagNumber(l, 'unmatched_cut', `${cutText(tok)} reads as a cut, but it matches no cut or definition fact (only ${l.candidates.join(', ')}).`);
         continue;
       }
       if (l.linked) {
@@ -371,7 +417,28 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
       } else {
         for (const id of l.candidates) addForm(id, tok);
       }
+      // a result written in words or as a coarse ratio is linked, but should be the measured numeral
+      if ((tok.word && !(tok.comparison && !tok.percent && !tok.factor)) || tok.ratioDen !== null) {
+        const ids = l.linked ? [l.linked] : l.candidates;
+        issues.push({
+          code: 'loose_number',
+          severity: 'warn',
+          message: `"${tok.word ? tok.phrase : tok.raw}" restates ${ids.join(' or ')} ${tok.word ? 'in words' : 'as a rough ratio'}; write the measured value as a numeral with its precision.`,
+          start: tok.start,
+          end: tok.end,
+          raw: tok.raw,
+        });
+      }
       continue;
+    }
+    // an uncertainty whose value equals some fact, but no uncertainty recorded for the value's fact
+    if (tok.isUncertainty && tok.uncertaintyOf >= 0) {
+      const base = links[tok.uncertaintyOf];
+      const baseIds = base ? (base.linked ? [base.linked] : base.candidates) : [];
+      if (!derived.some((d) => derivedMatch(tok, d))) {
+        flagNumber(l, 'unmatched_number', `"${shown(tok)}" is given as an uncertainty, but no such uncertainty is recorded${baseIds.length ? ` for ${baseIds.join(', ')}` : ''}; replaced by a [fact?: ...] placeholder.`);
+        continue;
+      }
     }
     // unmatched: derived relation?
     const rel = derived.find((d) => derivedMatch(tok, d));
@@ -389,15 +456,11 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
         continue;
       }
     }
-    // typed by the author in the intent note?
-    const fromIntent = intentNums.some((n) => sameValue(n.value, tok.value) || normRaw(n.raw) === normRaw(tok.raw));
-    if (fromIntent) {
-      unlinked.push(tok.raw);
-      issues.push({ code: 'unlinked_number', severity: 'warn', message: `"${tok.raw}" comes from your note and is not linked to a fact; check it against the result files.`, start: tok.start, end: tok.end, raw: tok.raw });
-      continue;
-    }
-    if (fictional.some((f) => (f.v !== null && sameValue(f.v, tok.value)) || (f.n !== '' && f.n === normRaw(tok.raw)))) {
-      flagNumber(l, 'fictional_number', `"${tok.raw}" is a number from the skill's invented examples, not from this analysis.`);
+    // typed by the author in the intent note? (checked after the scale and cut checks below)
+    const intentSame = tok.word || tok.ratioDen !== null ? intentNums.filter((n) => sameValue(n.value, tok.value) && formOf(n) === formOf(tok)) : intentNums.filter((n) => sameValue(n.value, tok.value) || normRaw(n.raw) === normRaw(tok.raw));
+    const fictionalHit = fictional.some((f) => (tok.word ? f.n === normRaw(tok.phrase) || f.s.toLowerCase() === tok.phrase : (f.v !== null && sameValue(f.v, tok.value)) || (f.n !== '' && f.n === normRaw(tok.raw))));
+    if (fictionalHit && intentSame.length === 0) {
+      flagNumber(l, 'fictional_number', `"${shown(tok)}" is a number from the skill's invented examples, not from this analysis.`);
       continue;
     }
     const relaxed = relaxedOnlyMatches(tok, facts);
@@ -408,12 +471,113 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
       flagNumber(l, 'percent_scale', `"${tok.raw}${tok.percent ? '%' : tok.points ? ' points' : ''}" looks like ${r.factId}${f ? ` (${String(f.value)}${f.unit ? ' ' + f.unit : ''})` : ''} written as ${how}; percent versus fraction or points mix-up.`);
       continue;
     }
-    const physUnit = tok.unit && tok.unit !== '%' && tok.unit !== 'points';
-    if (tok.comparison && physUnit) {
-      flagNumber(l, 'unmatched_cut', `"${tok.raw} ${tok.unit}" after "${tok.comparison}" reads as a cut, but no cut or definition fact has this value.`);
+    if (cutComparison(tok)) {
+      flagNumber(l, 'unmatched_cut', `${cutText(tok)} reads as a cut, but no cut or definition fact has this value.`);
       continue;
     }
-    flagNumber(l, 'unmatched_number', `"${tok.raw}${tok.percent ? '%' : ''}${tok.unit ? ' ' + tok.unit : ''}${tok.points ? ' points' : ''}" matches no fact${tok.isUncertainty ? ' (as an uncertainty)' : ''}; replaced by a [fact?: ...] placeholder.`);
+    if (intentSame.length) {
+      // the note's form must agree: "2.3 points" in the note is not "2.3\%" in the text
+      const agree = intentSame.some((n) => formOf(n) === '' || formOf(n) === formOf(tok));
+      if (!agree) {
+        const n = intentSame[0]!;
+        flagNumber(l, 'percent_scale', `Your note gives ${n.raw} as ${formOf(n) === 'points' ? 'percentage points' : formOf(n) === '%' ? 'a percent' : formOf(n)}, but the text writes "${shown(tok)}"${formOf(tok) ? ` (${formOf(tok) === '%' ? 'a percent' : formOf(tok)})` : ''}; percent versus points mix-up.`);
+        continue;
+      }
+      unlinked.push(tok.raw);
+      issues.push({ code: 'unlinked_number', severity: 'warn', message: `"${shown(tok)}" comes from your note and is not linked to a fact; check it against the result files.`, start: tok.start, end: tok.end, raw: tok.raw });
+      continue;
+    }
+    if (fictionalHit) {
+      flagNumber(l, 'fictional_number', `"${shown(tok)}" is a number from the skill's invented examples, not from this analysis.`);
+      continue;
+    }
+    flagNumber(
+      l,
+      'unmatched_number',
+      `"${shown(tok)}" matches no fact${tok.isUncertainty ? ' (as an uncertainty)' : tok.ratioDen !== null ? ' (as a fraction)' : tok.factor ? ' (as a factor; give it as a derived relation of two facts)' : tok.smallCount ? ' (a count that is not in the fact store)' : ''}; replaced by a [fact?: ...] placeholder.`,
+    );
+  }
+
+  // ---------------------------------------------------------------- direction of signed results
+  // A numeral without a sign may state the magnitude of a negative fact ("lower by 0.83 points"); the
+  // direction word next to it must then agree with the sign.
+  {
+    const dirs = directionWords(t);
+    for (const l of links) {
+      const tok = l.tok;
+      if (!l.linked || tok.negative || tok.isUncertainty || tok.ratioDen !== null) continue;
+      const f = byId.get(l.linked);
+      const m = l.matches.find((x) => x.factId === l.linked);
+      if (!f || !m || m.field !== 'value' || typeof f.value !== 'number' || !Number.isFinite(f.value) || f.value === 0) continue;
+      const diffLike = f.value < 0 || normUnit(f.unit) === 'points' || /\b(?:minus|difference|diff|delta|gain|change)\b/i.test(`${f.definition ?? ''} ${String(f.id).replace(/[._]/g, ' ')}`);
+      if (!diffLike || CUT_KINDS.has(f.kind)) continue;
+      let sign: Direction = f.value > 0 ? 'up' : 'down';
+      // "A minus B": a sentence whose subject is B states the difference from B's side
+      // ("acorn's rate is 0.83 points higher than Canto-L's"); B after "than"/"over"/"against" is the baseline
+      const ab = /^(.+?)\s+(?:minus|−|–|-)\s+(.+?)\s*$/.exec(String(f.definition ?? ''));
+      let subjectKnown = false;
+      if (ab) {
+        const entity = (side: string, left: boolean): string => {
+          let e = side.split(',')[left ? side.split(',').length - 1 : 0]!.trim();
+          if (left) e = e.replace(/^.*\bof\s+/i, '');
+          return e.replace(/[()]/g, ' ').trim().split(/\s+/)[0] ?? '';
+        };
+        const find = (name: string): { pos: number; baseline: boolean } | null => {
+          if (name.length < 2) return null;
+          const re = new RegExp(`(?<![A-Za-z0-9])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])`, 'i');
+          const mm = re.exec(t);
+          if (!mm) return null;
+          const before = t.slice(Math.max(0, mm.index - 40), mm.index);
+          return { pos: mm.index, baseline: /\b(?:than|over|against|versus|vs\.?|relative\s+to|compared\s+(?:with|to)|with\s+respect\s+to)\s+(?:that\s+of\s+|the\s+)?$/i.test(before) };
+        };
+        const xa = find(entity(ab[1]!, true));
+        const yb = find(entity(ab[2]!, false));
+        let subject: 'A' | 'B' | null = null;
+        if (xa && !xa.baseline && (!yb || yb.baseline || xa.pos < yb.pos)) subject = 'A';
+        else if (yb && !yb.baseline && (!xa || xa.baseline || yb.pos < xa.pos)) subject = 'B';
+        else if (yb?.baseline) subject = 'A';
+        else if (xa?.baseline) subject = 'B';
+        subjectKnown = subject !== null;
+        if (subject === 'B') sign = sign === 'up' ? 'down' : 'up';
+      }
+      // nearest direction word (by distance to the numeral)
+      let best: { dir: Direction; word: string; d: number } | null = null;
+      for (const d of dirs) {
+        const dist = d.end <= tok.start ? tok.start - d.end : d.start >= tok.end ? d.start - tok.end : 0;
+        if (dist > 80) continue;
+        if (!best || dist < best.d) best = { dir: d.dir, word: d.word, d: dist };
+      }
+      if (!best) {
+        if (f.value < 0) issues.push({ code: 'direction', severity: 'warn', message: `"${shown(tok)}" is the size of ${f.id} = ${String(f.value)} (a decrease); say which way it goes.`, start: tok.start, end: tok.end, raw: tok.raw });
+        continue;
+      }
+      if (best.dir !== sign) {
+        const severity = f.value < 0 || subjectKnown ? 'block' : 'warn';
+        issues.push({
+          code: 'direction',
+          severity,
+          message: `"${best.word} ... ${shown(tok)}" states ${best.dir === 'up' ? 'an increase' : 'a decrease'}, but ${f.id} = ${String(f.value)}${f.definition ? ` (${f.definition})` : ''} goes the other way.`,
+          start: tok.start,
+          end: tok.end,
+          raw: tok.raw,
+        });
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- grammar / rewrite: meaning drift
+  if ((mode === 'rewrite' || mode === 'grammar') && original !== null) {
+    if (mode === 'grammar') {
+      const why = grammarOnlyReasons(original, t);
+      if (why.length) {
+        issues.push({ code: 'meaning_changed', severity: 'block', message: `This is not a grammar fix: it ${why.join('; ')}. Offer it as a rewrite for review instead.`, raw: why.join('; ') });
+      }
+    } else {
+      const c = meaningChange(original, t);
+      if (c.negation || c.direction) {
+        issues.push({ code: 'meaning_changed', severity: 'warn', message: `The rewrite ${[c.negation ? 'adds or removes a negation' : '', c.direction ? 'changes a direction word (higher/lower, rises/falls)' : ''].filter(Boolean).join(' and ')}; reread it against the original.` });
+      }
+    }
   }
   for (const [key, set] of forms) {
     if (set.has('factor') && set.has('percent')) {

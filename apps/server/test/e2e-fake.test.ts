@@ -249,8 +249,10 @@ describe('end to end (fake AI, fixture project, real services)', () => {
       const prefix = 'The fake-track rate of the new tracker is';
       c.send({ type: 'ghost.request', requestId: 'g-e2e', file: 'main.tex', version: ack.version, cursor: at + typed.length, trigger: 'manual', prefix });
       const g = await c.next(['ghost.result', 'ghost.empty', 'ghost.error'], (m) => 'requestId' in m && m.requestId === 'g-e2e');
-      expect(g.type === 'ghost.result' || g.type === 'ghost.empty').toBe(true);
+      expect(g.type).toBe('ghost.result');
       if (g.type === 'ghost.result') {
+        // only the continuation after the typed prefix; grammatical, grounded (a label that exists)
+        expect(g.text).toBe(' shown in Fig.~\\ref{fig:eff}.');
         expect(g.model).toMatch(/^fake-/);
         expect(g.issues.filter((i) => i.severity === 'block')).toEqual([]);
         // The continuation never invents a number: every digit in it comes from a linked fact.
@@ -261,6 +263,77 @@ describe('end to end (fake AI, fixture project, real services)', () => {
       c.send({ type: 'doc.flush', file: 'main.tex', version: ack.version });
       await c.next(['doc.ack'], (m) => m.type === 'doc.ack' && m.version === ack.version);
       expect(readFileSync(`${project.root}/tex/main.tex`, 'utf8')).toContain('We find a gain of 2.32 points over the signal-trained baseline.');
+    } finally {
+      c.ws.close();
+    }
+  }, 30_000);
+
+  it('an instruct proposal accepted as an annotated doc.change keeps the unit id (ai-drafted, everAi, ai_rewrite)', async () => {
+    const c = await connect(port, token);
+    try {
+      c.send({ type: 'hello', clientId: 'e2e-rewrite' });
+      c.send({ type: 'doc.open', file: 'main.tex' });
+      const snap = (await c.next(['doc.snapshot'])) as Extract<ServerMessage, { type: 'doc.snapshot' }>;
+      const unit = snap.units.find((u) => snap.text.slice(u.start, u.end).startsWith('Trackers tuned on prompt particles'))!;
+      expect(unit.state).toBe('human');
+      expect(unit.everAi).toBe(false);
+      const r = await http(port, 'POST', `/api/sentences/${encodeURIComponent(unit.id)}/instruct`, auth(), { instruction: '把动词提前', lang: 'zh' });
+      expect(r.status).toBe(200);
+      const p = r.json();
+      expect(p.sentenceId).toBe(unit.id);
+      expect(p.origin).toBe('ai_rewrite');
+      expect(p.notes).toMatch(/[\u4e00-\u9fff]/);
+      // the web client's applyProposal: one transaction replacing the whole sentence, with provenance
+      const text = `${p.text.replace(/\.$/, '')} in practice.`;
+      const annotation = { origin: p.origin, sentenceIds: [unit.id], state: 'ai-drafted', model: p.model, promptHash: p.promptHash, instruction: '把动词提前', lang: 'zh', intentNote: null, factIds: p.factIds, citeKeys: p.citeKeys, move: null, requestId: null };
+      const len = snap.text.length;
+      c.send({ type: 'doc.change', file: 'main.tex', baseVersion: snap.version, changes: [unit.start, [unit.end - unit.start, text], len - unit.end], annotation });
+      await c.next(['doc.ack'], (m) => m.type === 'doc.ack' && m.version === snap.version + 1);
+      const patch = (await c.next(['sentences.patch'], (m) => m.type === 'sentences.patch' && m.upserts.some((u) => u.id === unit.id))) as Extract<ServerMessage, { type: 'sentences.patch' }>;
+      const got = patch.upserts.find((u) => u.id === unit.id)!;
+      expect(got.state).toBe('ai-drafted');
+      expect(got.everAi).toBe(true);
+      expect(got.model).toBe(p.model);
+      const h = (await http(port, 'GET', `/api/sentences/${encodeURIComponent(unit.id)}/history`, auth())).json();
+      expect(h.unit.id).toBe(unit.id);
+      const last = h.versions.at(-1);
+      expect(last).toMatchObject({ origin: 'ai_rewrite', text, instruction: '把动词提前', lang: 'zh', model: p.model });
+      expect(h.versions.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      c.ws.close();
+    }
+  }, 30_000);
+
+  it('lint: lint.update carries the full list; POST /api/lint/:id/dismiss hides a flag and re-sends the list', async () => {
+    const c = await connect(port, token);
+    try {
+      c.send({ type: 'hello', clientId: 'e2e-lint' });
+      c.send({ type: 'doc.open', file: 'main.tex' });
+      const snap = (await c.next(['doc.snapshot'])) as Extract<ServerMessage, { type: 'doc.snapshot' }>;
+      const at = snap.text.indexOf('\\section{Conclusions}');
+      const typed = 'We delve into a pivotal tapestry of tracks.\n\n';
+      c.send({ type: 'doc.change', file: 'main.tex', baseVersion: snap.version, changes: [at, [0, typed], snap.text.length - at], annotation: null });
+      await c.next(['doc.ack']);
+      const upd = (await c.next(['lint.update'], (m) => m.type === 'lint.update' && m.flags.some((f) => f.word === 'delve'), 8000)) as Extract<ServerMessage, { type: 'lint.update' }>;
+      const flag = upd.flags.find((f) => f.word === 'delve')!;
+      expect(flag.dismissed).toBe(false);
+      const others = upd.flags.filter((f) => f.sentenceId !== flag.sentenceId).length;
+      const d = await http(port, 'POST', `/api/lint/${encodeURIComponent(flag.id)}/dismiss`, auth(), {});
+      expect(d.status).toBe(200);
+      expect(d.json()).toMatchObject({ ok: true, known: true });
+      const after = (await c.next(['lint.update'], (m) => m.type === 'lint.update' && m.flags.some((f) => f.id === flag.id && f.dismissed))) as Extract<ServerMessage, { type: 'lint.update' }>;
+      // the full list: flags of other sentences are still there
+      expect(after.flags.filter((f) => f.sentenceId !== flag.sentenceId).length).toBe(others);
+      expect((await http(port, 'POST', '/api/lint/..%2Fx/dismiss', auth(), {})).status).toBe(400);
+      // a reloaded page gets the stored list on doc.open
+      const c2 = await connect(port, token);
+      try {
+        c2.send({ type: 'doc.open', file: 'main.tex' });
+        const first = (await c2.next(['lint.update'])) as Extract<ServerMessage, { type: 'lint.update' }>;
+        expect(first.flags.find((f) => f.id === flag.id)?.dismissed).toBe(true);
+      } finally {
+        c2.ws.close();
+      }
     } finally {
       c.ws.close();
     }

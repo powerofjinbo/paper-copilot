@@ -2,6 +2,7 @@
  * Numbers from the skill's invented examples, and cleanup of single-sentence model output.
  */
 import { cmp, normText } from './xml';
+import { extractNumeralDetails } from '../facts/numerals';
 
 const DRAFT_START = /^\s*\*\*Draft violation and fix\.?\*\*/;
 const DRAFT_END = /^\s*(?:\*\*Boundaries\.?\*\*|\*\*Rule\.?\*\*|\*\*Exemplars\.?\*\*|#{1,6}\s)/;
@@ -15,7 +16,21 @@ const BEFORE_AFTER = /^\s*(?:(?:[-*+>]|\d+[.)])\s+)*[*_]{0,2}(?:Before|After)[*_
 const NUM = /(?<![\p{L}\p{N}_.,])(\d{1,3}(?:,\d{3})+(?![\d,])|\d+)(\.\d+)?(?![\p{L}\p{N}_])/gu;
 const STRUCT_BEFORE = /(?:\bFigs?\.|\bFigures?|\bTables?|\bTab\.|\bSecs?\.|\bSections?|\bApp\.|\bAppendix|\bEqs?\.|\bEquations?|\bslip|\bstep|¶|§)\s*$/i;
 
+/** Word numerals of an example line ("a hundredfold", "five times", "thirty percent"), as their normalized phrase. */
+function wordNumbersIn(text: string, out: Set<string>): void {
+  try {
+    // a bare small cardinal ("at least three segments") is too generic to mark; factors, percents and
+    // large cardinals are the invented results
+    for (const t of extractNumeralDetails(text.replace(/[*_]/g, ' '))) {
+      if (t.word && !t.structural && t.phrase && (t.factor || t.percent || t.points || t.value > 10)) out.add(t.phrase);
+    }
+  } catch {
+    /* an unreadable line adds nothing */
+  }
+}
+
 function numbersIn(text: string, out: Set<string>): void {
+  wordNumbersIn(text, out);
   NUM.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = NUM.exec(text))) {
@@ -30,7 +45,9 @@ function numbersIn(text: string, out: Set<string>): void {
 
 /**
  * Numbers in the "**Draft violation and fix.**" sections (up to "**Boundaries.**") and in any line that
- * starts with "Before:" / "After:" in the reference files. Sorted by value, then text; no duplicates.
+ * starts with "Before:" / "After:" in the reference files: digit numerals sorted by value, then text,
+ * followed by the word numerals of those lines as phrases ("hundredfold", "five times", "three times"),
+ * sorted; no duplicates. The gate matches a word numeral against these phrases.
  */
 export function fictionalNumbers(references: Record<string, string>): string[] {
   const out = new Set<string>();
@@ -48,7 +65,10 @@ export function fictionalNumbers(references: Record<string, string>): string[] {
       if (inDraft || BEFORE_AFTER.test(line)) numbersIn(line, out);
     }
   }
-  return [...out].sort((a, b) => Number(a) - Number(b) || cmp(a, b));
+  // numerals by value, then the word phrases ("five times", "hundredfold") alphabetically
+  const nums = [...out].filter((x) => /^[\d.]+$/.test(x)).sort((a, b) => Number(a) - Number(b) || cmp(a, b));
+  const words = [...out].filter((x) => !/^[\d.]+$/.test(x)).sort(cmp);
+  return [...nums, ...words];
 }
 
 /* ------------------------------------------------------------------------------------ */

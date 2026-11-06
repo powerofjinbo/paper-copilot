@@ -23,25 +23,35 @@ export interface ModelPrice {
   long?: Omit<ModelPrice, 'longThreshold' | 'long'>;
 }
 
+/** Cache multipliers of the input price (claude-api skill, prompt-caching.md "Economics"). */
+export const CACHE_MULTIPLIERS = { read: 0.1, write5m: 1.25, write1h: 2 } as const;
+/** Per-model cache-read exceptions: Opus 5.5 reads at 0.05x, Fable 5.1 at 0.025x. */
+const READ_MULTIPLIER: Record<string, number> = { 'claude-opus-5-5': 0.05, 'claude-fable-5-1': 0.025 };
+
+const r12 = (x: number): number => Number(x.toPrecision(12));
+
+/** Prices derived from the input/output list prices and the documented multipliers, so they cannot drift. */
+function derive(model: string, input: number, output: number): Omit<ModelPrice, 'longThreshold' | 'long'> {
+  const read = READ_MULTIPLIER[model] ?? CACHE_MULTIPLIERS.read;
+  return { input, output, cacheRead: r12(input * read), cacheWrite5m: r12(input * CACHE_MULTIPLIERS.write5m), cacheWrite1h: r12(input * CACHE_MULTIPLIERS.write1h) };
+}
+
 /**
  * claude-haiku-5-5: 0.10 in / 0.50 out / 0.01 cache read / 0.125 write 5m / 0.20 write 1h; above 100k
- * prompt tokens 0.50 / 2.50 / 0.05 / 0.625 / 1.00. claude-sonnet-5-5: 2 / 10 / 0.10 / 2.50 / 4.
- * claude-opus-5-5: 4 / 20 / 0.20 / 5 / 8. claude-fable-5-1: 10 / 50 / 0.25 / 12.50 / 20.
- * (platform.claude.com pricing page, read 2026-11-06.)
+ * prompt tokens 0.50 / 2.50 / 0.05 / 0.625 / 1.00. claude-sonnet-5-5: 2 / 10 / 0.20 / 2.50 / 4.
+ * claude-opus-5-5: 4 / 20 / 0.20 (0.05x) / 5 / 8. claude-fable-5-1: 10 / 50 / 0.25 (0.025x) / 12.50 / 20.
+ * (claude-api skill models.md and prompt-caching.md, read 2026-11-06: cache reads 0.1x input except
+ * Opus 5.5 0.05x and Fable 5.1 0.025x; writes 1.25x for the 5-minute TTL, 2x for the 1-hour TTL.)
  */
 export const PRICES: Record<string, ModelPrice> = {
   'claude-haiku-5-5': {
-    input: 0.1,
-    output: 0.5,
-    cacheRead: 0.01,
-    cacheWrite5m: 0.125,
-    cacheWrite1h: 0.2,
+    ...derive('claude-haiku-5-5', 0.1, 0.5),
     longThreshold: 100_000,
-    long: { input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite5m: 0.625, cacheWrite1h: 1.0 },
+    long: derive('claude-haiku-5-5', 0.5, 2.5),
   },
-  'claude-sonnet-5-5': { input: 2, output: 10, cacheRead: 0.1, cacheWrite5m: 2.5, cacheWrite1h: 4 },
-  'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2, cacheWrite5m: 5, cacheWrite1h: 8 },
-  'claude-fable-5-1': { input: 10, output: 50, cacheRead: 0.25, cacheWrite5m: 12.5, cacheWrite1h: 20 },
+  'claude-sonnet-5-5': derive('claude-sonnet-5-5', 2, 10),
+  'claude-opus-5-5': derive('claude-opus-5-5', 4, 20),
+  'claude-fable-5-1': derive('claude-fable-5-1', 10, 50),
 };
 
 export interface Usage {

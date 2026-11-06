@@ -119,8 +119,12 @@ export function referencesFor(task: TaskKind, template?: string | null): string[
     case 'intent':
     case 'instruct':
     case 'alternatives':
-      // Sentence work; captions and results paragraphs also need the caption anatomy and result rules.
-      refs = t === 'caption' || t === 'results' ? [SENT, FIG] : [SENT];
+    case 'grammar':
+    case 'replan':
+      // Every request on the actions route gets the SAME references for a given template, so they all
+      // share one cached block A (warmed once per section type). Captions and results also need the
+      // caption anatomy and result rules; elsewhere the flow rules serve rewrites and re-planning.
+      refs = t === 'caption' || t === 'results' ? [SENT, FIG] : [SENT, FLOW];
       break;
     case 'draft':
       refs =
@@ -193,7 +197,8 @@ export function resolvedReferenceNames(input: Pick<SystemInput, 'task' | 'skill'
 const or = (s: string, fallback: string): string => (clean(s) ? clean(s) : fallback);
 
 /**
- * Build system blocks [A(+role), B, C?] with cache_control as described above. The role text states:
+ * Build system blocks [A(+role), B, C?, task rules] with cache_control as described above (the task
+ * rules come last and uncached, so all tasks of a route share block A). The role text states:
  * paper text is English; notes, questions and explanations go in `notesLanguage`; never invent
  * numbers, citations, results, cuts or causal explanations; write `[fact?: ...]`, `[ref]` or a
  * descriptive `[...?]` placeholder instead; keep \cite \ref \label, math and macros exactly; plain
@@ -214,7 +219,6 @@ export function buildSystemBlocks(input: SystemInput): PromptBlock[] {
   const norms = clean(input.authorNorms);
   const a = joinParts([
     roleText(lang),
-    taskRules(input.task, lang),
     clean(skill.skillMd) ? block('skill', skill.skillMd, { name: 'hep-paper-writing', version: oneLine(skill.version) }) : '',
     ...refs,
     memo
@@ -267,6 +271,10 @@ export function buildSystemBlocks(input: SystemInput): PromptBlock[] {
     );
     blocks.push({ type: 'text', text: c, cache_control: { type: 'ephemeral', ttl: '5m' } });
   }
+  // ---------------------------------------------------------------- task rules (uncached, small)
+  // Kept out of block A so every task on a route reuses the same cached prefix; the few hundred
+  // tokens of task rules after the last breakpoint cost almost nothing to send uncached.
+  blocks.push({ type: 'text', text: taskRules(input.task, lang) });
   return blocks;
 }
 

@@ -48,8 +48,19 @@ export const STATE_ORDER: readonly SentenceState[] = [
   'placeholder',
 ];
 
+/** Apple platform (CodeMirror's Mod = Cmd there). */
+export const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 /** The primary modifier as shown in key hints: ⌘ on Apple platforms, Ctrl elsewhere. */
-export const MOD_KEY = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl';
+export const MOD_KEY = IS_MAC ? '⌘' : 'Ctrl';
+/** The Alt / Option key as shown in key hints. */
+export const ALT_KEY = IS_MAC ? '⌥' : 'Alt';
+/**
+ * The ghost-suggestion key as named in the UI. Ctrl+Space is bound too, but macOS (^Space: previous input
+ * source) and the Windows Chinese IMEs (Ctrl+Space: IME on/off) take it before the page sees it, so the
+ * key that always reaches the editor, Alt+/ (⌥/), is the one the UI names first.
+ */
+export const GHOST_KEY = IS_MAC ? '⌥/' : 'Alt+/';
+export const GHOST_KEY_ALT = IS_MAC ? 'Ctrl+Space' : 'Ctrl+Space · Ctrl+Shift+Space';
 
 export function relativeTime(iso: string | null | undefined, now = Date.now()): string {
   if (!iso) return '';

@@ -37,6 +37,7 @@ import { registerLitRoutes } from './routes/lit';
 import { registerLlmRoutes } from './routes/llm';
 import { registerPanelsRoutes } from './routes/panels';
 import { registerVoiceRoutes } from './routes/voice';
+import { registerLintRoutes } from './routes/lint';
 
 export const DEFAULT_PORT = 4317;
 export const VITE_DEV_PORT = 5173;
@@ -57,6 +58,7 @@ export const ROUTE_MODULES: Array<[string, RegisterRoutes]> = [
   ['agents', registerAgentsRoutes],
   ['build', registerBuildRoutes],
   ['voice', registerVoiceRoutes],
+  ['lint', registerLintRoutes],
 ];
 
 export interface ServerOptions {
@@ -117,7 +119,10 @@ async function registerDiscoveredRoutes(app: FastifyInstance, ctx: Ctx, register
   }
 }
 
+/** apps/web/dist, or PAPER_WEB_DIST (an alternative build, e.g. the full-stack E2E build). */
 export function defaultWebDist(): string {
+  const env = process.env.PAPER_WEB_DIST;
+  if (env && env.trim()) return resolve(env);
   return resolve(new URL('../../web/dist', import.meta.url).pathname);
 }
 
@@ -198,6 +203,23 @@ export async function createServer(opts: ServerOptions): Promise<PaperServer> {
     const q = u.indexOf('?');
     return q < 0 ? u : u.slice(0, q);
   };
+  /**
+   * The path as the router sees it, for classification only: percent-decoded (find-my-way decodes
+   * when routing, so "/%61pi/doc" IS "/api/doc"), duplicate slashes folded, lower-cased. null when the
+   * encoding is malformed.
+   */
+  const routedPathOf = (req: FastifyRequest): string | null => {
+    let p = pathOf(req);
+    try {
+      for (let i = 0; i < 3 && p.includes('%'); i++) p = decodeURIComponent(p);
+    } catch {
+      return null;
+    }
+    return p.replace(/\/{2,}/g, '/').toLowerCase();
+  };
+  const looksProtected = (p: string): boolean => p === '/api' || p.startsWith('/api/') || p === ROUTES.ws || p.startsWith(`${ROUTES.ws}/`);
+  /** Routes anyone on 127.0.0.1 with the right Host may load: the page, its static assets, the token handshake. */
+  const PUBLIC_ROUTES = new Set(['/', '/index.html', '/*']);
 
   // registered before the auth hook so its onRequest/onResponse hooks always run (a refused upgrade's
   // socket is then destroyed after the error response)
@@ -207,11 +229,16 @@ export async function createServer(opts: ServerOptions): Promise<PaperServer> {
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) reply.header(k, v);
     const hostHeader = (req.headers.host ?? '').toLowerCase();
     if (!allowedHosts().has(hostHeader)) return deny(reply, 421, 'misdirected request: unexpected Host header');
-    const path = pathOf(req);
-    const isWs = path === ROUTES.ws;
-    const isApi = path === '/api' || path.startsWith('/api/');
-    if (!isWs && !isApi) return;
-    if (path === SESSION_ROUTE) return; // checked in its handler
+    // Deny by default: the decision is made on the route Fastify actually matched (whatever spelling of
+    // the path reached it) and, for unmatched paths, on the decoded path. Only the page, its static
+    // assets and the session handshake are public.
+    const routed = routedPathOf(req);
+    if (routed === null) return deny(reply, 400, 'malformed path');
+    const route = req.routeOptions?.url;
+    if (route === SESSION_ROUTE) return; // checked in its handler (x-paper-client)
+    const isPublic = !looksProtected(routed) && (route === undefined || PUBLIC_ROUTES.has(route));
+    if (isPublic) return;
+    const isWs = route === ROUTES.ws || routed === ROUTES.ws;
     if (isWs) {
       const origin = req.headers.origin;
       if (origin !== undefined && !allowedOrigins().has(String(origin).toLowerCase())) return deny(reply, 403, 'forbidden origin');
@@ -244,7 +271,8 @@ export async function createServer(opts: ServerOptions): Promise<PaperServer> {
 
   app.setNotFoundHandler(async (req, reply) => {
     const path = pathOf(req);
-    if (path.startsWith('/api/') || path === ROUTES.ws || req.method !== 'GET') return deny(reply, 404, `not found: ${req.method} ${path}`);
+    const routed = routedPathOf(req);
+    if (routed === null || looksProtected(routed) || req.method !== 'GET') return deny(reply, 404, `not found: ${req.method} ${path}`);
     // single-page app: unknown GET paths get index.html
     return sendIndex(reply);
   });

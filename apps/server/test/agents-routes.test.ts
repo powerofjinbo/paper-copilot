@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ROUTES, type RefereeQuestion } from '@paper-copilot/core';
+import { emptyOutline, Outline, ROUTES, type RefereeQuestion } from '@paper-copilot/core';
 import { HttpError, type AgentService, type Ctx } from '../src/contracts';
 import { registerAgentRoutes, registerAgentsRoutes } from '../src/routes/agents';
 import { createAgentService } from '../src/services/agents/service';
@@ -87,6 +87,13 @@ describe('agent routes', () => {
     expect(result.simulated).toBe(true);
     // Framings before the author filled the outline: refused by the service with 409.
     expect((await app.inject({ method: 'POST', url: ROUTES.agentsFramings })).statusCode).toBe(409);
+    // Draft before the author filled the outline: refused with 409 too (anti-anchoring), and no job starts.
+    const early = await app.inject({ method: 'POST', url: ROUTES.agentsDraft, payload: { sectionId: 'sec:x', paragraphIds: null, fromNotes: false, file: 'main.tex', afterSentenceId: null } });
+    expect(early.statusCode).toBe(409);
+    expect(early.json().error ?? early.body).toMatch(/five outline items/);
+    const filled = emptyOutline();
+    filled.authorFilled = true;
+    await ctx.files.writeJson(ctx.paths.outline, Outline.parse(filled));
     // Unknown section: 404 from the service.
     const d = await app.inject({ method: 'POST', url: ROUTES.agentsDraft, payload: { sectionId: 'sec:x', paragraphIds: null, fromNotes: false, file: 'main.tex', afterSentenceId: null } });
     expect(d.statusCode).toBe(404);

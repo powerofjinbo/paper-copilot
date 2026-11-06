@@ -159,6 +159,17 @@ async function hoverDiagnostics() {
 }
 
 const sentChanges = () => pc(() => window.__pc.api.sent.filter((m) => m.type === 'doc.change').length);
+/** The count of sent doc.changes once it stops growing (the editor sends one change at a time, each after the ack of the previous one). */
+async function settledChanges() {
+  let n = await sentChanges();
+  for (let i = 0; i < 40; i++) {
+    await sleep(60);
+    const m = await sentChanges();
+    if (m === n) return m;
+    n = m;
+  }
+  return n;
+}
 const ghostRequests = () => pc(() => window.__pc.api.sent.filter((m) => m.type === 'ghost.request').length);
 
 async function main() {
@@ -349,11 +360,12 @@ async function main() {
 
   await check('draft insert, then review with Alt+Down and Ctrl+Enter', async () => {
     const proposedBefore = await pc(() => window.__pc.store.getState().units.filter((u) => u.state === 'proposed' || u.state === 'unsupported').length);
-    const changesBefore = await sentChanges();
+    const changesBefore = await settledChanges();
     await page.click('[data-testid="btn-draft"]');
     await waitFor((n) => window.__pc.store.getState().units.filter((u) => u.state === 'proposed' || u.state === 'unsupported').length >= n + 3, proposedBefore, 4000, 'three drafted units');
-    const drafted = (await sentChanges()) - changesBefore;
-    assert(drafted === 3, `expected one transaction per sentence (3), got ${drafted}`);
+    const drafted = (await settledChanges()) - changesBefore;
+    const origins = await pc((n) => window.__pc.api.sent.filter((m) => m.type === 'doc.change').slice(n).map((m) => m.annotation?.origin ?? 'typed'), changesBefore);
+    assert(drafted === 3, `expected one transaction per sentence (3), got ${drafted}: ${origins.join(', ')}`);
     await pc(() => window.__pc.editor.revealLine(1));
     await page.keyboard.press('Alt+ArrowDown');
     await page.waitForSelector('[data-testid="sentence-card"][data-state="proposed"]', { timeout: 2000 });

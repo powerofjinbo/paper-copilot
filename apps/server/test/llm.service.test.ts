@@ -261,10 +261,13 @@ let versions: Map<string, SentenceVersion[]>;
 let script: ((req: LlmRequest, attempt: number) => FakeOutput | undefined) | undefined;
 let fake: ReturnType<typeof createFakeLlmClient>;
 let latencyMs = 0;
+/** Services built by the current test: closed (timers stopped, cost-log writes drained) before cleanup. */
+let built: Array<ReturnType<typeof createLlmService>> = [];
 
 function build(): ReturnType<typeof createLlmService> {
   fake = createFakeLlmClient({ latencyMs, respond: (r, a) => script?.(r, a) });
   const svc = createLlmService(ctx, { client: fake, skillCheckIntervalMs: 0 });
+  built.push(svc);
   (ctx as { llm: unknown }).llm = svc;
   return svc;
 }
@@ -293,7 +296,12 @@ beforeEach(async () => {
   latencyMs = 0;
 });
 
-afterEach(() => project.cleanup());
+afterEach(async () => {
+  // the service appends cost records asynchronously: removing the temp dir under a pending append fails
+  // (ENOTEMPTY) or leaves the write to a vanished directory
+  for (const svc of built.splice(0)) await svc.close?.();
+  project.cleanup();
+});
 
 async function ghost(svc: ReturnType<typeof createLlmService>, msg = ghostMsg()): Promise<ServerMessage[]> {
   const sent: ServerMessage[] = [];
@@ -338,7 +346,7 @@ describe('ghost', () => {
     // Cost: recorded, emitted, persisted.
     expect(svc.costTotals().requests).toBe(1);
     expect(ctx.events.some((e) => e.type === 'cost.update')).toBe(true);
-    await new Promise((r2) => setTimeout(r2, 20));
+    await svc.close?.(); // waits for the queued cost-log append (a fixed sleep raced it under load)
     const log = ctx.files.readText(ctx.paths.costLog) ?? '';
     expect(log).toContain('"route":"ghost"');
     expect(log).toContain('fake-claude-haiku-5-5');
@@ -352,6 +360,20 @@ describe('ghost', () => {
     expect(sent[0].text.startsWith(' ')).toBe(true);
     expect(sent[0].text).toContain('2.32~points');
     expect(sent[0].factIds).toContain('f.g1.delta_points');
+  });
+
+  it('the default fake is grammatical and grounded without a plan step: noun phrase, clause, copula', async () => {
+    await ctx.files.writeJson(ctx.paths.outline, outline({ remaining: [] }));
+    const svc = build();
+    const cases: Array<[string, string]> = [
+      ['The efficiency gain', ' is shown in Fig.~\\ref{fig:eff}.'],
+      ['We train on generic events', ' (see Fig.~\\ref{fig:eff}).'],
+      ['The efficiency gain is', ' shown in Fig.~\\ref{fig:eff}.'],
+    ];
+    for (const [prefix, cont] of cases) {
+      const sent = await ghost(svc, ghostMsg({ prefix, trigger: 'manual' }));
+      expect(sent[0], prefix).toMatchObject({ type: 'ghost.result', text: cont, factIds: [] });
+    }
   });
 
   it('gate failure -> regenerates once with the issues in the tail -> success', async () => {
@@ -552,6 +574,13 @@ describe('sentence actions', () => {
     expect(p.drift?.scope).toBe(true);
   });
 
+  it('instruct: a negated rewrite is flagged as a direction change even when the model reports none', async () => {
+    script = () => ({ json: { text: U1.replace(/^We compare/, 'We do not compare'), notes: 'n', drift: { actor: false, scope: false, direction: false, condition: false }, fact_ids: [], cite_keys: [] } });
+    const svc = build();
+    const p = await svc.instruct('u1', 'rephrase', 'en');
+    expect(p.drift?.direction).toBe(true);
+  });
+
   it('instruct: an invented number is replaced by a visible placeholder in the offered text', async () => {
     script = () => ({ json: { text: 'We compare the two trackers on 9999 events, as in Ref.~\\cite{Wang2022LRT}.', notes: 'n', drift: { actor: false, scope: false, direction: false, condition: false }, fact_ids: [], cite_keys: [] } });
     const svc = build();
@@ -597,6 +626,14 @@ describe('sentence actions', () => {
     expect(p.notes).toBe('无修改');
     expect(p.diff.every(([op]) => op === 0)).toBe(true);
     expect(p.issues.filter((i) => i.severity === 'block')).toEqual([]);
+  });
+
+  it('grammar: a "fix" that adds a negation is blocked (meaning_changed) and offered as an AI rewrite, not a grammar_fix', async () => {
+    script = () => ({ json: { text: 'We do not compare the two trackers on the same events, as in Ref.~\\cite{Wang2022LRT}.', changes: ['tense'] } });
+    const svc = build();
+    const p = await svc.grammar('u1');
+    expect(p.issues.some((i) => i.code === 'meaning_changed' && i.severity === 'block')).toBe(true);
+    expect(p.origin).toBe('ai_rewrite');
   });
 
   it('intent rendering: proposals from a Chinese note, origin ai_intent; a number typed in the note passes as unlinked', async () => {
@@ -743,6 +780,7 @@ describe('systemFor, pre-warm and cost', () => {
     const calls: LlmRequest[] = [];
     const client = { fake: false, complete: async () => Promise.reject(new Error('unused')), prewarm: async (r: LlmRequest) => (calls.push(r), { input_tokens: 3, output_tokens: 0, cache_creation_input_tokens: 9000 }) };
     const svc = createLlmService(ctx, { client, skillCheckIntervalMs: 0 });
+    built.push(svc);
     await svc.prewarm();
     expect(calls.map((c) => [c.route, c.model, c.thinking, c.effort])).toEqual([
       ['ghost', 'claude-haiku-5-5', 'disabled', 'low'],
@@ -750,9 +788,11 @@ describe('systemFor, pre-warm and cost', () => {
     ]);
     for (const c of calls) {
       expect(c.system.length).toBe(2);
-      expect(JSON.stringify(c.system)).toBe(JSON.stringify(svc.systemFor(c.task, { sectionType: 'body', template: null }).slice(0, 2)));
+      // the open document's sentences sit in the Results section: its template's references are warmed
+      expect(JSON.stringify(c.system)).toBe(JSON.stringify(svc.systemFor(c.task, { sectionType: 'results', template: 'results' }).slice(0, 2)));
     }
     expect(svc.costTotals().requests).toBe(2);
+    svc.close?.();
   });
 
   it('recordUsage (agents report here): totals, cost.update, cost.jsonl; totals survive a restart', async () => {

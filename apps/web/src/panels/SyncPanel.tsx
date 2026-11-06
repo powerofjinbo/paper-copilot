@@ -138,10 +138,23 @@ export function SyncPanel({ api }: { api: ApiClient }) {
     setCheck(r.check);
     setPushOutput({ ok: r.ok, output: r.output });
     pushNotice(r.ok ? 'info' : 'warn', r.ok ? t('sync.pushed') : t('sync.refused'));
-    if (r.ok) setMessage('');
+    if (r.ok) {
+      setMessage('');
+      // the diff co-authors will see is now empty: show the state after the push, not before it
+      setCheck(await api.pushCheck().catch(() => r.check));
+    }
   });
 
-  const disclosure = useLoad(() => api.disclosure(venue), [api, venue]);
+  // Regenerate when the sentence log changes (states, AI flags), unless the author is editing the text.
+  const units = useWorkspace((s) => s.units);
+  const logSig = useMemo(() => `${units.length}:${units.map((u) => `${u.state}${u.everAi ? '*' : ''}`).join(',')}`, [units]);
+  const [sigNow, setSigNow] = useState(logSig);
+  useEffect(() => {
+    const timer = setTimeout(() => setSigNow(logSig), 800);
+    return () => clearTimeout(timer);
+  }, [logSig]);
+  const frozen = edited !== null;
+  const disclosure = useLoad(() => api.disclosure(venue), [api, venue, frozen ? 'frozen' : sigNow]);
   useEffect(() => {
     setEdited(null);
   }, [venue, format, disclosure.data]);
@@ -155,7 +168,9 @@ export function SyncPanel({ api }: { api: ApiClient }) {
   );
   const editedIds = reports?.flatMap((r) => r.edited) ?? [];
   const orphanIds = reports?.flatMap((r) => r.orphaned) ?? [];
-  const canPush = !!check && check.ok && message.trim().length > 0 && !push.busy;
+  // Sync mode "none": no remote. Pull and Push are hidden; the guard (blockers + diff) stays useful.
+  const syncOff = project?.config.sync.mode === 'none' || !!check?.unavailable;
+  const canPush = !syncOff && !!check && check.ok && message.trim().length > 0 && !push.busy;
 
   return (
     <div className="panel">
@@ -171,8 +186,23 @@ export function SyncPanel({ api }: { api: ApiClient }) {
         }
       />
       <div className="panel-body">
-        <PanelSection title={t('sync.pullSection')} actions={<Button size="sm" icon={<IconPull size={13} />} busy={pull.busy} onClick={() => void pull.run()}>{t('sync.pullButton')}</Button>}>
-          {project?.config.sync.remote ? (
+        {syncOff ? (
+          <div className="banner sync-off" role="note" data-testid="sync-off">
+            <span>{t('sync.off')}</span>
+          </div>
+        ) : null}
+        <PanelSection
+          title={t('sync.pullSection')}
+          actions={
+            syncOff ? null : (
+              <Button size="sm" icon={<IconPull size={13} />} busy={pull.busy} onClick={() => void pull.run()}>
+                {t('sync.pullButton')}
+              </Button>
+            )
+          }
+        >
+          <InlineError message={pull.error} />
+          {project?.config.sync.remote && !syncOff ? (
             <p className="muted small">
               {t('sync.remote')}: <span className="mono">{project.config.sync.remote}</span> · {project.config.sync.branch}
             </p>
@@ -210,17 +240,23 @@ export function SyncPanel({ api }: { api: ApiClient }) {
           <InlineError message={runCheck.error} />
           {check ? (
             <>
-              <Blockers check={check} />
+              {syncOff ? null : <Blockers check={check} />}
+              {syncOff && check.blockers.length ? <Blockers check={{ ...check, ok: false }} /> : null}
               <div className="sub-label">{t('sync.diff')}</div>
               {check.diff ? <DiffView diff={check.diff} /> : <p className="muted small">{t('sync.noDiff')}</p>}
-              <Field htmlFor={ids.msg} label={t('sync.message')}>
-                <input id={ids.msg} className="input" value={message} placeholder={t('sync.messageHint')} onChange={(e) => setMessage(e.target.value)} lang="en" />
-              </Field>
-              <div className="row-end">
-                <Button variant="primary" icon={<IconPush size={14} />} disabled={!canPush} busy={push.busy} onClick={() => void push.run()} title={!check.ok ? t('sync.pushDisabled') : undefined}>
-                  {t('sync.pushButton')}
-                </Button>
-              </div>
+              {syncOff ? null : (
+                <>
+                  <Field htmlFor={ids.msg} label={t('sync.message')}>
+                    <input id={ids.msg} className="input" value={message} placeholder={t('sync.messageHint')} onChange={(e) => setMessage(e.target.value)} lang="en" />
+                  </Field>
+                  <div className="row-end">
+                    <Button variant="primary" icon={<IconPush size={14} />} disabled={!canPush} busy={push.busy} onClick={() => void push.run()} title={!check.ok ? t('sync.pushDisabled') : undefined}>
+                      {t('sync.pushButton')}
+                    </Button>
+                  </div>
+                </>
+              )}
+              <InlineError message={push.error} />
               {pushOutput ? <pre className={`log-tail${pushOutput.ok ? '' : ' is-error'}`}>{pushOutput.output}</pre> : null}
             </>
           ) : (

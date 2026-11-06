@@ -12,5 +12,6 @@ export * from './latex/tokens';
 export * from './anchor/units';
 export * from './facts/numbers';
 export * from './gate/gate';
+export { meaningChange, grammarOnlyReasons, directionWords, negationCount, type MeaningChange, type Direction } from './gate/meaning';
 export * from './prompts/index';
 export * from './meta/index';

@@ -5,7 +5,11 @@
  * (footnote segments are nested inside their host sentence's span, so kinds never mix), resolved
  * greedily by overlap size: the largest overlap of a unit keeps its id, so a split keeps the id on the
  * larger part and a merge keeps the id of the unit that overlaps the merged sentence most.
- * Phase 2 (external only): exact-hash re-anchoring with ctxHash, then line distance, as tie-breakers.
+ * Phase 2 (both modes): exact-hash re-anchoring with ctxHash, then line distance, as tie-breakers, of
+ * units phase 1 left unmatched to segments it left free. In local mode this is what keeps a moved
+ * sentence's id, state and provenance when one transaction deletes it and re-inserts its text elsewhere
+ * (CodeMirror moveLine, cut and paste in one change); previously orphaned units passed in (for example
+ * units removed by a recent local pass) can re-attach the same way. Phase 2b runs in external mode only.
  * Phase 3 (external only): fuzzy re-anchoring within a line window, similarity >= threshold and an
  * agreeing neighbour; repeated while it makes progress, so chains of moved/edited units resolve.
  */
@@ -99,8 +103,6 @@ export function matchUnits(ctx: MatchContext): MatchResult {
     prevMatch[pi] = si;
     how.set(pi, 'overlap');
   }
-  if (!ctx.external) return { segOwner, prevMatch, orphanMatch, segOrphan, pairs, how };
-
   /* Phase 2: exact hash (live units first, then previously orphaned ones). */
   const byHash = new Map<string, number[]>();
   for (let si = 0; si < segs.length; si++) {
@@ -138,6 +140,7 @@ export function matchUnits(ctx: MatchContext): MatchResult {
     segOrphan[si] = oi;
     orphanMatch[oi] = si;
   });
+  if (!ctx.external) return { segOwner, prevMatch, orphanMatch, segOrphan, pairs, how };
 
   /* Phase 2b: repeated sentences. The diff may keep a repeated sentence's text in place while its
      context moved (e.g. two paragraphs that share a sentence swap). Among matched units whose text is

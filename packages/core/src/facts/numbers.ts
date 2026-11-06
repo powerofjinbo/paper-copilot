@@ -16,6 +16,12 @@
  * - Physical units must agree when the numeral has one (GeV vs MeV differ; no conversion).
  * - Integer facts (counts, integer cuts) match integer numerals exactly (`8,710` -> 8710 only).
  * - Excluded facts and facts without a numeric value never match.
+ * - A factor ("2.5 times", "twice", "a factor of two", "a hundredfold") matches only a dimensionless,
+ *   non-fraction fact (unit '', 'x', 'times', 'factor' or 'ratio'); never a points difference.
+ * - A ratio "N out of M" / "N in M" / "N of M" matches a fraction (or percent) fact f with
+ *   |f - N/M| <= 0.5/M.
+ * - Linking (resolveLinks): an uncertainty matches only an uncertainty field of the fact its value is
+ *   linked to (or a standalone fact named/tagged as an uncertainty); otherwise it is unmatched.
  */
 import type { Fact } from '../schemas';
 import { decimalsForSig, factNumber, fixed, isFractionFact, mainUncertainty, needsSci, sciParts, unitSuffix, withThousands } from './format';
@@ -47,7 +53,9 @@ export interface NumeralToken {
    * Structural numbers that never need a fact: section/figure/table/equation/appendix/reference numbers
    * ("Sec. 3", "Fig. 2", "Eq. (4)", "Table I"), years 1900-2099 next to a citation or "in 2024",
    * list markers "(i)", "(1)", ordinals ("1st"), and bare integers 0-10 with no unit, decimal, percent or
-   * "points" ("three seeds" is a word; "3 seeds" is a small bare integer and is structural too).
+   * "points", in digits or in words ("3 seeds", "three seeds"), unless a strong comparison precedes them
+   * ("at least 3", "< 2": a cut) or they form a ratio ("9 out of 10"). Word numerals ("thirty percent",
+   * "twice", "a hundredfold") are extracted like digits.
    */
   structural: boolean;
 }
@@ -115,8 +123,21 @@ function fieldsOf(f: Fact): Array<[string, number]> {
   return out;
 }
 
+/**
+ * A factor ("2.5 times", "twice", "a hundredfold") is a ratio: it stands only for a dimensionless,
+ * non-fraction fact (or a declared derived relation), never for a difference in points, a fraction or a
+ * physical value ("a factor of 2" is not delta_points = 2.32).
+ */
+function factorCompatible(tok: NumeralToken, f: Fact): boolean {
+  if ((tok as Partial<NumeralDetail>).factor !== true) return true;
+  const u = normalizeUnit(f.unit).toLowerCase();
+  if (u !== '' && u !== 'x' && u !== 'times' && u !== 'factor' && u !== 'ratio') return false;
+  return !isFractionFact(f);
+}
+
 /** Scales a numeral may use for a fact under the strict rules. */
 function strictScales(tok: NumeralToken, f: Fact): number[] {
+  if (!factorCompatible(tok, f)) return [];
   const u = normalizeUnit(f.unit);
   const frac = isFractionFact(f);
   const tu = normalizeUnit(tok.unit);
@@ -141,6 +162,7 @@ function strictScales(tok: NumeralToken, f: Fact): number[] {
 
 /** Scales under the relaxed rules (percent/fraction confusions), used to diagnose `percent_scale`. */
 function relaxedScales(tok: NumeralToken, f: Fact): number[] {
+  if (!factorCompatible(tok, f)) return [];
   const u = normalizeUnit(f.unit);
   const tu = normalizeUnit(tok.unit);
   if (tu && tu !== '%' && tu !== 'points') return u === tu ? [1] : [];
@@ -160,9 +182,34 @@ function fieldMatches(x: number, scale: number, tok: NumeralToken, exactInt: boo
   return Math.abs(cmp - tv) <= tol * (1 + 1e-9) + 1e-12 * Math.max(1, Math.abs(tv));
 }
 
+/**
+ * A ratio "N out of M" stands for a fraction fact (or a percent fact) whose value, times M, rounds to N:
+ * |fact - N/M| <= 0.5/M ("9 out of 10" covers 0.85-0.95, "1 in 200" covers 0.0025-0.0075).
+ */
+function matchRatio(tok: NumeralDetail, facts: Fact[]): Array<{ factId: string; field: string; scale: number }> {
+  const den = tok.ratioDen ?? 0;
+  const out: Array<{ factId: string; field: string; scale: number }> = [];
+  if (!(den > 0)) return out;
+  const r = tok.value / den;
+  const tol = 0.5 / den + 1e-12;
+  const seen = new Set<string>();
+  for (const f of facts) {
+    if (!f || f.excluded || seen.has(f.id)) continue;
+    seen.add(f.id);
+    const v = factNumber(f);
+    if (v === null) continue;
+    const u = normalizeUnit(f.unit);
+    const x = isFractionFact(f) ? v : u === '%' ? v / 100 : null;
+    if (x !== null && Math.abs(x - r) <= tol) out.push({ factId: f.id, field: 'value', scale: 1 });
+  }
+  return out;
+}
+
 function matchWith(tok: NumeralToken, facts: Fact[], scalesOf: (t: NumeralToken, f: Fact) => number[]): Array<{ factId: string; field: string; scale: number }> {
   const out: Array<{ factId: string; field: string; scale: number }> = [];
   if (!tok || typeof tok.value !== 'number' || !Array.isArray(facts)) return out;
+  const det = tok as Partial<NumeralDetail>;
+  if (typeof det.ratioDen === 'number') return scalesOf === strictScales ? matchRatio(tok as NumeralDetail, facts) : [];
   const seen = new Set<string>();
   const tokExp = exponentOf(tok);
   const tokIsInt = (tok.decimals ?? 0) - tokExp <= 0 && Number.isInteger(tok.value);
@@ -357,7 +404,23 @@ function uniq<T>(xs: T[]): T[] {
  * facts that carry that uncertainty); an uncertainty of a fact already linked in the sentence; a
  * comparison (`> 1 GeV` prefers cut/definition/setting facts); the caller's `prefer` list.
  */
-export function resolveLinks(toks: NumeralDetail[], facts: Fact[], prefer: string[] = []): TokenLink[] {
+/** A standalone fact that is itself an uncertainty (id `..sigma_x`, `..x_err`, tag 'uncertainty'). */
+function uncertaintyLike(f: Fact | undefined): boolean {
+  if (!f) return false;
+  if ((f.tags ?? []).some((t) => /^(?:uncertainty|error|sigma|unc)$/i.test(t))) return true;
+  const last = String(f.id).split('.').pop() ?? '';
+  return /^(?:sigma|sigmas|err|errs|error|errors|unc|uncert|uncertainty|std|sd|stderr)(?:_|$)|_(?:sigma|err|error|unc|uncert|uncertainty|std|sd|stderr)$/i.test(last);
+}
+
+export interface ResolveOptions {
+  /**
+   * Check small digit counts ("8 GPUs", smallCount) like any other numeral: ghost and draft modes,
+   * where the model writes new text. Otherwise they stay structural unless a fact matches.
+   */
+  strictCounts?: boolean;
+}
+
+export function resolveLinks(toks: NumeralDetail[], facts: Fact[], prefer: string[] = [], opts: ResolveOptions = {}): TokenLink[] {
   const usable: Fact[] = [];
   const seen = new Set<string>();
   for (const f of Array.isArray(facts) ? facts : []) {
@@ -368,7 +431,15 @@ export function resolveLinks(toks: NumeralDetail[], facts: Fact[], prefer: strin
   const kind = new Map(usable.map((f) => [f.id, f.kind] as const));
   const cutFacts = usable.filter((f) => CUT_KINDS.has(f.kind));
   const pref = new Set(Array.isArray(prefer) ? prefer : []);
+  const byId = new Map(usable.map((f) => [f.id, f] as const));
   const links: TokenLink[] = toks.map((tok) => {
+    if (tok.structural && tok.smallCount && !tok.ratioPart) {
+      const ms = matchNumeral(tok, usable);
+      const ids = uniq(ms.map((m) => m.factId));
+      if (ids.length) return { tok, matches: ms, candidates: ids, linked: null, status: 'ambiguous' };
+      if (opts.strictCounts) return { tok, matches: [], candidates: [], linked: null, status: 'unmatched' };
+      return { tok, matches: [], candidates: [], linked: null, status: 'structural' };
+    }
     if (tok.structural) {
       // a structural-looking numeral in a comparison may still be a cut (`|\eta| < 4`)
       if (tok.comparison && cutFacts.length) {
@@ -378,7 +449,10 @@ export function resolveLinks(toks: NumeralDetail[], facts: Fact[], prefer: strin
       }
       return { tok, matches: [], candidates: [], linked: null, status: 'structural' };
     }
-    const ms = matchNumeral(tok, usable);
+    let ms = matchNumeral(tok, usable);
+    // an uncertainty stands for an uncertainty field of a fact (narrowed to its value's fact below), or
+    // for a standalone uncertainty fact; equal to some other fact's value is no evidence at all
+    if (tok.isUncertainty && tok.uncertaintyOf >= 0) ms = ms.filter((m) => m.field.startsWith('unc:') || uncertaintyLike(byId.get(m.factId)));
     let ids = uniq(ms.map((m) => m.factId));
     if (tok.comparison) {
       const cuts = ids.filter((id) => CUT_KINDS.has(kind.get(id) ?? ''));
@@ -397,14 +471,24 @@ export function resolveLinks(toks: NumeralDetail[], facts: Fact[], prefer: strin
       if (baseIdx >= 0 && links[baseIdx]) {
         const base = links[baseIdx]!;
         const u = uncIds(l);
+        const standalone = l.candidates.filter((id) => uncertaintyLike(byId.get(id)));
         if (base.linked && u.includes(base.linked)) l.candidates = [base.linked];
-        else if (!base.linked && base.candidates.length > 1) {
+        else if (base.linked) l.candidates = standalone; // not an uncertainty recorded for the value's fact
+        else if (base.candidates.length === 0) l.candidates = standalone;
+        else if (!base.linked && base.candidates.length >= 1) {
           const inter = base.candidates.filter((id) => u.includes(id));
           if (inter.length >= 1 && inter.length < base.candidates.length) {
             base.candidates = inter;
             changed = true;
           }
           if (inter.length >= 1) l.candidates = l.candidates.filter((id) => inter.includes(id)).length ? l.candidates.filter((id) => inter.includes(id)) : inter;
+          else l.candidates = standalone;
+        }
+        if (l.candidates.length === 0) {
+          l.status = 'unmatched';
+          l.linked = null;
+          changed = true;
+          continue;
         }
       }
       if (l.candidates.length > 1) {

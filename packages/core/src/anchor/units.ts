@@ -139,7 +139,10 @@ export interface AssignResult {
   upserts: SentenceUnit[];
   /** Ids that disappeared (deleted or merged into another unit). */
   removed: string[];
-  /** External mode only: units that could not be re-anchored (orphaned = true). Metadata kept, never deleted. */
+  /**
+   * External mode: units that could not be re-anchored (orphaned = true). Metadata kept, never deleted.
+   * Local mode: the units passed in with `orphaned: true` that did not re-attach, returned unchanged.
+   */
   orphaned: SentenceUnit[];
   /** Pairs (last AI text, new human text) for AI units the author edited by hand (voice learning). */
   editPairs: EditPair[];
@@ -153,7 +156,12 @@ export interface AssignResult {
  * (by characters). If one previous unit overlaps several segments (a split), the largest overlap keeps
  * the id and the others get new ids with `splitFrom` set. If several previous units overlap one segment
  * (a merge), the largest overlap keeps its id and the others are `removed`. Segments with no overlap
- * get new units.
+ * get new units, except that an unmatched previous unit whose `hash` equals an unmatched segment's hash
+ * re-attaches there (same kind; ties by ctxHash, then line distance): one transaction that deletes a
+ * sentence and re-inserts its text elsewhere (CodeMirror moveLine, cut and paste) keeps the id, state,
+ * everAi, facts and history; AI text never comes back as the author's own 'human' text. Units passed in
+ * with `orphaned: true` (for example units `removed` by a recent local pass, kept by the caller so a cut
+ * and a later paste re-attach) re-attach the same way; the others are returned in `orphaned` again.
  * MATCHING (external, in addition): after overlap matching, an unmatched previous unit whose `hash`
  * equals an unmatched segment's hash re-anchors there (ties broken by `ctxHash`); otherwise the best
  * unmatched segment within `fuzzyLineWindow` lines with similarity(textNorm) >= `fuzzyThreshold` AND an
@@ -194,8 +202,9 @@ export interface AssignResult {
  *   AI text was merged into a human sentence by typing, the result is 'ai-edited'.
  * - Splits: the split-off part inherits the original's provenance (state evolved as an edit), gets a
  *   new id, `splitFrom`, a version row with version 0; only the id keeper yields an EditPair.
- * - Local fast path: when `dirty` is given, a unit whose span equals its segment's and contains no
- *   dirty change keeps its hash/textNorm/cites/placeholders without re-normalizing; positional fields
+ * - Local fast path: when `dirty` is given, a unit whose span equals its segment's and no dirty change
+ *   touches (a deletion point on a span edge counts: the sentence's first or last characters were
+ *   deleted) keeps its hash/textNorm/cites/placeholders without re-normalizing; positional fields
  *   (line, ctxHash, sectionId, paragraphId, part, kind) are always recomputed.
  * - An annotation applies to units intersecting `annotatedRange`; without a range, to units named in
  *   `annotation.sentenceIds`, else to every changed dirty unit. A unit named in `sentenceIds` whose

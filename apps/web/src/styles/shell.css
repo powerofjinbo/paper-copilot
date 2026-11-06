@@ -922,3 +922,124 @@ body.is-resizing canvas {
     animation: pc-spin 2s linear infinite !important;
   }
 }
+
+
+/* ---------------------------------------------------------------------------------- */
+/* Keyboard-shortcut overlay                                                            */
+/* ---------------------------------------------------------------------------------- */
+
+.help-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8vh 16px 16px;
+  background: color-mix(in srgb, var(--bg-sunken) 55%, transparent);
+  font-family: var(--font-ui);
+}
+.help-dialog {
+  width: min(760px, 100%);
+  max-height: 84vh;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 16px 20px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-elev);
+  color: var(--ink);
+  box-shadow: 0 16px 40px rgba(20, 18, 14, 0.18);
+}
+.help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.help-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.help-note {
+  margin: 6px 0 12px;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.help-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 6px 24px;
+}
+.help-group h3 {
+  margin: 10px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.help-group dl {
+  margin: 0;
+}
+.help-row {
+  display: flex;
+  gap: 12px;
+  padding: 3px 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.help-row dt {
+  flex: 0 0 46%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 0;
+}
+.help-keys {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 0;
+}
+.help-row dd {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.help-row dd {
+  margin: 0;
+  color: var(--ink-2);
+}
+.help-or {
+  color: var(--ink-3);
+}
+.kbd {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg);
+  font: 12px/18px var(--font-mono);
+  text-align: center;
+  color: var(--ink);
+}
+.status-help {
+  min-width: 22px;
+  justify-content: center;
+  font-weight: 600;
+}
+
+/* The editor column under 600px: thinner gutters, more text */
+.shell-editor {
+  container-type: inline-size;
+}
+@container (max-width: 600px) {
+  .pc-editor .cm-editor .cm-content {
+    padding-right: 8px;
+  }
+  .pc-editor .cm-editor .cm-lineNumbers .cm-gutterElement {
+    min-width: 20px;
+    padding: 0 3px 0 4px;
+  }
+}

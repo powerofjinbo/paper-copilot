@@ -13,7 +13,8 @@
  * pre-warm was accepted, what it wrote (cache_creation_input_tokens) and whether the real request read
  * the cache (cache_read_input_tokens > 0) and how much.
  *
- * The result decides PAPER_PREWARM_MODE (apps/server/src/services/llm/client.ts): the first shape that is
+ * The result decides PAPER_PREWARM_MODE (apps/server/src/services/llm/client.ts; default one-with-format,
+ * the only shape whose cache key matches the structured requests): the first shape that is
  * accepted AND is read by the real request, in the order zero, zero-with-format, one-with-format. If none
  * is read, the fallback of docs/design.md applies (plain-text ghost + stop sequence + a trailing `facts:`
  * line parsed by the gate), because the format would then be part of the cached prefix.
@@ -115,7 +116,7 @@ async function main(): Promise<void> {
     const ok = results.find((r) => r.model === m && r.accepted && r.realOk && (r.realRead ?? 0) > 0);
     lines.push(
       ok
-        ? `- ${MODELS[m].model}: PAPER_PREWARM_MODE=${ok.mode}${ok.mode === 'zero' ? ' (the default)' : ''} — the real structured request reads the pre-warmed cache.`
+        ? `- ${MODELS[m].model}: PAPER_PREWARM_MODE=${ok.mode}${ok.mode === 'one-with-format' ? ' (the default)' : ' (cheaper than the default one-with-format)'} — the real structured request reads the pre-warmed cache.`
         : `- ${MODELS[m].model}: no pre-warm shape was read by the structured request: use the plain-text fallback (stop sequence + trailing facts: line) for pre-warmed routes, or skip pre-warming.`,
     );
   }

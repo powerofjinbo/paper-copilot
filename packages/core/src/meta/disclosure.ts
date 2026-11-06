@@ -9,6 +9,7 @@
  * cites). It does not show that a person re-derived a number, so no text claims that.
  */
 import { AI_ORIGINS, type SentenceState, type SentenceUnit, type SentenceVersion, type Venue, type VersionOrigin } from '../schemas';
+import { GRAMMAR_MAX_EDIT_DISTANCE, grammarOnlyReasons } from '../gate/meaning';
 
 export interface DisclosureStats {
   totalSentences: number;
@@ -58,6 +59,12 @@ export interface DisclosureStats {
   aiVersions?: number;
   /** Languages of the authors' notes that AI sentences were rendered from (e.g. ["zh"]). */
   intentLanguages?: string[];
+  /**
+   * The authors' own sentences rewritten by the tool on their instruction and accepted unchanged (state
+   * ai-drafted, AI versions only ai_rewrite). Not included in `aiDrafted` (they were not drafted from the
+   * outline); undefined in older stats, which then count them in `aiDrafted`.
+   */
+  aiRewrittenOnRequest?: number;
 }
 
 const STATES: readonly SentenceState[] = ['human', 'ai-from-intent', 'ai-drafted', 'ai-edited', 'proposed', 'external', 'placeholder', 'unsupported'];
@@ -73,6 +80,23 @@ const AI_STATES = new Set<SentenceState>(['ai-drafted', 'ai-edited', 'ai-from-in
  * `imported` counts imported sentences no AI touched; `humanWritten` counts sentences in state human that
  * were neither imported nor AI-touched; `external` counts sentences in state external no AI touched.
  */
+/**
+ * Is a grammar_fix version a minimal language fix of the version it was applied to? Needs that parent
+ * version's text (no parent in the log: not provable, so no) and an edit distance within the limit.
+ */
+function minimalGrammarFix(v: SentenceVersion, all: SentenceVersion[]): boolean {
+  if (typeof v.editDistance === 'number' && Number.isFinite(v.editDistance) && v.editDistance > GRAMMAR_MAX_EDIT_DISTANCE) return false;
+  const parent =
+    (v.parentVersion !== null && v.parentVersion !== undefined ? all.find((p) => p.version === v.parentVersion && p !== v) : undefined) ??
+    [...all].filter((p) => p.version < v.version).sort((a, b) => b.version - a.version)[0];
+  if (!parent || typeof parent.text !== 'string' || typeof v.text !== 'string') return false;
+  try {
+    return grammarOnlyReasons(parent.text, v.text).length === 0;
+  } catch {
+    return false;
+  }
+}
+
 export function computeDisclosureStats(units: SentenceUnit[], versions: SentenceVersion[]): DisclosureStats {
   const live = (units ?? []).filter((u) => !u.orphaned);
   const bySentence = new Map<string, SentenceVersion[]>();
@@ -101,7 +125,7 @@ export function computeDisclosureStats(units: SentenceUnit[], versions: Sentence
 
   let everAi = 0, aiDrafted = 0, aiEdited = 0, aiFromIntent = 0, grammarFixed = 0, imported = 0, humanWritten = 0, external = 0;
   let grammarOnly = 0, rewritten = 0, changedExt = 0, pending = 0, aiPlaceholders = 0, aiWithFacts = 0, aiWithCites = 0, aiOpen = 0, openPlaceholders = 0;
-  let editSum = 0, editN = 0;
+  let editSum = 0, editN = 0, rewrittenOnRequest = 0;
   for (const u of live) {
     byState[u.state] = (byState[u.state] ?? 0) + 1;
     const vs = bySentence.get(u.id) ?? [];
@@ -111,7 +135,11 @@ export function computeDisclosureStats(units: SentenceUnit[], versions: Sentence
     if (gfix) grammarFixed++;
     if (u.state === 'placeholder' || u.placeholders.length > 0) openPlaceholders++;
     if (u.model) models.add(u.model);
-    if (u.state === 'ai-drafted') aiDrafted++;
+    if (u.state === 'ai-drafted') {
+      const rewriteOnly = aiOrigins.size > 0 && [...aiOrigins].every((o) => o === 'ai_rewrite');
+      if (rewriteOnly) rewrittenOnRequest++;
+      else aiDrafted++;
+    }
     if (u.state === 'ai-from-intent') aiFromIntent++;
     if (u.state === 'ai-edited') {
       aiEdited++;
@@ -127,8 +155,11 @@ export function computeDisclosureStats(units: SentenceUnit[], versions: Sentence
       continue;
     }
     everAi++;
-    // Only a grammar fix, known from the versions (a flag without versions is not proof of "only").
-    const onlyGrammar = aiOrigins.size > 0 && [...aiOrigins].every((o) => o === 'grammar_fix');
+    // Only a grammar fix, known from the versions (a flag without versions is not proof of "only"), and
+    // each grammar_fix version really is one: no negation or direction change, a few content words at
+    // most, against the text it was applied to. A "grammar fix" that changed the claim is an AI rewrite.
+    const allGrammar = aiOrigins.size > 0 && [...aiOrigins].every((o) => o === 'grammar_fix');
+    const onlyGrammar = allGrammar && vs.filter((v) => v.origin === 'grammar_fix').every((v) => minimalGrammarFix(v, vs));
     let reviewed = false;
     switch (u.state) {
       case 'proposed':
@@ -141,6 +172,7 @@ export function computeDisclosureStats(units: SentenceUnit[], versions: Sentence
       case 'human':
         reviewed = true;
         if (onlyGrammar) grammarOnly++;
+        else if (allGrammar) rewrittenOnRequest++; // the author's sentence, substantively rewritten by the tool on request
         else rewritten++;
         break;
       case 'external':
@@ -182,6 +214,7 @@ export function computeDisclosureStats(units: SentenceUnit[], versions: Sentence
     openPlaceholders,
     aiVersions,
     intentLanguages: [...intentLangs].sort(),
+    aiRewrittenOnRequest: rewrittenOnRequest,
   };
 }
 
@@ -290,6 +323,8 @@ function assistance(f: Facts): Piece[] {
   const s = f.s;
   const parts: Piece[][] = [];
   if (s.aiDrafted > 0) parts.push([T(`${s.aiDrafted} ${sent(s.aiDrafted)} ${was(s.aiDrafted)} drafted by the tool from the authors' outline and result files and accepted without change`)]);
+  const onRequest = s.aiRewrittenOnRequest ?? 0;
+  if (onRequest > 0) parts.push([T(`${onRequest} of the authors' ${sent(onRequest)} ${was(onRequest)} rewritten by the tool on the authors' instructions and accepted`)]);
   if (s.aiEdited > 0) {
     const p: Piece[] = [T(`${s.aiEdited} ${sent(s.aiEdited)} ${was(s.aiEdited)} drafted by the tool and then edited by the authors`)];
     if (s.meanEditDistance !== null) {
@@ -400,6 +435,7 @@ function purpose(f: Facts): string {
   const s = f.s;
   const r: string[] = [];
   if (s.aiDrafted + s.aiEdited + f.rewritten + f.changedExt + f.pending + f.aiPlaceholders > 0) r.push("draft sentences from the authors' outline and analysis results");
+  if ((s.aiRewrittenOnRequest ?? 0) > 0) r.push("rewrite the authors' sentences on their instructions");
   if (s.aiFromIntent > 0) r.push("render the authors' notes into English");
   if (f.grammarOnly > 0) r.push('correct grammar and language');
   return r.length > 0 ? listJoin(r) : 'assist with the text';
@@ -459,6 +495,7 @@ export function renderDisclosure(venue: Venue, stats: DisclosureStats, opts: { t
       }
       const counts: string[] = [];
       if (stats.aiDrafted + stats.aiEdited > 0) counts.push(`${stats.aiDrafted + stats.aiEdited} drafted with AI`);
+      if ((stats.aiRewrittenOnRequest ?? 0) > 0) counts.push(`${stats.aiRewrittenOnRequest} rewritten with AI on the authors' instructions`);
       if (stats.aiFromIntent > 0) counts.push(`${stats.aiFromIntent} rendered from the authors' notes`);
       if (f.rewritten > 0) counts.push(`${f.rewritten} drafted with AI and rewritten by the authors`);
       if (f.changedExt > 0) counts.push(`${f.changedExt} drafted with AI and revised by co-authors`);

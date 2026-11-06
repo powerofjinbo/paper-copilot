@@ -4,8 +4,10 @@
  * unsupported 60% ink with a red wavy underline, ghost 45% gray, intent lines teal, placeholders orange.
  */
 .pc-editor {
-  --pc-editor-font: var(--font-mono);
-  --pc-editor-size: 14.5px;
+  /* prose in a text font; LaTeX commands, braces and math in --font-mono (theme.ts texHighlight) */
+  --pc-editor-font: var(--font-prose);
+  --pc-editor-size: 16px;
+  --pc-code-size: 0.86em;
   --pc-tok-cmd: var(--ink-3);
   --pc-tok-arg: color-mix(in srgb, var(--accent) 72%, var(--ink-2));
   --pc-tok-math: var(--ink-2);
@@ -26,6 +28,11 @@
   background: var(--bg);
   color: var(--ink);
 }
+.pc-editor[data-font='mono'] {
+  --pc-editor-font: var(--font-mono);
+  --pc-editor-size: 14.5px;
+  --pc-code-size: 1em;
+}
 :root[data-theme='dark'] .pc-editor {
   --pc-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
 }
@@ -45,7 +52,7 @@
   inset: 0;
 }
 .pc-editor[data-status='loading'] .pc-editor-host::after {
-  content: 'Opening the document…';
+  content: attr(data-loading);
   position: absolute;
   top: 40px;
   left: 0;
@@ -331,7 +338,8 @@
 
 .pc-ghost {
   color: var(--ghost-ink);
-  font-style: normal;
+  /* told apart from real text by more than its lighter colour */
+  font-style: italic;
   pointer-events: none;
 }
 .pc-ghost-fact {
@@ -349,6 +357,16 @@
   font: 11px/18px var(--font-ui);
   color: var(--ink-3);
   white-space: nowrap;
+}
+.pc-ghost-hint {
+  margin-left: 8px;
+  padding: 0 7px;
+  border-radius: 9px;
+  border: 1px dashed var(--line);
+  font: normal 11px/18px var(--font-ui);
+  color: var(--ink-3);
+  white-space: nowrap;
+  pointer-events: none;
 }
 .pc-ghost-note-error {
   color: var(--prov-unsupported);

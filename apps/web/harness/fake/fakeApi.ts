@@ -175,4 +175,5 @@ export class FakeApi implements ApiClient {
   setMemo = () => Promise.resolve();
   addCorpus = () => Promise.resolve([]);
   cost = () => unavailable('cost');
+  dismissLint = () => unavailable('dismissLint');
 }

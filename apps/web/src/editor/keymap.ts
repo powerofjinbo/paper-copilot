@@ -3,7 +3,12 @@
  * Alt-Enter, Tab/Enter/1-3/Esc while a rendering is shown), review (Alt-ArrowDown/Up, Mod-Enter on a
  * proposed sentence), the sentence card (Ctrl-., Mod-I, Mod-G) and housekeeping (Mod-S, Mod-Alt-O).
  * Every command returns false when it does not apply, so the default bindings (indent, find next...)
- * keep working.
+ * keep working, with two deliberate exceptions:
+ *  - Mod-Enter is always consumed: CodeMirror's default (insertBlankLine) would add a LaTeX paragraph
+ *    break, which nothing on screen shows; on a sentence that is not proposed a short note says why
+ *    nothing happened;
+ *  - Alt-ArrowDown/Up navigate the review queue; with nothing to review they fall through to the standard
+ *    "move line", except right after a review step (an impatient extra press must not move a sentence).
  */
 import { Prec, type Extension } from '@codemirror/state';
 import { EditorView, keymap, type Command } from '@codemirror/view';
@@ -12,6 +17,7 @@ import { cardField, closeCardEffect } from './card/cardState';
 import { editorEnv } from './env';
 import { ghostEvent, ghostField, ghostModeAt, ghostNoteEffect, visibleGhost } from './ghost/ghostField';
 import { intentAcceptSpec, intentLineAt, intentRenderEffect, intentRenderField } from './intent';
+import { currentLang, edText } from './i18n';
 import { finishRewriteSpec, rewriteField } from './rewrite';
 import { unitAtPos, unitBefore, unitsField } from './units';
 
@@ -89,7 +95,7 @@ const requestGhost: Command = (view) => {
   view.dispatch({ effects: ghostEvent.of({ type: 'manual', pos: head }) });
   const after = view.state.field(ghostField).machine;
   if (after.state.kind === 'idle' && ghostModeAt(view.state, head) === 'questions-only')
-    view.dispatch({ effects: ghostNoteEffect.of({ pos: head, text: 'questions-only section: see the Questions panel', kind: 'info' }) });
+    view.dispatch({ effects: ghostNoteEffect.of({ pos: head, text: edText(currentLang(), 'questionsOnly'), kind: 'info' }) });
   return true;
 };
 
@@ -132,13 +138,18 @@ const escape: Command = (view) => {
 const modEnter: Command = (view) => {
   if (intentReady(view)) return acceptIntent(view);
   const head = view.state.selection.main.head;
-  if (intentLineAt(view.state, head)) return env(view)?.ops.renderIntent(view, 1) ?? false;
+  if (intentLineAt(view.state, head)) {
+    env(view)?.ops.renderIntent(view, 1);
+    return true;
+  }
   const u = unitAtCursor(view);
   if (u && (u.state === 'proposed' || u.state === 'unsupported')) {
     void env(view)?.ops.acceptUnit(view, u.id);
     return true;
   }
-  return false;
+  // never fall through to insertBlankLine (a paragraph break in the compiled paper)
+  if (u) view.dispatch({ effects: ghostNoteEffect.of({ pos: Math.min(u.end, view.state.doc.length), text: edText(currentLang(), 'alreadyAccepted'), kind: 'info' }) });
+  return true;
 };
 
 const altEnter: Command = (view) => {
@@ -162,10 +173,8 @@ const openCard =
 
 const review =
   (dir: 1 | -1): Command =>
-  (view) => {
-    env(view)?.ops.reviewStep(view, dir);
-    return true;
-  };
+  (view) =>
+    env(view)?.ops.reviewStep(view, dir) ?? false;
 
 export function paperKeymap(): Extension {
   return Prec.highest(
@@ -180,11 +189,12 @@ export function paperKeymap(): Extension {
       { key: 'Mod-ArrowRight', run: acceptGhostWord },
       { key: 'Escape', run: escape },
       { key: 'Ctrl-Space', run: requestGhost, preventDefault: true },
+      { key: 'Ctrl-Shift-Space', run: requestGhost, preventDefault: true },
       { key: 'Alt-/', run: requestGhost },
       { key: 'Mod-Enter', run: modEnter },
       { key: 'Alt-Enter', run: altEnter },
-      { key: 'Alt-ArrowDown', run: review(1), preventDefault: true },
-      { key: 'Alt-ArrowUp', run: review(-1), preventDefault: true },
+      { key: 'Alt-ArrowDown', run: review(1) },
+      { key: 'Alt-ArrowUp', run: review(-1) },
       { key: 'Ctrl-.', run: openCard('main') },
       { key: 'Mod-.', run: openCard('main') },
       { key: 'Mod-i', run: openCard('instruct') },

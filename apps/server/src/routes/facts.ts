@@ -66,6 +66,14 @@ export function registerFactsRoutes(app: FastifyInstance, ctx: Ctx): void {
     reply.header('x-total-count', String(all.length));
     const offset = q.offset ?? 0;
     const facts = q.limit !== undefined ? all.slice(offset, offset + q.limit) : all.slice(offset);
+    if (!falsy(q.unresolved)) {
+      // retro-grounding covers the paper even before the editor opened it (a fresh page load races doc.open)
+      try {
+        if (!ctx.docs.get(ctx.config.mainFile)) await ctx.docs.open(ctx.config.mainFile);
+      } catch {
+        /* no document service or an unreadable main file: list what is open */
+      }
+    }
     const unresolved = falsy(q.unresolved) ? [] : ctx.facts.unresolved();
     const res: FactsResponse = { facts, unresolved };
     return res;

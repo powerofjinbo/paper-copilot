@@ -10,7 +10,7 @@ describe('PRICES', () => {
       longThreshold: 100_000,
       long: { input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite5m: 0.625, cacheWrite1h: 1.0 },
     });
-    expect(PRICES['claude-sonnet-5-5']).toEqual({ input: 2, output: 10, cacheRead: 0.1, cacheWrite5m: 2.5, cacheWrite1h: 4 });
+    expect(PRICES['claude-sonnet-5-5']).toEqual({ input: 2, output: 10, cacheRead: 0.2, cacheWrite5m: 2.5, cacheWrite1h: 4 });
     expect(PRICES['claude-opus-5-5']).toEqual({ input: 4, output: 20, cacheRead: 0.2, cacheWrite5m: 5, cacheWrite1h: 8 });
     expect(PRICES['claude-fable-5-1']).toEqual({ input: 10, output: 50, cacheRead: 0.25, cacheWrite5m: 12.5, cacheWrite1h: 20 });
   });
@@ -62,8 +62,8 @@ describe('costOf', () => {
   });
 
   it('prices Sonnet, Opus and Fable (no long tier)', () => {
-    // Sonnet: 10,000 x 2 + 1,000 x 10 + 50,000 x 0.10 + 5,000 x 4 (1h) = 20,000 + 10,000 + 5,000 + 20,000 = 55,000 -> $0.055.
-    expect(costOf('claude-sonnet-5-5', u({ input_tokens: 10_000, output_tokens: 1000, cache_read_input_tokens: 50_000, cache_creation: { ephemeral_1h_input_tokens: 5000 } }))).toBeCloseTo(0.055, 12);
+    // Sonnet: 10,000 x 2 + 1,000 x 10 + 50,000 x 0.20 + 5,000 x 4 (1h) = 20,000 + 10,000 + 10,000 + 20,000 = 60,000 -> $0.06.
+    expect(costOf('claude-sonnet-5-5', u({ input_tokens: 10_000, output_tokens: 1000, cache_read_input_tokens: 50_000, cache_creation: { ephemeral_1h_input_tokens: 5000 } }))).toBeCloseTo(0.06, 12);
     // Sonnet has no long tier: 200,000 x 2 = 400,000 -> $0.40.
     expect(costOf('claude-sonnet-5-5', u({ input_tokens: 200_000 }))).toBeCloseTo(0.4, 12);
     // Opus: 1,000 x 4 + 1,000 x 20 = 24,000 -> $0.024.

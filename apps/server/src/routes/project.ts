@@ -7,6 +7,7 @@
 import type { FastifyInstance } from 'fastify';
 import { ROUTES, type ProjectInfo } from '@paper-copilot/core';
 import { z } from 'zod';
+import { publicConfig } from '../config';
 import { HttpError, type Ctx } from '../contracts';
 import { manuscriptUnits } from '../services/disclosure';
 
@@ -30,7 +31,7 @@ export async function projectInfo(ctx: Ctx): Promise<ProjectInfo> {
   const skill = soft(() => ctx.llm.skill(), null);
   const units = soft(() => manuscriptUnits(ctx), []);
   return {
-    config: ctx.config,
+    config: publicConfig(ctx.config),
     files,
     fakeLlm: ctx.fakeLlm,
     skill: { found: !!skill, dir: ctx.config.skillDir, version: skill?.version ?? null, references: skill ? Object.keys(skill.references).sort() : [] },

@@ -20,6 +20,7 @@
  * This module imports SDK *types* only; the SDK runtime is loaded lazily by runner.ts in real mode.
  */
 import type { HookCallback, HookCallbackMatcher, HookEvent, McpServerConfig, Options } from '@anthropic-ai/claude-agent-sdk';
+import { resolveBaseUrl } from '../llm/apiKey';
 
 export const SKILL_NAME = 'hep-paper-writing';
 
@@ -40,6 +41,45 @@ export const ISOLATION_ENV: Readonly<Record<string, string>> = {
   /** Identifies the app in the User-Agent header. */
   CLAUDE_AGENT_SDK_CLIENT_APP: 'paper-copilot',
 };
+
+/**
+ * Variables the Claude Code process may inherit: what a process needs to run (paths, locale, temp
+ * dirs, Windows system folders) and to reach the network through the user's proxy / CA bundle.
+ * Everything else, in particular ANTHROPIC_* endpoints and credentials another tool exported,
+ * CLAUDE_CODE_* / CLAUDECODE of an outer Claude Code session and cloud-provider switches, is dropped:
+ * the agents use exactly the key and endpoint the direct client uses (`auth`).
+ */
+const INHERITED_ENV = new Set([
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LANGUAGE', 'TZ', 'TMPDIR', 'TMP', 'TEMP', 'TERM',
+  'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy',
+  'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+  'SystemRoot', 'SYSTEMROOT', 'windir', 'COMSPEC', 'PATHEXT', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH',
+  'ProgramData', 'ProgramFiles', 'ProgramFiles(x86)', 'PROGRAMFILES', 'ALLUSERSPROFILE', 'PUBLIC', 'COMPUTERNAME',
+]);
+const INHERITED_PREFIXES = ['LC_', 'XDG_'];
+
+/** The credential and endpoint of every agent run: the same as the direct client's (apiKey.ts). */
+export interface AgentAuth {
+  apiKey: string;
+  /** resolveBaseUrl(): PAPER_ANTHROPIC_BASE_URL or the public API, never an inherited ANTHROPIC_BASE_URL. */
+  baseUrl: string;
+}
+
+/**
+ * The Claude Code process environment: an allowlist of `baseEnv`, then the app's own key and base URL,
+ * then ISOLATION_ENV. Without `auth` no key is set (the service refuses to start real agents then) and
+ * the base URL is still the app's, so an inherited endpoint is never used.
+ */
+export function buildAgentEnv(baseEnv: Record<string, string | undefined>, auth: AgentAuth | null, defaultBaseUrl: string): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(baseEnv)) {
+    if (v === undefined) continue;
+    if (INHERITED_ENV.has(k) || INHERITED_PREFIXES.some((p) => k.startsWith(p))) env[k] = v;
+  }
+  env.ANTHROPIC_BASE_URL = auth?.baseUrl ?? defaultBaseUrl;
+  if (auth) env.ANTHROPIC_API_KEY = auth.apiKey;
+  return { ...env, ...ISOLATION_ENV };
+}
 
 /** The agent roles of this service. */
 export type AgentRole = 'repo-reader' | 'outliner' | 'drafter' | 'referee' | 'memo';
@@ -85,8 +125,10 @@ export interface QueryOptionsInput {
   /** Keep the transcript on disk (needed to resume); one-shot jobs do not persist. */
   persistSession: boolean;
   abortController: AbortController;
-  /** Environment the Claude Code process inherits; ISOLATION_ENV is applied on top. */
+  /** Environment the Claude Code process inherits from (allowlisted, see buildAgentEnv). */
   baseEnv: Record<string, string | undefined>;
+  /** The app's key and endpoint (required for a real run; the service refuses without a key). */
+  auth?: AgentAuth | null;
   /** Receives the CLI's stderr (logged at debug level). */
   stderr?: (data: string) => void;
 }
@@ -127,7 +169,7 @@ export function buildQueryOptions(i: QueryOptionsInput): Options {
     maxBudgetUsd: i.maxBudgetUsd,
     maxTurns: i.maxTurns,
     effort: ROLE_LIMITS[i.role].effort,
-    env: { ...i.baseEnv, ...ISOLATION_ENV },
+    env: buildAgentEnv(i.baseEnv, i.auth ?? null, resolveBaseUrl(i.baseEnv)),
     abortController: i.abortController,
     includePartialMessages: false,
     persistSession: i.persistSession,

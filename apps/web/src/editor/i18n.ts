@@ -6,7 +6,7 @@
  */
 import type { SentenceState, VersionOrigin } from '@paper-copilot/core';
 import { useShell, type Lang } from '../state/extra';
-import { ORIGIN_LABEL, STATE_LABEL, STATE_SHORT } from './labels';
+import { ALT_KEY, GHOST_KEY, MOD_KEY, ORIGIN_LABEL, STATE_LABEL, STATE_SHORT } from './labels';
 
 const STATE_LABEL_ZH: Record<SentenceState, string> = {
   human: '你写的',
@@ -107,17 +107,19 @@ const EN = {
   insertIt: 'Insert it',
   keep: 'Keep',
   dismiss: 'Dismiss',
+  dismissLint: 'Hide this hint for this sentence (kept hidden after re-lint)',
   offline: 'offline: your edits are kept and sent on reconnect',
   toReview: '{n} to review',
   legend: 'Ownership heatmap legend',
   heatmap: 'Ownership',
   heatmapLabel: 'Ownership heatmap: tint sentences by who wrote them',
-  heatmapTitle: 'Ownership heatmap (Ctrl/Cmd+Alt+O)',
+  heatmapTitle: 'Ownership heatmap ({mod}+{alt}+O)',
   justNow: 'just now',
   minAgo: '{n} min ago',
   hAgo: '{n} h ago',
   dAgo: '{n} d ago',
   notApplied: 'The sentence changed or disappeared; the proposal was not applied.',
+  noChange: 'The proposal is identical to your sentence; nothing was changed (it stays yours).',
   irTitle: 'Intent note: excluded from compile and lint. {mod}+Enter renders it into an English sentence.',
   irHint: '{mod}+Enter → English · Alt+Enter → 3 options',
   irGroup: 'English rendering of your note',
@@ -132,6 +134,22 @@ const EN = {
   rwTyping: 'Type your version; the struck words go when you type the final period',
   rwIntent: 'intent',
   rwEsc: 'Esc to finish',
+  mono: 'Mono',
+  monoTitle: 'Set the whole source in a monospace font (prose is set in a text font by default)',
+  noReview: 'nothing left to review',
+  noGrounded: 'no grounded suggestion',
+  ghostTimeout: 'no answer from the ghost service',
+  ghostUnavailable: 'ghost unavailable: {message}',
+  questionsOnly: 'questions-only section: see the Questions panel',
+  ghostPending: 'Ghost suggestion requested…',
+  ghostHint: 'Tab accept · {mod}+→ one word · Esc dismiss',
+  opening: 'Opening the document…',
+  alreadyAccepted: 'already accepted: {mod}+Enter accepts proposed sentences only',
+  syncMerged: '{file}: merged a change from the server (pull, disk edit or another tab) with your unsent typing.',
+  syncConflict: '{file}: your edit and a change from the server (pull, disk edit or another tab) touched the same text at line {lines}. Both texts were kept; please check.',
+  syncRestored: '{file}: the server restarted without your latest unsaved edits; they were re-sent from the editor.',
+  syncRestoredConflict: '{file}: the server restarted, and line {lines} changed both on disk and in the editor. The editor version was kept; compare it with the disk / Overleaf version.',
+  syncLegacy: '{file}: re-synced with the server by sending the editor text.',
 } as const;
 
 export type EdKey = keyof typeof EN;
@@ -200,17 +218,19 @@ const ZH: Record<EdKey, string> = {
   insertIt: '插入',
   keep: '保留',
   dismiss: '忽略',
+  dismissLint: '隐藏这条提示（重新检查后仍保持隐藏）',
   offline: '离线：你的修改已保留，重新连接后发送',
   toReview: '{n} 句待审阅',
   legend: '归属热图图例',
   heatmap: '归属',
   heatmapLabel: '归属热图：按作者给句子着色',
-  heatmapTitle: '归属热图 (Ctrl/Cmd+Alt+O)',
+  heatmapTitle: '归属热图 ({mod}+{alt}+O)',
   justNow: '刚刚',
   minAgo: '{n} 分钟前',
   hAgo: '{n} 小时前',
   dAgo: '{n} 天前',
   notApplied: '句子已改变或已不存在，提议没有应用。',
+  noChange: '提议与原句完全相同，未做任何修改（句子仍归你）。',
   irTitle: '意图笔记：不参与编译和文风检查。{mod}+Enter 把它写成一句英文。',
   irHint: '{mod}+Enter → 英文 · Alt+Enter → 3 个选项',
   irGroup: '你的笔记的英文版本',
@@ -225,6 +245,22 @@ const ZH: Record<EdKey, string> = {
   rwTyping: '输入你的版本；输入句末句号后，划掉的旧词会删除',
   rwIntent: '意图',
   rwEsc: 'Esc 结束',
+  mono: '等宽',
+  monoTitle: '整个源文件使用等宽字体（默认正文使用文本字体）',
+  noReview: '没有待审阅的句子了',
+  noGrounded: '没有有依据的补全',
+  ghostTimeout: '补全服务没有响应',
+  ghostUnavailable: '补全不可用：{message}',
+  questionsOnly: '此节只提问题：请看“问题”面板',
+  ghostPending: '已请求补全…',
+  ghostHint: 'Tab 接受 · {mod}+→ 接受一个词 · Esc 放弃',
+  opening: '正在打开文档…',
+  alreadyAccepted: '已接受：{mod}+Enter 只接受待审阅的句子',
+  syncMerged: '{file}：服务器上的改动（拉取、磁盘修改或另一个标签页）已与你尚未发送的输入合并。',
+  syncConflict: '{file}：你的修改和服务器上的改动（拉取、磁盘修改或另一个标签页）改了同一处文字（第 {lines} 行）。两边的文字都保留了，请检查。',
+  syncRestored: '{file}：服务器重启后丢失了你最近未保存的修改；已从编辑器重新发送。',
+  syncRestoredConflict: '{file}：服务器重启了，第 {lines} 行在磁盘上和编辑器里都被改过。保留了编辑器的版本；请与磁盘 / Overleaf 上的版本对照。',
+  syncLegacy: '{file}：已用编辑器中的文字与服务器重新同步。',
 };
 
 /** The UI language right now (outside React, e.g. CodeMirror gutter markers). */
@@ -238,7 +274,9 @@ export function currentLang(): Lang {
 
 export function edText(lang: Lang, key: EdKey, vars?: Record<string, string | number>): string {
   let s: string = lang === 'zh' ? ZH[key] : EN[key];
-  if (vars) for (const [k, v] of Object.entries(vars)) s = s.split(`{${k}}`).join(String(v));
+  // platform key names ({mod}: ⌘ / Ctrl, {alt}: ⌥ / Alt) unless the caller passes its own
+  const all: Record<string, string | number> = { mod: MOD_KEY, alt: ALT_KEY, ghostKey: GHOST_KEY, ...vars };
+  for (const [k, v] of Object.entries(all)) s = s.split(`{${k}}`).join(String(v));
   return s;
 }
 

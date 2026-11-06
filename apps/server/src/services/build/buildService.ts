@@ -171,7 +171,10 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
         error_line: '254',
         half_error_line: '238',
       };
-      const args = ['-pdf', '-synctex=1', '-interaction=nonstopmode', '-file-line-error', `-outdir=${outDir}`, mainRel()];
+      // A file name starting with "-" would be parsed by latexmk as an option (-pdflatex=<cmd> runs a
+      // command): such a name is passed as "./<name>", which no option parser takes for an option.
+      const mainArg = mainRel().startsWith('-') ? `./${mainRel()}` : mainRel();
+      const args = ['-pdf', '-synctex=1', '-interaction=nonstopmode', '-file-line-error', `-outdir=${outDir}`, mainArg];
       const r = await runProcess(latexmkBin, args, { cwd: srcDir, env, timeoutMs, maxOutput: 2_000_000 });
       const output = `${r.stdout}${r.stderr ? '\n' + r.stderr : ''}`;
       const tail = tailBytes(output, LOG_TAIL_BYTES);

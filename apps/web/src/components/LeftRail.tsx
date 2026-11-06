@@ -47,7 +47,8 @@ export function LeftRail() {
   const lang = useShell((s) => s.lang);
   const active = useWorkspace((s) => s.leftTab);
   const setLeftTab = useWorkspace((s) => s.setLeftTab);
-  const collapsed = useShell((s) => s.leftCollapsed);
+  // collapsed by the user, or hidden for now to leave the editor a readable column
+  const collapsed = useShell((s) => s.leftCollapsed || s.fitHidden.left);
   const setCollapsed = useShell((s) => s.setLeftCollapsed);
   const badges = useBadges();
   const refs = useRef<Array<HTMLButtonElement | null>>([]);

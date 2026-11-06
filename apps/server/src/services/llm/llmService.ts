@@ -16,6 +16,7 @@
  */
 import {
   AlternativesOutput,
+  meaningChange,
   CostMeter,
   emptyOutline,
   GHOST_MAX_WORDS,
@@ -55,6 +56,7 @@ import {
   type PlanStep,
   type PromptBlock,
   type Proposal,
+  type SentenceUnit,
   type ServerMessage,
   type SkillBundle,
   type TaskKind,
@@ -486,7 +488,8 @@ export function createLlmService(ctx: Ctx, opts: LlmServiceOptions = {}): LlmSer
       .filter((f): f is Fact => !!f)
       .map((f) => ({ id: f.id, rendering: proseRendering(f) }))
       .filter((f) => f.rendering.length > 0);
-    const hint: FakeHint = { task: 'ghost', prefix, step: nextStep ? { id: nextStep.id, intent: nextStep.intent, factIds: nextStep.factIds } : null, facts: hintFacts };
+    const refs = safe('docs.labels', () => ctx.docs.labels(), [] as string[]).filter((l) => /^(fig|tab):/i.test(l));
+    const hint: FakeHint = { task: 'ghost', prefix, step: nextStep ? { id: nextStep.id, intent: nextStep.intent, factIds: nextStep.factIds } : null, facts: hintFacts, refs };
     const baseGate = gateContext('ghost', { maxWords: GHOST_MAX_WORDS, intentText: [intentNote ?? '', prefix].filter(Boolean).join('\n') || null });
     const stepIds = new Set((plan?.remaining ?? []).map((s) => s.id));
     const anchor: GhostAnchor = { file: msg.file, before: doc.text.slice(Math.max(0, cursor - 60), cursor), cursor };
@@ -510,6 +513,7 @@ export function createLlmService(ctx: Ctx, opts: LlmServiceOptions = {}): LlmSer
       };
       const res = await getClient().complete(req);
       recordResponse(res, 'ghost', 'ghost');
+      noteRouteUse(req);
       if (!live()) return;
       const out = parseGhost(res);
       if (!out) {
@@ -649,6 +653,7 @@ export function createLlmService(ctx: Ctx, opts: LlmServiceOptions = {}): LlmSer
       log.warn(`llm ${task} failed`, describeError(e));
       throw new HttpError(502, `The AI request failed: ${describeError(e)}`);
     }
+    noteRouteUse(req);
     recordResponse(res, 'actions', task);
     if (res.stopReason === 'refusal') throw new HttpError(422, 'The model declined this request.');
     const p = schema.safeParse(res.json);
@@ -693,13 +698,22 @@ export function createLlmService(ctx: Ctx, opts: LlmServiceOptions = {}): LlmSer
     // Never offer an ungrounded number or citation as clean text: a blocked proposal carries the gate's
     // visible placeholders ([fact?: ...], [ref]) and its issues.
     const text = p.gate.ok ? p.text : p.gate.repaired;
+    // The drift checklist never relies on the model's word alone: a deterministic check flags a flipped
+    // direction or an added/removed negation even when the model reports "direction kept".
+    let drift = p.drift;
+    if (p.original && p.origin !== 'ai_intent') {
+      const mc = safe('meaningChange', () => meaningChange(p.original, text), null as ReturnType<typeof meaningChange> | null);
+      if (mc && (mc.direction || mc.negation)) {
+        drift = { actor: drift?.actor ?? false, scope: drift?.scope ?? false, direction: true, condition: drift?.condition ?? false };
+      }
+    }
     return {
       proposalId: shortId('p'),
       sentenceId: p.sentenceId,
       text,
       diff: wordDiff(p.original, text),
       notes: p.notes,
-      drift: p.drift,
+      drift,
       issues: toWire(p.gate.issues, text === p.text),
       factIds: p.gate.factIds,
       citeKeys: p.gate.citeKeys,
@@ -752,7 +766,11 @@ export function createLlmService(ctx: Ctx, opts: LlmServiceOptions = {}): LlmSer
     const text = cleanOut(out.text);
     const gate = runGate(text, gateContext('grammar', { original: u.text, claimedFactIds: u.factIds }));
     const notes = out.changes.length > 0 ? out.changes.join('\n') : notesLanguage() === 'zh' ? '没有语法问题。' : 'No grammar problems found.';
-    return makeProposal({ sentenceId, original: u.text, text, notes, drift: null, gate, origin: 'grammar_fix', model: res.model, promptHash: promptHash(system, tail) });
+    // A "fix" that changes the meaning (negation, direction word, swapped content words) is not a language
+    // fix: offer it as an AI rewrite, so applying it gives an AI state (ai-drafted, everAi) and an
+    // ai_rewrite version instead of keeping the author's state under a grammar_fix label.
+    const meaningChanged = gate.issues.some((i) => i.code === 'meaning_changed' && i.severity === 'block');
+    return makeProposal({ sentenceId, original: u.text, text, notes, drift: null, gate, origin: meaningChanged ? 'ai_rewrite' : 'grammar_fix', model: res.model, promptHash: promptHash(system, tail) });
   }
 
   async function renderIntent(req: z.infer<typeof IntentRenderRequest>): Promise<Proposal[]> {
@@ -888,21 +906,106 @@ export function createLlmService(ctx: Ctx, opts: LlmServiceOptions = {}): LlmSer
 
   /* ---------------------------------- pre-warm ------------------------------------ */
 
-  async function prewarm(): Promise<void> {
+  /*
+   * Block A carries the references the section's template routes (referencesFor), so a warm-up only
+   * helps requests whose section has the same reference set. The template warmed is the one whose
+   * reference set covers most sentences of the open document (outline templates by section).
+   */
+  function dominantTemplate(task: TaskKind, file?: string): string | null {
+    const outline = safe('outline', readOutline, emptyOutline());
+    const templateOf = new Map(outline.sections.map((s) => [s.id, s.template ?? null] as const));
+    const units = safe('docs.units', () => (file ? (ctx.docs.get(file)?.units ?? []) : ctx.docs.allUnits()), [] as SentenceUnit[]);
+    const counts = new Map<string, { n: number; template: string | null }>();
+    for (const u of units) {
+      const template = templateOf.get(u.sectionId) ?? null;
+      const key = safe('referencesFor', () => referencesFor(task, template).join('|'), '');
+      const c = counts.get(key);
+      if (c) c.n++;
+      else counts.set(key, { n: 1, template });
+    }
+    let best: { n: number; template: string | null } | null = null;
+    for (const c of counts.values()) if (!best || c.n > best.n) best = c;
+    return best?.template ?? null;
+  }
+
+  /** The cache-relevant part of a real request: blocks A + B and the route's settings (block C varies). */
+  const warmRequestOf = (req: LlmRequest): LlmRequest => ({
+    route: req.route,
+    task: req.task,
+    model: req.model,
+    system: req.system.slice(0, 2),
+    messages: [{ role: 'user', content: 'warmup' }],
+    maxTokens: 0,
+    thinking: req.thinking,
+    effort: req.effort,
+    schema: req.schema,
+  });
+
+  async function sendWarm(w: LlmRequest, label: string): Promise<void> {
+    const c = getClient();
+    if (c.fake) return;
+    const usage = await c.prewarm(w);
+    if (usage) record(w.model, usage, `${label}:${w.route}`, { task: w.task });
+  }
+
+  /*
+   * Keep-alive (docs/design.md, section 5): block B has the 5-minute TTL, so while the author is active
+   * the prefix of each route is refreshed about 4.5 minutes after the last request that used it (a real
+   * request, the pre-warm or a refresh). The server has no window-focus signal, so "active" is a client
+   * message within KEEPALIVE_IDLE_MS; after that the refreshes stop until the author is back.
+   */
+  const KEEPALIVE_MS = 270_000;
+  const KEEPALIVE_IDLE_MS = 20 * 60_000;
+  let lastActivity = Date.now();
+  let llmClosed = false;
+  const warmReqs = new Map<string, LlmRequest>();
+  const keepAliveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  function scheduleKeepAlive(route: string): void {
+    const old = keepAliveTimers.get(route);
+    if (old) clearTimeout(old);
+    keepAliveTimers.delete(route);
+    if (llmClosed) return;
+    const t = setTimeout(() => {
+      keepAliveTimers.delete(route);
+      const w = warmReqs.get(route);
+      if (llmClosed || !w || Date.now() - lastActivity > KEEPALIVE_IDLE_MS) return;
+      void sendWarm(w, 'keepalive')
+        .catch((e) => log.debug('keep-alive failed', describeError(e)))
+        .finally(() => {
+          if (!keepAliveTimers.has(route)) scheduleKeepAlive(route);
+        });
+    }, KEEPALIVE_MS);
+    (t as { unref?: () => void }).unref?.();
+    keepAliveTimers.set(route, t);
+  }
+  /** A real ghost/actions request used its route's prefix: remember its shape, restart the keep-alive. */
+  function noteRouteUse(req: LlmRequest): void {
+    if (getClient().fake || (req.route !== 'ghost' && req.route !== 'actions')) return;
+    warmReqs.set(req.route, warmRequestOf(req));
+    scheduleKeepAlive(req.route);
+  }
+
+  async function prewarm(file?: string): Promise<void> {
     const c = getClient();
     if (c.fake) return;
     if (!skillLoader.get()) return;
+    lastActivity = Date.now();
     const routes: Array<{ route: 'ghost' | 'actions'; task: TaskKind; model: string; thinking: LlmRequest['thinking']; schema: Record<string, unknown> }> = [
       { route: 'ghost', task: 'ghost', model: ctx.config.models.ghost, thinking: 'disabled', schema: outputJsonSchema('ghost') },
       { route: 'actions', task: 'instruct', model: ctx.config.models.actions, thinking: 'between_tools', schema: outputJsonSchema('instruct') },
     ];
     await Promise.allSettled(
       routes.map(async (r) => {
-        // Blocks A and B are shared by every request of the route; block C depends on the section, so
-        // it is not warmed (the first request of a section writes it).
-        const system = systemFor(r.task, { sectionType: 'body', template: null }).slice(0, 2);
-        const usage = await c.prewarm({ route: r.route, task: r.task, model: r.model, system, messages: [{ role: 'user', content: 'warmup' }], maxTokens: 0, thinking: r.thinking, effort: 'low', schema: r.schema });
-        if (usage) record(r.model, usage, `prewarm:${r.route}`, { task: r.task });
+        // Blocks A and B are shared by the route's requests in sections with the same references; block
+        // C depends on the section, so it is not warmed (the first request of a section writes it).
+        // The shape matches the real requests (same thinking, effort and output format: see client.ts).
+        const template = dominantTemplate(r.task, file);
+        const system = systemFor(r.task, { sectionType: sectionTypeOf(template, 'body', ''), template }).slice(0, 2);
+        const w: LlmRequest = { route: r.route, task: r.task, model: r.model, system, messages: [{ role: 'user', content: 'warmup' }], maxTokens: 0, thinking: r.thinking, effort: 'low', schema: r.schema };
+        await sendWarm(w, 'prewarm');
+        // a real request of the route since then knows the prefix better: keep its shape
+        if (!warmReqs.has(r.route)) warmReqs.set(r.route, w);
+        if (!keepAliveTimers.has(r.route)) scheduleKeepAlive(r.route);
       }),
     );
   }
@@ -921,6 +1024,16 @@ export function createLlmService(ctx: Ctx, opts: LlmServiceOptions = {}): LlmSer
     renderIntent,
     replanAfterEdit,
     prewarm,
+    noteActivity() {
+      lastActivity = Date.now();
+    },
+    async close() {
+      llmClosed = true;
+      for (const t of keepAliveTimers.values()) clearTimeout(t);
+      keepAliveTimers.clear();
+      // cost records are appended in order on a chain: let the last ones reach .paper/cost.jsonl
+      await costChain.catch(() => undefined);
+    },
     skill: () => skillLoader.get(),
     systemFor,
     costTotals: totals,

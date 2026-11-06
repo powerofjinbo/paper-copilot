@@ -169,11 +169,19 @@ export function SentenceCard({ view, env, snap }: SentenceCardProps) {
   const rewrite = useCallback(() => env.ops.rewriteMyself(view, id), [env, view, id]);
   const applyProposal = useCallback(
     (p: Proposal, source: 'instruct' | 'grammar' | 'alternative', ins: string | null, lang: string | null) => {
-      const ok = env.ops.applyProposal(view, p, source === 'grammar' ? { state: unit.state } : { state: 'ai-drafted', instruction: ins, lang });
+      // An identical "rewrite" changes nothing: applying it would stamp AI provenance on the author's own text.
+      if (p.text.trim() === text.trim()) {
+        useWorkspace.getState().pushNotice('info', t('noChange'));
+        close();
+        return;
+      }
+      // Only a real language fix (origin grammar_fix) keeps the sentence's state; a "grammar" result the
+      // server re-labelled as a rewrite (it changed the meaning) is applied as AI text, like any rewrite.
+      const ok = env.ops.applyProposal(view, p, source === 'grammar' && p.origin === 'grammar_fix' ? { state: unit.state } : { state: 'ai-drafted', instruction: ins, lang });
       if (ok) close();
       else setMode({ kind: 'error', message: t('notApplied') });
     },
-    [env, view, unit.state, close, t],
+    [env, view, unit.state, close, t, text],
   );
 
   useEffect(() => {
@@ -297,7 +305,18 @@ export function SentenceCard({ view, env, snap }: SentenceCardProps) {
       ) : null}
 
       {mode.kind === 'main' ? (
-        <MainBody t={t} snap={snap} view={view} onShowFact={() => useWorkspace.getState().setLeftTab('facts')} />
+        <MainBody
+          t={t}
+          snap={snap}
+          view={view}
+          onShowFact={() => useWorkspace.getState().setLeftTab('facts')}
+          onDismissLint={(flagId) => {
+            // optimistic: hide it now; the server's lint.update (full list) confirms
+            const ws = useWorkspace.getState();
+            ws.setLint(ws.lint.map((f) => (f.id === flagId ? { ...f, dismissed: true } : f)));
+            env.api.dismissLint(flagId).catch((err: unknown) => ws.pushNotice('error', errMessage(err)));
+          }}
+        />
       ) : null}
 
       {mode.kind === 'instruct' ? (
@@ -449,7 +468,7 @@ function ProposalView({ t, mode }: { t: EdT; mode: Extract<Mode, { kind: 'propos
   const drift = p.drift;
   return (
     <div className="pc-card-section pc-proposal" data-testid="proposal">
-      <div className="pc-label">{mode.source === 'grammar' ? t('grammarOnly') : mode.instruction ? t('rewriteFor', { instruction: mode.instruction }) : t('rewrite')}</div>
+      <div className="pc-label">{mode.source === 'grammar' && p.origin === 'grammar_fix' ? t('grammarOnly') : mode.instruction ? t('rewriteFor', { instruction: mode.instruction }) : t('rewrite')}</div>
       <div className="pc-proposal-text">
         <Diff diff={p.diff} />
       </div>
@@ -482,7 +501,7 @@ function ProposalView({ t, mode }: { t: EdT; mode: Extract<Mode, { kind: 'propos
   );
 }
 
-function MainBody({ t, snap, view, onShowFact }: { t: EdT; snap: CardSnapshot; view: EditorView; onShowFact: () => void }) {
+function MainBody({ t, snap, view, onShowFact, onDismissLint }: { t: EdT; snap: CardSnapshot; view: EditorView; onShowFact: () => void; onDismissLint: (flagId: string) => void }) {
   const { unit } = snap;
   return (
     <>
@@ -562,6 +581,9 @@ function MainBody({ t, snap, view, onShowFact }: { t: EdT; snap: CardSnapshot; v
               {f.word ? <span className="pc-muted"> “{f.word}”</span> : null}
               {f.corpusRate !== null ? <span className="pc-muted"> · {t('corpus')} {f.corpusRate.toFixed(1)}/1k</span> : null}
               {f.userRate !== null ? <span className="pc-muted"> · {t('you')} {f.userRate.toFixed(1)}/1k</span> : null}
+              <button type="button" className="pc-btn pc-btn-small pc-lint-dismiss" data-testid="lint-dismiss" title={t('dismissLint')} onClick={() => onDismissLint(f.id)}>
+                {t('dismiss')}
+              </button>
             </li>
           ))}
         </ul>

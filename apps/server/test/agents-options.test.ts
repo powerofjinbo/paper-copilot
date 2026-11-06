@@ -30,7 +30,8 @@ function base(over: Partial<Parameters<typeof buildQueryOptions>[0]> = {}) {
     resume: 'sess-1',
     persistSession: true,
     abortController: new AbortController(),
-    baseEnv: { PATH: '/usr/bin', HOME: '/home/u', ANTHROPIC_API_KEY: 'k' },
+    baseEnv: { PATH: '/usr/bin', HOME: '/home/u', ANTHROPIC_API_KEY: 'inherited-key', ANTHROPIC_BASE_URL: 'https://other-tool.example', ANTHROPIC_AUTH_TOKEN: 't', CLAUDECODE: '1' },
+    auth: { apiKey: 'k', baseUrl: 'https://api.anthropic.com' },
     ...over,
   });
 }
@@ -57,6 +58,8 @@ describe('buildQueryOptions (real-mode SDK options, verified without a key)', ()
       env: {
         PATH: '/usr/bin',
         HOME: '/home/u',
+        // the app's own key and endpoint (as the direct client), never the inherited ones
+        ANTHROPIC_BASE_URL: 'https://api.anthropic.com',
         ANTHROPIC_API_KEY: 'k',
         CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
         CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS: '1',

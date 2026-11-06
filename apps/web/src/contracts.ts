@@ -79,6 +79,8 @@ export interface ApiClient {
   setMemo(text: string): Promise<void>;
   addCorpus(entries: Array<Omit<CorpusEntry, 'id'>>): Promise<CorpusEntry[]>;
   cost(): Promise<CostTotals>;
+  /** Dismiss a lint flag (persisted on the server; a lint.update with the full list follows). */
+  dismissLint(flagId: string): Promise<void>;
 }
 
 /** Imperative handle the Editor exposes to the shell and panels. */

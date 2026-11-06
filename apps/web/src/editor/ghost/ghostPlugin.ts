@@ -9,6 +9,7 @@ import type { ServerMessage } from '@paper-copilot/core';
 import { changeAnnotation, ghostInsert, makeAnnotation } from '../annotations';
 import { ctxField } from '../context';
 import { editorEnv } from '../env';
+import { currentLang, edText } from '../i18n';
 import { appendWithPlaceholders } from '../intent';
 import { matchesOf, numeralsOf, placeholdersOf } from '../safe';
 import { unitAtPos, unitsField } from '../units';
@@ -54,6 +55,50 @@ class GhostWidget extends WidgetType {
   }
 }
 
+/* The first few ghosts carry a one-line "Tab accept · Esc dismiss" hint (UX review: the keys were named nowhere). */
+const HINT_KEY = 'paper-copilot.ghostHintsShown';
+const HINT_TIMES = 3;
+let hintsShown = (() => {
+  try {
+    return Number(localStorage.getItem(HINT_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+})();
+/** Text of the ghost that carries the hint (null: none). */
+let hintedText: string | null = null;
+
+/** A new ghost suggestion is about to be shown. */
+function noteGhostShown(text: string): void {
+  if (hintsShown >= HINT_TIMES) {
+    hintedText = null;
+    return;
+  }
+  hintsShown++;
+  hintedText = text;
+  try {
+    localStorage.setItem(HINT_KEY, String(hintsShown));
+  } catch {
+    /* private window */
+  }
+}
+
+class GhostHintWidget extends WidgetType {
+  constructor(readonly text: string) {
+    super();
+  }
+  override eq(other: GhostHintWidget): boolean {
+    return other.text === this.text;
+  }
+  override toDOM(): HTMLElement {
+    const span = document.createElement('span');
+    span.className = 'pc-ghost-hint';
+    span.setAttribute('aria-hidden', 'true');
+    span.textContent = this.text;
+    return span;
+  }
+}
+
 class GhostNoteWidget extends WidgetType {
   constructor(
     readonly text: string,
@@ -91,6 +136,7 @@ export const ghostDecorations = EditorView.decorations.compute([ghostField, ctxF
   const g = visibleGhost(state);
   const ranges = [];
   if (g) ranges.push(Decoration.widget({ widget: new GhostWidget(g.text, ghostFactRanges(state, g.text, g.factIds)), side: 1 }).range(g.pos));
+  if (g && hintedText !== null && hintedText === g.text) ranges.push(Decoration.widget({ widget: new GhostHintWidget(edText(currentLang(), 'ghostHint')), side: 2 }).range(g.pos));
   const note = state.field(ghostField).note;
   if (note && note.pos <= state.doc.length && !g) ranges.push(Decoration.widget({ widget: new GhostNoteWidget(note.text, note.kind), side: 1 }).range(note.pos));
   return ranges.length ? Decoration.set(ranges, true) : Decoration.none;
@@ -253,7 +299,7 @@ class GhostRunner {
       const s = this.view.state.field(ghostField).machine.state;
       if (s.kind !== 'pending' || s.requestId !== requestId) return;
       this.view.dispatch({
-        effects: [ghostEvent.of({ type: 'error', requestId }), ghostNoteEffect.of({ pos: s.pos, text: 'no answer from the ghost service', kind: 'error' })],
+        effects: [ghostEvent.of({ type: 'error', requestId }), ghostNoteEffect.of({ pos: s.pos, text: edText(currentLang(), 'ghostTimeout'), kind: 'error' })],
       });
     }, GHOST_TIMEOUT_MS);
   }
@@ -310,19 +356,22 @@ export function handleGhostMessage(view: EditorView, msg: ServerMessage, localVe
       view.dispatch({ effects: ghostEvent.of({ type: 'empty', requestId: msg.requestId }) });
       return;
     }
+    noteGhostShown(msg.text);
     view.dispatch({
       effects: [
         ghostMetaEffect.of({ requestId: msg.requestId, model: msg.model, promptHash: msg.promptHash, factIds: msg.factIds, citeKeys: msg.citeKeys, issues: msg.issues }),
         ghostEvent.of({ type: 'result', requestId: msg.requestId, text: msg.text, factIds: msg.factIds, citeKeys: msg.citeKeys }),
+        // the gray text wraps below the cursor line: keep a few lines of it in view
+        EditorView.scrollIntoView(s.pos, { y: 'nearest', yMargin: 96 }),
       ],
     });
   } else if (msg.type === 'ghost.empty') {
     view.dispatch({
-      effects: [ghostEvent.of({ type: 'empty', requestId: msg.requestId }), ghostNoteEffect.of({ pos: s.pos, text: 'no grounded suggestion', kind: 'empty' })],
+      effects: [ghostEvent.of({ type: 'empty', requestId: msg.requestId }), ghostNoteEffect.of({ pos: s.pos, text: edText(currentLang(), 'noGrounded'), kind: 'empty' })],
     });
   } else {
     view.dispatch({
-      effects: [ghostEvent.of({ type: 'error', requestId: msg.requestId }), ghostNoteEffect.of({ pos: s.pos, text: `ghost unavailable: ${msg.message}`, kind: 'error' })],
+      effects: [ghostEvent.of({ type: 'error', requestId: msg.requestId }), ghostNoteEffect.of({ pos: s.pos, text: edText(currentLang(), 'ghostUnavailable', { message: msg.message }), kind: 'error' })],
     });
   }
 }

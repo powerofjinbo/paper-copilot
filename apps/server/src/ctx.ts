@@ -160,6 +160,11 @@ export async function createCtx(opts: CreateCtxOptions): Promise<AppCtx> {
       /* none running */
     }
     try {
+      await ctx.llm.close?.();
+    } catch {
+      /* no timers */
+    }
+    try {
       await ctx.docs.close();
     } catch (e) {
       log.error('could not write every open document on shutdown', String(e));

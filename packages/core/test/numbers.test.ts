@@ -345,7 +345,8 @@ describe('linkSentenceFacts', () => {
 
   it('links a cut, including a structural-looking bound in a comparison', () => {
     const r = linkSentenceFacts('A target particle has $p_T > 1$~GeV, $|\\eta| < 4$ and at least five space points.', FACTS);
-    expect(r).toEqual({ linked: ['f.definitions.pT_gt_1GeV', 'f.definitions.abs_eta_lt_4'], unmatched: [], ambiguous: [] });
+    // "at least five space points" is the cut f.definitions.ge_5_space_points, written in words
+    expect(r).toEqual({ linked: ['f.definitions.pT_gt_1GeV', 'f.definitions.abs_eta_lt_4', 'f.definitions.ge_5_space_points'], unmatched: [], ambiguous: [] });
   });
 
   it('reports ambiguity and resolves it with prefer or with the uncertainty', () => {

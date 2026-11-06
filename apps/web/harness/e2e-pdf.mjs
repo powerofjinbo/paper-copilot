@@ -128,16 +128,25 @@ async function up(url) {
   }
 }
 
+function stopServer(child) {
+  try {
+    process.kill(-child.pid);
+  } catch {
+    child.kill();
+  }
+}
+
 async function ensureServer() {
   const probe = `${BASE}/harness/pdf.html`;
   if (await up(probe)) return null;
   const port = new URL(BASE).port || '5176';
-  const child = spawn('npx', ['vite', '--port', port, '--strictPort'], { cwd: WEB, stdio: 'ignore', detached: false });
+  // own process group: stopping it stops vite too, not only the npx wrapper
+  const child = spawn('npx', ['vite', '--port', port, '--strictPort'], { cwd: WEB, stdio: 'ignore', detached: true });
   for (let i = 0; i < 120; i++) {
     if (await up(probe)) return child;
     await new Promise((r) => setTimeout(r, 250));
   }
-  child.kill();
+  stopServer(child);
   throw new Error(`vite did not start on ${BASE}`);
 }
 
@@ -463,7 +472,7 @@ async function main() {
   } finally {
     await ctx2.close();
     await browser.close();
-    server?.kill();
+    if (server) stopServer(server);
     rmSync(built.tmp, { recursive: true, force: true });
   }
 

@@ -97,12 +97,6 @@ function touches(r: Range, start: number, end: number): boolean {
   return r.from < end && start < r.to;
 }
 
-/** A dirty region changed characters inside [start, end) (edge insertions do not change the span's text). */
-function dirtyInside(r: Range, start: number, end: number): boolean {
-  if (r.from === r.to) return start < r.from && r.from < end;
-  return r.from < end && start < r.to;
-}
-
 export function assignUnitsImpl(input: AssignInput): AssignResult {
   const { text, now, file } = input;
   const external = input.changeSource === 'external';
@@ -183,7 +177,10 @@ export function assignUnitsImpl(input: AssignInput): AssignResult {
   }
 
   const dirty = input.dirty;
-  const isDirty = (s: SegSentence): boolean => dirty === undefined || dirty.some((r) => dirtyInside(r, s.start, s.end));
+  // A deletion point ON a span edge counts: mapUnits maps start with assoc +1 and end with assoc -1, so an
+  // edge insertion never enters the span, but text deleted at a sentence's first or last characters
+  // leaves its deletion point exactly on the new edge (and the text changed).
+  const isDirty = (s: SegSentence): boolean => dirty === undefined || dirty.some((r) => touches(r, s.start, s.end));
   const annRange = input.annotatedRange ?? null;
   /** Does the annotation act on this segment (with optional previous unit)? */
   const annApplies = (s: SegSentence, u: SentenceUnit | null, textChanged: boolean): boolean => {

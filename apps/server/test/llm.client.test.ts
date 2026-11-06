@@ -290,7 +290,7 @@ describe('real client over the SDK (injected fetch, no network)', () => {
     await expect(client.complete(actionsReq({ signal: ctl.signal }))).rejects.toMatchObject({ name: 'LlmAbortError' });
   });
 
-  it('pre-warm sends max_tokens 0 without the format; falls back to max_tokens 1 with the format when 0 is rejected', async () => {
+  it('pre-warm: default max_tokens 1 with the format (the cache key of the structured requests); opt-in zero mode sends max_tokens 0 without it and falls back to 1 when 0 is rejected', async () => {
     const bodies: Array<Record<string, unknown>> = [];
     let reject0 = false;
     const fetchStub = (async (_u: unknown, init?: RequestInit) => {
@@ -302,7 +302,11 @@ describe('real client over the SDK (injected fetch, no network)', () => {
         { status: 200, headers: { 'content-type': 'application/json' } },
       );
     }) as typeof fetch;
-    const client = createRealLlmClient({ apiKey: 'sk-ant-test-0123456789', fetch: fetchStub });
+    const def = createRealLlmClient({ apiKey: 'sk-ant-test-0123456789', fetch: fetchStub });
+    await def.prewarm(ghostReq({ messages: [] }));
+    expect(bodies[0]).toMatchObject({ max_tokens: 1, stream: false, output_config: { effort: 'low', format: { type: 'json_schema', schema: GHOST_SCHEMA } }, thinking: { type: 'disabled' } });
+    bodies.length = 0;
+    const client = createRealLlmClient({ apiKey: 'sk-ant-test-0123456789', fetch: fetchStub, prewarmMode: 'zero' });
     const u = await client.prewarm(ghostReq({ messages: [] }));
     expect(u?.cache_creation_input_tokens).toBe(9000);
     expect(bodies[0]).toMatchObject({ max_tokens: 0, stream: false, output_config: { effort: 'low' }, thinking: { type: 'disabled' }, messages: [{ role: 'user', content: 'warmup' }] });
@@ -310,7 +314,7 @@ describe('real client over the SDK (injected fetch, no network)', () => {
 
     reject0 = true;
     bodies.length = 0;
-    const client2 = createRealLlmClient({ apiKey: 'sk-ant-test-0123456789', fetch: fetchStub });
+    const client2 = createRealLlmClient({ apiKey: 'sk-ant-test-0123456789', fetch: fetchStub, prewarmMode: 'zero' });
     const u2 = await client2.prewarm(ghostReq({ model: 'claude-haiku-5-5' }));
     expect(u2).not.toBeNull();
     expect(bodies.map((b) => b.max_tokens)).toEqual([0, 1]);
@@ -368,7 +372,8 @@ describe('fake client', () => {
     expect(a.text).toBe(b.text);
     const out = GhostOutput.parse(a.json);
     expect(out.text.startsWith('The efficiency gain ')).toBe(true);
-    expect(out.text).toContain('(2.32~points)');
+    // grammatical: a bare noun phrase gets a verb ("The efficiency gain is 2.32~points.")
+    expect(out.text).toBe('The efficiency gain is 2.32~points.');
     expect(out.text.replace('2.32', '')).not.toMatch(/\d/);
     expect(out.fact_ids).toEqual(['f1']);
     expect(out.fulfilled_move_ids).toEqual(['s1']);

@@ -86,6 +86,10 @@ export function revealLine(line: number): void {
 }
 
 export async function compileNow(api: ApiClient): Promise<void> {
+  // the author asked for the PDF: show it (on a narrow window the left panel makes room instead)
+  useShell.getState().pinPdf(true);
+  const ws = useWorkspace.getState();
+  if (ws.rightPane === 'none') ws.setRightPane('pdf');
   try {
     await api.compile();
   } catch (e) {
@@ -113,6 +117,8 @@ export async function forwardSync(api: ApiClient): Promise<void> {
     return;
   }
   const line = ed.currentLine();
+  // the author asked to see this line in the PDF: show (and pin) the pane even on a narrow window
+  useShell.getState().pinPdf(true);
   if (ws.rightPane === 'none') ws.setRightPane('pdf');
   try {
     const box = await api.synctexForward(ws.file, line);
