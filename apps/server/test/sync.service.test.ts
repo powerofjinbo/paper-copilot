@@ -7,6 +7,7 @@ import { ClientMessage, type ChangeAnnotation, type ServerMessage } from '@paper
 import type { Ctx } from '../src/contracts';
 import { createDocService, type DocServiceExt } from '../src/docs/docService';
 import { createSyncService, isPushable, parsePorcelain } from '../src/services/sync/syncService';
+import { merge3 } from '../src/services/sync/merge';
 import { cjkHits, mergeMarkerHits, stripComment, unifiedDiff } from '../src/services/sync/scan';
 import { createPaperDb, type PaperDbExt } from '../src/store/db';
 import { makeTempProject, makeTestCtx, type TempProject } from './helpers/ctx';
@@ -52,6 +53,29 @@ describe('scan helpers', () => {
     expect(isPushable('main.tex.tmp-123-4')).toBe(false);
     expect(isPushable('.paper/x.tex')).toBe(false);
     expect(isPushable('notes.docx')).toBe(false);
+  });
+});
+
+describe('merge3 (sentence-level three-way merge)', () => {
+  const base = 'l1\nl2\nl3\nl4\nl5\n';
+  it('merges edits of adjacent lines (git would conflict)', () => {
+    const r = merge3(base, 'l1\nL2\nl3\nl4\nl5\n', 'l1\nl2\nL3\nl4\nl5\n');
+    expect(r).toEqual({ ok: true, text: 'l1\nL2\nL3\nl4\nl5\n', conflicts: [] });
+  });
+  it('takes identical changes once and keeps insertions', () => {
+    expect(merge3(base, 'l1\nX\nl3\nl4\nl5\n', 'l1\nX\nl3\nl4\nl5\nnew\n').text).toBe('l1\nX\nl3\nl4\nl5\nnew\n');
+    expect(merge3(base, 'l0\n' + base, base + 'l6\n').text).toBe('l0\n' + base + 'l6\n');
+  });
+  it('conflicts when both sides change the same line or insert at the same point', () => {
+    const r = merge3(base, 'l1\nA\nl3\nl4\nl5\n', 'l1\nB\nl3\nl4\nl5\n');
+    expect(r.ok).toBe(false);
+    expect(r.conflicts).toEqual([{ from: 2, to: 2 }]);
+    expect(merge3(base, 'l1\nx\nl2\nl3\nl4\nl5\n', 'l1\ny\nl2\nl3\nl4\nl5\n').ok).toBe(false);
+  });
+  it('handles a missing final newline and trivial cases', () => {
+    expect(merge3('a\nb', 'A\nb', 'a\nB').text).toBe('A\nB');
+    expect(merge3('a', 'a', 'b').text).toBe('b');
+    expect(merge3('a', 'b', 'a').text).toBe('b');
   });
 });
 
@@ -191,6 +215,23 @@ describe('SyncService (git mode against a bare remote)', () => {
     expect(existsSync(join(project.paths.tex, '.git', 'rebase-merge'))).toBe(false);
     // nothing to pull now
     expect(await sync.pull()).toEqual([]);
+  });
+
+  it('a local commit and a co-author commit on adjacent sentences rebase cleanly', async () => {
+    await docs.open('main.tex');
+    const path = join(coauthor, 'main.tex');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('This lead holds for every particle species.', 'This lead holds for each particle species.'));
+    git(coauthor, 'commit', '--quiet', '-am', 'advisor: species');
+    git(coauthor, 'push', '--quiet');
+    await editSentence('The fake-track rate', 'against', 'versus');
+    git(project.paths.tex, 'commit', '--quiet', '-am', 'local: versus');
+    const reports = await sync.pull();
+    expect(reports).toHaveLength(1);
+    const text = readFileSync(join(project.paths.tex, 'main.tex'), 'utf8');
+    expect(text).toContain('0.55\\% versus 1.38');
+    expect(text).toContain('for each particle species.');
+    expect(git(project.paths.tex, 'log', '--format=%s').split('\n')).toEqual(['local: versus', 'advisor: species', 'initial']);
+    expect(docs.get('main.tex')!.text).toBe(text);
   });
 
   it('a conflicting pull is aborted and the tree restored', async () => {

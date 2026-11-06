@@ -94,6 +94,8 @@ export interface DocServiceExt extends DocService {
   drainHistory(): Promise<void>;
   /** True if a disk write or re-segmentation is pending for the file. */
   hasPending(file: string): boolean;
+  /** Defer every disk write until the returned release is called (a sync pull rewrites the files). */
+  holdWrites(): () => void;
 }
 
 /** Import annotation: every sentence of an imported document is the author's (provenance unknown). */
@@ -185,6 +187,7 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
   const listeners = new Set<UnitsListener>();
   const replanTimers = new Map<string, NodeJS.Timeout>();
   let closed = false;
+  let writeHolds = 0;
 
   /** While set, updateUnit collects instead of emitting (facts.linkUnit calls back into updateUnit). */
   let batch: { file: string; units: Map<string, SentenceUnit> } | null = null;
@@ -329,7 +332,8 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
     notify(st.file, upserts, res.removed);
 
     if (res.editPairs.length) softAsync('voice.addEditPairs', () => ctx.voice.addEditPairs(res.editPairs));
-    const lintTargets = o.linkAll ? st.units : st.units.filter((u) => changedIds.has(u.id));
+    // lint the units whose content or context changed (pure span shifts are not upserts)
+    const lintTargets = o.linkAll ? st.units : upserts;
     if (lintTargets.length) softAsync('lint.lintUnits', () => ctx.lint.lintUnits(st.file, lintTargets));
     if (lintTargets.length || res.removed.length) softAsync('lint.scheduleDocument', () => ctx.lint.scheduleDocument(st.file));
 
@@ -441,6 +445,11 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
     st.writeTimer = null;
     while (st.writing) await st.writing;
     if (!st.unsaved) return;
+    if (writeHolds > 0 && !closed) {
+      // a sync operation owns the files right now; try again after it
+      scheduleWrite(st);
+      return;
+    }
     if (needsSegment(st)) runSegment(st);
     const text = textOf(st);
     st.unsaved = false;
@@ -999,6 +1008,16 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
 
     drainHistory() {
       return history.drain();
+    },
+
+    holdWrites() {
+      writeHolds++;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        writeHolds = Math.max(0, writeHolds - 1);
+      };
     },
 
     hasPending(file) {

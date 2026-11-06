@@ -216,7 +216,9 @@ function stubGate(text: string, c: GateContext): GateResult {
       repaired = repaired.replace(m[0], '[ref]');
     }
   }
-  for (const f of c.facts) for (const a of f.aliases) if (scan.includes(a)) (factIds.push(f.id), (scan = scan.split(a).join(' ')));
+  for (const f of c.facts)
+    for (const plain of f.aliases)
+      for (const a of [plain.replace(/%/g, '\\%'), plain]) if (scan.includes(a)) (factIds.push(f.id), (scan = scan.split(a).join(' ')));
   scan = scan.replace(/\[[^\]]*\?[^\]]*\]/g, ' ');
   for (const m of scan.matchAll(/\d+(?:[.,]\d+)*/g)) {
     if (c.intentText?.includes(m[0])) continue;
@@ -459,7 +461,8 @@ describe.each([
     const all = sentences.map((s) => s.text).join(' ');
     expect(all).toContain('2.32 points');
     expect(all).toContain('8,710');
-    expect(all).toContain('0.55%');
+    expect(all).toContain('0.55\\%'); // LaTeX source: a bare % would start a comment
+    expect(all).not.toMatch(/[^\\]%/);
     expect(all).toContain('\\cite{Wang2022LRT}');
     expect(all).not.toContain('NotInBib2020'); // only resolved keys are cited
     expect(sentences.flatMap((s) => s.factIds)).toEqual(expect.arrayContaining(['f.g1.delta_points', 'f.g1.n_targets']));

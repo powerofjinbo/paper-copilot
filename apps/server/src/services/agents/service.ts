@@ -460,7 +460,9 @@ export function createAgentService(ctx: Ctx, opts: AgentServiceOptions = {}): Ag
     });
     const res = inRepo.length ? await ctx.facts.addCandidates(inRepo) : { added: [], rejected: [] };
     rejected.push(...res.rejected);
-    progress(`registered ${res.added.length} fact candidates (${rejected.length} rejected)`);
+    // Several candidates can map to one fact (an uncertainty field maps to its value fact).
+    const addedIds = [...new Set(res.added.map((f) => f.id))];
+    progress(`registered ${addedIds.length} fact candidates (${rejected.length} rejected)`);
 
     // Figures: existence and SHA-256 are checked by code, not taken from the model.
     const existing = ctx.facts.figures();
@@ -505,7 +507,7 @@ export function createAgentService(ctx: Ctx, opts: AgentServiceOptions = {}): Ag
 
     return {
       brief: ctx.paths.repoBrief,
-      facts: { added: res.added.map((f) => f.id), rejected },
+      facts: { added: addedIds, rejected },
       figures: figuresAdded,
       terms: termsAdded,
       unknowns: out.unknowns,

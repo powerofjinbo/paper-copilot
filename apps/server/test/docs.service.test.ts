@@ -7,6 +7,7 @@ import type { Ctx } from '../src/contracts';
 import { createDocService, snapshotKey, type DocServiceExt } from '../src/docs/docService';
 import { createTexWatcher } from '../src/docs/watcher';
 import { createPaperDb, type PaperDbExt } from '../src/store/db';
+import { claimPlaceholder } from '../src/routes/sentences';
 import { makeTempProject, makeTestCtx, type TempProject } from './helpers/ctx';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -133,7 +134,9 @@ describe('DocService', () => {
     expect(docs.unitText(target.id)).toBe('The test set holds about 8,710 targets.');
     const vs = db.versions(target.id);
     expect(vs.map((v) => v.origin)).toEqual(['import', 'human_edit']);
-    expect(f.linted.at(-1)).toEqual([target.id]);
+    // the edited unit and its neighbours (their context hash changed) are re-linted, nothing else
+    expect(f.linted.at(-1)).toContain(target.id);
+    expect(f.linted.at(-1)!.length).toBeLessThanOrEqual(3);
     // disk write is debounced and atomic; the snapshot follows the disk text
     await sleep(120);
     const disk = readFileSync(join(project.paths.tex, 'main.tex'), 'utf8');
@@ -178,6 +181,29 @@ describe('DocService', () => {
     expect(u3.editDistance).toBeGreaterThan(0);
     expect(f.editPairs).toHaveLength(1);
     expect(f.editPairs[0]).toMatchObject({ sentenceId: u.id, aiText: newText });
+  });
+
+  it('reject: the client replaces the sentence by its claim placeholder; same id, state placeholder', async () => {
+    const st = await docs.open('main.tex');
+    const u = st.units.find((x) => st.text.slice(x.start, x.end).startsWith('This lead holds'))!;
+    const replacement = claimPlaceholder(st.text.slice(u.start, u.end));
+    await docs.applyClientChange(change('main.tex', 0, st.text.length, [{ from: u.start, to: u.end, insert: replacement }], ann({ origin: 'human_edit', state: 'placeholder', sentenceIds: [u.id], model: null, promptHash: null })));
+    await sleep(5);
+    const got = docs.unit(u.id)!;
+    expect(got.state).toBe('placeholder');
+    expect(got.placeholders).toEqual([replacement]);
+    expect(db.lastVersion(u.id)!.origin).toBe('human_edit');
+  });
+
+  it('an annotation naming a unit without changing text sets its state (no version row)', async () => {
+    const st = await docs.open('main.tex');
+    const u = st.units[5]!;
+    docs.updateUnit(u.id, { state: 'proposed', everAi: true });
+    const n = db.versions(u.id).length;
+    await docs.applyClientChange(change('main.tex', 0, st.text.length, [], ann({ origin: 'ai_draft', state: 'ai-drafted', sentenceIds: [u.id] })));
+    await sleep(5);
+    expect(docs.unit(u.id)!.state).toBe('ai-drafted');
+    expect(db.versions(u.id)).toHaveLength(n);
   });
 
   it('a rewrite that becomes two sentences keeps the id on one and splits the other', async () => {

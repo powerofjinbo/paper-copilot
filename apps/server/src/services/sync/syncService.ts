@@ -20,13 +20,14 @@
  * One sync operation at a time.
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { UNREVIEWED_STATES, type PushCheck, type ReanchorReport, type SentenceUnit } from '@paper-copilot/core';
 import { HttpError, type Ctx, type SyncService } from '../../contracts';
 import { writeFileAtomic } from '../../infra';
 import { isBibName, isTexName, listFiles } from '../../docs/text';
 import { createGit, describeProc, runProc, type Git, type ProcResult } from './proc';
+import { merge3 } from './merge';
 import { cjkHits, intentLineHits, mergeMarkerHits, unifiedDiff } from './scan';
 
 type Blocker = PushCheck['blockers'][number];
@@ -89,6 +90,17 @@ export function createSyncService(ctx: Ctx, opts: SyncServiceOptions = {}): Sync
 
   const unavailable = (): never => {
     throw new HttpError(409, 'Sync is off for this project (sync mode "none"). Set "sync" in .paper/project.json, or re-run `paper init` with --sync git --remote <Overleaf git URL>.');
+  };
+
+  /** Pause the watcher and defer editor disk writes while git/ols rewrite the tree. */
+  const holdTree = (): (() => void) => {
+    const resumeWatcher = opts.pauseWatcher?.() ?? (() => undefined);
+    const d = ctx.docs as typeof ctx.docs & { holdWrites?: () => () => void };
+    const releaseWrites = typeof d.holdWrites === 'function' ? d.holdWrites() : () => undefined;
+    return () => {
+      releaseWrites();
+      resumeWatcher();
+    };
   };
 
   const flushDocs = async (): Promise<void> => {
@@ -188,6 +200,80 @@ export function createSyncService(ctx: Ctx, opts: SyncServiceOptions = {}): Sync
     return reports;
   };
 
+  const show = async (g: Git, spec: string): Promise<string | null> => {
+    const r = await g.run(['show', spec]);
+    return r.code === 0 ? r.stdout : null;
+  };
+
+  /** Resolve the conflicted files of a stopped rebase step with the sentence-level merge (text files only). */
+  const mergeStages = async (g: Git, files: string[]): Promise<{ ok: boolean; failed: string[] }> => {
+    const out = new Map<string, string>();
+    const failed: string[] = [];
+    for (const f of files) {
+      if (!isTexName(f) && !isBibName(f)) {
+        failed.push(f);
+        continue;
+      }
+      const base = (await show(g, `:1:${f}`)) ?? '';
+      const ours = await show(g, `:2:${f}`);
+      const theirs = await show(g, `:3:${f}`);
+      if (ours === null || theirs === null) {
+        failed.push(f);
+        continue;
+      }
+      const m = merge3(base, ours, theirs);
+      if (!m.ok) failed.push(f);
+      else out.set(f, m.text);
+    }
+    if (failed.length) return { ok: false, failed };
+    for (const [f, text] of out) {
+      await writeFileAtomic(join(ctx.paths.tex, f), text);
+      const add = await g.run(['add', '--', f]);
+      if (add.code !== 0) return { ok: false, failed: [f] };
+    }
+    return { ok: true, failed: [] };
+  };
+
+  /**
+   * `git stash pop` conflicted: rebuild every stashed file as merge3(old HEAD, stash, new HEAD); on
+   * success the tree is clean at the new HEAD plus the merged local edits, and the stash is dropped.
+   */
+  const mergeStash = async (g: Git, oldHead: string): Promise<{ ok: boolean; failed: string[] }> => {
+    const files = (await g.run(['stash', 'show', '--name-only', '-z', 'stash@{0}'])).stdout.split('\0').filter(Boolean);
+    const out = new Map<string, string | null>();
+    const failed: string[] = [];
+    for (const f of files) {
+      const base = await show(g, `${oldHead}:${f}`);
+      const ours = await show(g, `stash@{0}:${f}`);
+      const theirs = await show(g, `HEAD:${f}`);
+      if (ours === null) {
+        // deleted locally: fine only if the pull did not change it
+        if (theirs === base) out.set(f, null);
+        else failed.push(f);
+        continue;
+      }
+      if (!isTexName(f) && !isBibName(f) && ours !== theirs && ours !== base && theirs !== base) {
+        failed.push(f);
+        continue;
+      }
+      const m = merge3(base ?? '', ours, theirs ?? '');
+      if (!m.ok) failed.push(f);
+      else out.set(f, m.text);
+    }
+    if (failed.length) return { ok: false, failed };
+    await g.run(['reset', '--hard', '--quiet', 'HEAD']);
+    for (const [f, text] of out) {
+      const abs = join(ctx.paths.tex, f);
+      if (text === null) {
+        await rm(abs, { force: true });
+        continue;
+      }
+      await writeFileAtomic(abs, text);
+    }
+    await g.run(['stash', 'drop', '--quiet', 'stash@{0}']);
+    return { ok: true, failed: [] };
+  };
+
   /**
    * fetch + pull --rebase with local edits stashed; restores the pre-pull state on any failure.
    * Returns the files changed by the pull.
@@ -219,7 +305,25 @@ export function createSyncService(ctx: Ctx, opts: SyncServiceOptions = {}): Sync
       }
       throw new HttpError(409, `${why}${conflicts.length ? ` Conflicting files: ${conflicts.join(', ')}.` : ''} The LaTeX tree was restored to its state before the pull; nothing was lost. Resolve it in a terminal (git -C "${ctx.paths.tex}" pull --rebase) or ask the co-author who changed the same sentences.`);
     };
-    const pulled: ProcResult = await g.run(['pull', '--rebase', '--no-autostash', '--quiet', remote, branch], { timeoutMs: netMs });
+    let pulled: ProcResult = await g.run(['pull', '--rebase', '--no-autostash', '--quiet', remote, branch], { timeoutMs: netMs });
+    let resolved: string[] = [];
+    // A rebase step that stopped on a conflict: resolve sentence-level (non-overlapping) conflicts
+    // ourselves; git treats edits of adjacent lines as conflicting, which is the common case here.
+    for (let step = 0; rebaseInProgress() && step < 200; step++) {
+      const conflicts = await conflictedFiles(g);
+      if (conflicts.length === 0) {
+        pulled = await g.run(['-c', 'core.editor=true', 'rebase', '--continue']);
+        if (pulled.code !== 0 && rebaseInProgress() && (await conflictedFiles(g)).length === 0) {
+          // an empty commit after resolution: skip it
+          pulled = await g.run(['rebase', '--skip']);
+        }
+        continue;
+      }
+      const merged = await mergeStages(g, conflicts);
+      if (!merged.ok) return restore('Co-authors changed the same sentences as your unpushed commits.', merged.failed);
+      resolved = resolved.concat(conflicts);
+      pulled = await g.run(['-c', 'core.editor=true', 'rebase', '--continue']);
+    }
     if (pulled.code !== 0 || rebaseInProgress()) {
       const conflicts = await conflictedFiles(g);
       return restore(`git pull --rebase failed: ${describeProc(pulled)}.`, conflicts);
@@ -228,11 +332,16 @@ export function createSyncService(ctx: Ctx, opts: SyncServiceOptions = {}): Sync
       const pop = await g.run(['stash', 'pop', '--quiet']);
       if (pop.code !== 0) {
         const conflicts = await conflictedFiles(g);
-        // the stash is kept by git when pop conflicts; drop the half-applied state, go back, re-apply
-        await g.run(['reset', '--hard', '--quiet', 'HEAD']);
-        return restore('Your unsaved local edits conflict with the pulled changes.', conflicts);
+        const fixed = await mergeStash(g, oldHead);
+        if (!fixed.ok) {
+          // the stash is kept by git when pop conflicts; drop the half-applied state, go back, re-apply
+          await g.run(['reset', '--hard', '--quiet', 'HEAD']);
+          return restore('Your unsaved local edits change the same sentences as the pulled changes.', fixed.failed.length ? fixed.failed : conflicts);
+        }
+        resolved = resolved.concat(conflicts);
       }
     }
+    if (resolved.length) log.info(`sync: merged sentence-level edits in ${[...new Set(resolved)].join(', ')}`);
     const newHead = await g.out(['rev-parse', 'HEAD']);
     const changed = (await g.run(['diff', '--name-only', '-z', oldHead, newHead])).stdout.split('\0').filter(Boolean);
     return { changed, output: (pulled.stdout + pulled.stderr).trim() || `Updated ${oldHead.slice(0, 7)}..${newHead.slice(0, 7)}` };
@@ -413,7 +522,7 @@ export function createSyncService(ctx: Ctx, opts: SyncServiceOptions = {}): Sync
         const m = mode();
         if (m === 'none') unavailable();
         await flushDocs();
-        const resume = opts.pauseWatcher?.() ?? (() => undefined);
+        const resume = holdTree();
         try {
           if (m === 'ols') {
             const before = new Map<string, string>();
@@ -453,7 +562,7 @@ export function createSyncService(ctx: Ctx, opts: SyncServiceOptions = {}): Sync
         if (m === 'none') unavailable();
         const check = await pushCheck();
         if (!check.ok) return { ok: false, output: summarizeRefusal(check), check };
-        const resume = opts.pauseWatcher?.() ?? (() => undefined);
+        const resume = holdTree();
         try {
           if (m === 'ols') {
             const r = await ols(['-l']);

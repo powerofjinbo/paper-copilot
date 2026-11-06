@@ -235,10 +235,22 @@ export function planStatement(raw: string, fallback: string): string {
   return body.charAt(0).toUpperCase() + body.slice(1);
 }
 
+/**
+ * A plain-text fact alias ("0.55%", "2.32 ± 0.28 points", "1.2×10^-3") as LaTeX source: a bare % would
+ * start a comment and hide the rest of the line, and ± / × are not valid outside math in pdflatex.
+ */
+export function aliasToLatex(alias: string): string {
+  return alias
+    .trim()
+    .replace(/×\s*10\^\{?(-?\d+)\}?/g, (_m, e: string) => `$\\times 10^{${e}}$`)
+    .replace(/\s*±\s*/g, '~$\\pm$~')
+    .replace(/(^|[^\\])%/g, '$1\\%');
+}
+
 function rendering(f: Fact): string | null {
   if (f.kind !== 'number' || typeof f.value !== 'number') return null;
   const alias = f.aliases.find((a) => a.trim().length > 0);
-  return alias ? alias.trim() : null;
+  return alias ? aliasToLatex(alias) : null;
 }
 
 /** A sentence with a number that no fact supports (searched against the gate, so it really fails). */
