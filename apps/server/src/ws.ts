@@ -6,11 +6,19 @@
  *
  *   hello           -> welcome { serverVersion, fakeLlm, project }
  *   doc.open        -> doc.snapshot (and a cache pre-warm of the AI routes)
- *   doc.change      -> doc.ack (to the sender) or, on a version mismatch / unreadable change, a fresh
- *                      doc.snapshot; sentences.patch follows on the bus after re-segmentation
+ *   doc.change      -> doc.ack (to the sender) and doc.remoteChange (to every other socket) or, on a version
+ *                      mismatch / unreadable change / stale epoch, a fresh doc.snapshot; sentences.patch
+ *                      follows on the bus after re-segmentation
  *   doc.flush       -> pending segmentation and disk write now; then doc.ack with the current version
  *   ghost.request   -> ctx.llm.handleGhostRequest (not awaited: never blocks the document queue)
  *   ghost.cancel    -> ctx.llm.cancelGhost;  ghost.feedback -> ctx.llm.ghostFeedback
+ *
+ * Per-socket epoch: the version of the last doc.snapshot / doc.replace queued to a socket, per file. A
+ * doc.change from that socket is rejected (fresh snapshot) when no snapshot of the file was ever sent to
+ * it (a change from an older socket's text lineage, e.g. queued across a server restart), when its
+ * baseVersion predates the epoch, or when its own `epoch` field (the last snapshot/replace the client had
+ * applied) predates it: such a change was made on text the server has since replaced for that client, and
+ * applying it whenever the version and length happen to match would put it in the wrong place.
  *
  * Keepalive: a ping every 30 s; a socket that did not answer the previous ping is terminated.
  * Authentication (token, Host, Origin) happens in server.ts before the upgrade.
@@ -19,6 +27,7 @@ import type { WebSocket } from 'ws';
 import { ClientMessage, type ServerMessage } from '@paper-copilot/core';
 import { publicConfig } from './config';
 import { HttpError, type Ctx } from './contracts';
+import { normalizeRel } from './docs/text';
 import { SERVER_VERSION } from './version';
 
 export interface WsHubOptions {
@@ -43,12 +52,18 @@ interface Client {
   alive: boolean;
   inbox: Promise<void>;
   closed: boolean;
+  /** `<hello.clientId>:socket-<n>` (or `socket-<n>` before hello): doc.remoteChange is not echoed to its origin. */
+  id: string;
+  readonly sockId: string;
+  /** Per file: version of the last doc.snapshot / doc.replace queued to this socket. */
+  epochs: Map<string, number>;
 }
 
 const MAX_FRAME = 32 * 1024 * 1024;
 
 export function createWsHub(ctx: Ctx, opts: WsHubOptions = {}): WsHub {
   const clients = new Set<Client>();
+  let socketSeq = 0;
   const maxQueue = opts.maxQueue ?? 20_000;
   const high = opts.highWaterBytes ?? 8 * 1024 * 1024;
   const log = ctx.log;
@@ -90,13 +105,35 @@ export function createWsHub(ctx: Ctx, opts: WsHubOptions = {}): WsHub {
       log.error('ws: cannot serialize a message', String(e));
       return;
     }
+    if (msg.type === 'doc.snapshot' || msg.type === 'doc.replace') c.epochs.set(msg.file, msg.version);
     c.queue.push(frame);
     pump(c);
   };
 
   const unsubscribe = ctx.bus.subscribe((msg) => {
-    for (const c of clients) send(c, msg);
+    for (const c of clients) {
+      if (msg.type === 'doc.remoteChange' && msg.originClientId === c.id) continue;
+      send(c, msg);
+    }
   });
+
+  /** The tex-relative name the doc service uses for a file (the key of `epochs`). */
+  const relName = (file: string): string => {
+    try {
+      return normalizeRel(file);
+    } catch {
+      return file;
+    }
+  };
+
+  /** Why a doc.change from this socket must not be applied (null: hand it to the doc service). */
+  const staleReason = (c: Client, msg: Extract<ClientMessage, { type: 'doc.change' }>): string | null => {
+    const epoch = c.epochs.get(relName(msg.file));
+    if (epoch === undefined) return 'no snapshot of the file was sent to this socket';
+    if (msg.baseVersion < epoch) return `baseVersion ${msg.baseVersion} predates the snapshot at ${epoch}`;
+    if (msg.epoch !== undefined && msg.epoch < epoch) return `epoch ${msg.epoch} predates the snapshot at ${epoch}`;
+    return null;
+  };
 
   const notice = (c: Client, level: 'info' | 'warn' | 'error', message: string) => send(c, { type: 'notice', level, message });
 
@@ -116,6 +153,8 @@ export function createWsHub(ctx: Ctx, opts: WsHubOptions = {}): WsHub {
     }
     switch (msg.type) {
       case 'hello': {
+        // unique per socket even if two tabs claim the same id (the suffix keeps delivery exact)
+        if (msg.clientId) c.id = `${msg.clientId.slice(0, 200)}:${c.sockId}`;
         send(c, { type: 'welcome', serverVersion: SERVER_VERSION, fakeLlm: ctx.fakeLlm, project: publicConfig(ctx.config) });
         // the last good PDF survives a restart: a (re)loaded page shows it without recompiling
         try {
@@ -143,7 +182,14 @@ export function createWsHub(ctx: Ctx, opts: WsHubOptions = {}): WsHub {
         return;
       }
       case 'doc.change': {
-        const ok = await ctx.docs.applyClientChange(msg);
+        const stale = staleReason(c, msg);
+        if (stale) {
+          log.debug(`ws: stale doc.change for ${msg.file} (${stale}); sending a snapshot`);
+          if (!ctx.docs.get(msg.file)) await ctx.docs.open(msg.file);
+          snapshotOrNotice(c, msg.file);
+          return;
+        }
+        const ok = await ctx.docs.applyClientChange(msg, { clientId: c.id });
         if (ok) {
           // ack before the re-segmentation pass of an annotated change (it runs on the next macrotask)
           send(c, { type: 'doc.ack', file: msg.file, version: msg.baseVersion + 1 });
@@ -222,7 +268,8 @@ export function createWsHub(ctx: Ctx, opts: WsHubOptions = {}): WsHub {
 
   return {
     attach(socket) {
-      const c: Client = { socket, queue: [], waiting: false, alive: true, inbox: Promise.resolve(), closed: false };
+      const c: Client = { socket, queue: [], waiting: false, alive: true, inbox: Promise.resolve(), closed: false, id: '', sockId: `socket-${++socketSeq}`, epochs: new Map() };
+      c.id = c.sockId;
       clients.add(c);
       socket.on('pong', () => (c.alive = true));
       socket.on('message', (data, isBinary) => {

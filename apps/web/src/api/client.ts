@@ -100,7 +100,8 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
   private readonly fetchImpl: typeof fetch;
   private readonly WS: WebSocketCtor | null;
   private readonly readMeta: () => string | null;
-  private readonly clientId: string;
+  /** Sent in `hello`; the server tags relayed changes with it (doc.remoteChange.originClientId). */
+  readonly clientId: string;
   private readonly initialMs: number;
   private readonly maxMs: number;
   private readonly log: (msg: string, data?: unknown) => void;
@@ -118,6 +119,13 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
   private attempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly queue: ClientMessage[] = [];
+  /**
+   * An open socket went away: queued doc.change messages belong to its text lineage (they were sent in the
+   * closing window, or while disconnected) and are dropped at the next open. The editor's sync owns them and
+   * re-sends them from its log once the new socket's snapshot is reconciled; replayed here, they could be
+   * applied by a restarted server whose version and length happen to match, in the wrong place.
+   */
+  private dropQueuedChanges = false;
   private readonly openFiles = new Set<string>();
   /** Files re-opened automatically on the current connection; absorbs one echoed doc.open each. */
   private reopened = new Set<string>();
@@ -281,8 +289,11 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
         this.reopenedTimer = null;
       }, 2000);
       const pending = this.queue.splice(0, this.queue.length);
+      const dropChanges = this.dropQueuedChanges;
+      this.dropQueuedChanges = false;
       for (const m of pending) {
         if (m.type === 'hello' || m.type === 'doc.open') continue; // just sent
+        if (m.type === 'doc.change' && dropChanges) continue; // re-sent by the editor after the snapshot
         this.rawSend(m);
       }
       this.setConnected(true);
@@ -296,6 +307,7 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
     };
     ws.onclose = () => {
       if (this.ws !== ws) return;
+      if (this._connected) this.dropQueuedChanges = true;
       this.ws = null;
       this.setConnected(false);
       // A launch token dies with the server process. After a restart the page's <meta> token is stale,

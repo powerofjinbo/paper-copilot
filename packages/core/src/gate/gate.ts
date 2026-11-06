@@ -103,13 +103,27 @@ export interface GateIssue {
   raw?: string;
 }
 
-/** A number the AI may write because it is derived from facts, e.g. a ratio of two facts. */
+/**
+ * A number the AI may write because it is derived from facts, e.g. a ratio of two facts
+ * (meta/derived.ts `derivedRelations` builds them; the wire shape is `DerivedRelationSchema` in api.ts).
+ * Without `form` the relation matches any numeral with its value at the numeral's precision (or its
+ * `raw` rendering), as before. With `form` the numeral must also be written that way:
+ * - 'factor': "2.5 times", "a factor of 2.5", "2.5-fold", "twice" (a bare "2.5" is not a ratio);
+ * - 'points': "2.3 points" / "percentage points";
+ * - 'percent': "60\%" / "60 percent";
+ * - 'fraction': a ratio "N out of M" (|N/M - value| <= 0.5/M), a percent (value x 100) or a bare decimal.
+ * `maxSigfigs`: a numeral written with more significant figures does not match (ratios are quoted to 1-2).
+ */
 export interface DerivedRelation {
   value: number;
   /** Rendering the gate accepts, e.g. "2.4". */
   raw: string;
   factIds: string[];
   description: string;
+  kind?: 'ratio' | 'difference' | 'relative' | 'share';
+  form?: 'factor' | 'points' | 'percent' | 'fraction';
+  maxSigfigs?: number;
+  renderings?: string[];
 }
 
 export interface GateContext {
@@ -189,12 +203,53 @@ function parseLooseNumber(s: string): number | null {
 
 /** Does a derived relation account for this numeral (same rendering, or its value at the numeral's precision)? */
 function derivedMatch(tok: NumeralDetail, rel: DerivedRelation): boolean {
-  if (!rel || typeof rel.value !== 'number' || !Number.isFinite(rel.value)) {
-    return !!rel && typeof rel.raw === 'string' && normRaw(rel.raw) === normRaw(tok.raw);
+  if (!rel) return false;
+  if (rel.form !== undefined) return derivedFormMatch(tok, rel);
+  if (tok.ratioDen !== null) return false; // "9 out of 10" is the ratio 0.9, never the number 9
+  if (typeof rel.value !== 'number' || !Number.isFinite(rel.value)) {
+    return typeof rel.raw === 'string' && normRaw(rel.raw) === normRaw(tok.raw);
   }
   if (typeof rel.raw === 'string' && rel.raw && normRaw(rel.raw) === normRaw(tok.raw)) return true;
   const tol = 0.5 * Math.pow(10, tok.exponent - tok.decimals);
   return Math.abs(Math.abs(rel.value) - Math.abs(tok.value)) <= tol * (1 + 1e-9) + 1e-12;
+}
+
+/**
+ * Does `rel` account for numeral `tok` (as the gate reads it)? Exported for the Consistency view, which
+ * must attribute a numeral to the same relation the gate accepted it for.
+ */
+export function derivedRelationMatches(tok: NumeralDetail, rel: DerivedRelation): boolean {
+  try {
+    return derivedMatch(tok, rel);
+  } catch {
+    return false;
+  }
+}
+
+/** Form-aware match of a typed derived relation (see DerivedRelation). */
+function derivedFormMatch(tok: NumeralDetail, rel: DerivedRelation): boolean {
+  if (typeof rel.value !== 'number' || !Number.isFinite(rel.value) || tok.isUncertainty) return false;
+  const v = Math.abs(rel.value);
+  const tol = 0.5 * Math.pow(10, tok.exponent - tok.decimals);
+  const near = (x: number, t: number): boolean => Math.abs(x - Math.abs(tok.value)) <= t * (1 + 1e-9) + 1e-12;
+  const plain = !tok.percent && !tok.points && !tok.unit && tok.ratioDen === null;
+  if (typeof rel.maxSigfigs === 'number' && !tok.word && tok.ratioDen === null && tok.sigfigs > rel.maxSigfigs) return false;
+  switch (rel.form) {
+    case 'factor':
+      return tok.factor && !tok.percent && !tok.points && near(v, tol);
+    case 'points':
+      return tok.points && !tok.factor && near(v, tol);
+    case 'percent':
+      return tok.percent && !tok.factor && near(v, tol);
+    case 'fraction': {
+      if (tok.factor) return false;
+      if (tok.ratioDen !== null) return tok.ratioDen > 0 && Math.abs(tok.value / tok.ratioDen - v) <= 0.5 / tok.ratioDen + 1e-12;
+      if (tok.percent) return near(v * 100, tol);
+      return plain && v <= 1 && near(v, tol);
+    }
+    default:
+      return false;
+  }
 }
 
 interface Replacement {
@@ -354,6 +409,7 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
     issues.push({ code: 'bad_latex', severity: 'block', message: 'A bare % after a number starts a LaTeX comment and hides the rest of the line; write \\%.', start: badPct.start, end: badPct.start + 1, raw: '%' });
   }
   const links = resolveLinks(toks, facts, claimed, { strictCounts: mode === 'ghost' || mode === 'draft' });
+  linkRatios(links, facts);
   const originalRaws = (mode === 'rewrite' || mode === 'grammar') && typeof ctx.original === 'string' ? extractNumeralDetails(ctx.original).map((x) => normRaw(x.raw)) : [];
   const byId = new Map(facts.map((f) => [f.id, f] as const));
   const intentNums = typeof ctx.intentText === 'string' && ctx.intentText ? extractNumeralDetails(ctx.intentText) : [];
@@ -446,6 +502,14 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
       const ids = arr<string>(rel.factIds).filter((x) => typeof x === 'string');
       linked.push(...ids);
       addForm([...ids].sort().join('|'), tok);
+      // a percent that is also a fact in points (or a fraction) at the wrong scale: the relative change
+      // explains it, but the author may have meant the difference ("2.3%" for 2.32 points)
+      if (rel.kind === 'relative' && tok.percent) {
+        const confused = relaxedOnlyMatches(tok, facts);
+        if (confused.length) {
+          issues.push({ code: 'percent_scale', severity: 'warn', message: `"${shown(tok)}" is read as the relative change ${rel.description}; it is also ${confused[0]!.factId} written as a percent. If you mean the difference, write points.`, start: tok.start, end: tok.end, raw: tok.raw });
+        }
+      }
       continue;
     }
     // a confidence level ("at 95\\% CL") documented by a limit fact
@@ -650,6 +714,38 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
     unlinked: uniq(unlinked),
     placeholders,
   };
+}
+
+/**
+ * A ratio "N out of M" that fits several fraction facts is linked when they are one quantity: per-seed
+ * values (array elements such as `#/eff_A_seeds/0`, CSV columns such as `eff_s0`) yield to the aggregate, and facts holding the identical value (the
+ * same efficiency in a claim JSON and a CSV row) count once (the first in fact-store order is linked).
+ * Ratios that still fit facts with different values stay ambiguous (accepted, `loose_number`).
+ */
+function linkRatios(links: TokenLink[], facts: Fact[]): void {
+  const order = new Map<string, number>();
+  const byId = new Map<string, Fact>();
+  facts.forEach((f, i) => {
+    if (!order.has(f.id)) {
+      order.set(f.id, i);
+      byId.set(f.id, f);
+    }
+  });
+  const element = (f: Fact): boolean =>
+    /\/\d+$/.test(String(f.locator ?? '')) || /(?:^|[._])seeds?(?:[._]|$)/i.test(String(f.id)) || /(?:^|_)(?:s|seed)\d+$/i.test(String(f.id).split('.').pop() ?? '');
+  for (const l of links) {
+    if (l.tok.ratioDen === null || l.linked || l.candidates.length < 2) continue;
+    let cands = l.candidates.map((id) => byId.get(id)).filter((f): f is Fact => !!f);
+    const aggregate = cands.filter((f) => !element(f));
+    if (aggregate.length > 0) cands = aggregate;
+    cands.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+    const first = cands[0];
+    if (!first || typeof first.value !== 'number') continue;
+    const one = cands.every((f) => typeof f.value === 'number' && sameValue(f.value, first.value as number) && normUnit(f.unit) === normUnit(first.unit));
+    if (!one) continue;
+    l.linked = first.id;
+    l.status = 'linked';
+  }
 }
 
 /** Literal numeric citations outside math: `[12]`, `[3--5]`, `[1, 2, 3]` after a space or `~`; `[3, 4]` only after `~` or "Ref.". */

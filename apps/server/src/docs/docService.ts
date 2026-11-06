@@ -1226,7 +1226,7 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
       return stateOf(st);
     },
 
-    async applyClientChange(msg: DocChangeMsg) {
+    async applyClientChange(msg: DocChangeMsg, origin?: { clientId: string }) {
       const rel = resolveInTex(ctx.paths.tex, msg.file).rel;
       const { state: st } = await ensureOpen(rel);
       // An annotated change waiting for its pass is segmented first, with its own annotation only.
@@ -1244,14 +1244,20 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
         return false;
       }
       if (msg.annotation && st.dirty.length) runSegment(st); // typing before an AI change gets its own pass
+      // Other tabs on this file converge at once (emitted before anything else can change the file).
+      const relay = (): void => {
+        if (origin) ctx.bus.emit({ type: 'doc.remoteChange', file: rel, version: st.version, changes: msg.changes, originClientId: origin.clientId });
+      };
       if (cs.empty && !msg.annotation) {
         st.version += 1;
+        relay();
         return true;
       }
       const doc = cs.apply(st.doc);
       st.doc = doc;
       st.textCache = null;
       st.version += 1;
+      relay();
       const newText = textOf(st);
       st.units = mapUnits(st.units, cs, newText);
       const touched = changedRanges(cs);

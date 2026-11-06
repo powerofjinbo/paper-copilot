@@ -1,15 +1,18 @@
 /**
  * Document sync wiring: ApiClient messages <-> SyncCore <-> EditorView. See syncCore.ts for the rules.
  *
- * Tabs of the same browser that edit the same file relay the changes the server acknowledged to each
- * other (BroadcastChannel, same origin = same server), so a second tab shows the first tab's typing at
- * once instead of only at its next (rejected, then rebased) change.
+ * Several tabs (or windows, or browsers) on the same file: the server relays every change it accepted to
+ * the other sockets as `doc.remoteChange`; it is applied here as a remote change (outside the undo
+ * history, never echoed back as a doc.change), and this tab's unacknowledged changes are rebased over it
+ * (SyncCore.remote). A relayed change that cannot be integrated (a gap) leaves the tab "behind": it asks
+ * for a fresh snapshot as soon as nothing of its own is pending. Relayed changes are only applied once
+ * the current connection delivered its first snapshot (after a server restart the version numbers of a
+ * relayed change belong to the new process).
  */
 import { ChangeSet, Transaction } from '@codemirror/state';
 import type { EditorView, ViewUpdate } from '@codemirror/view';
 import type { ClientMessage } from '@paper-copilot/core';
-import type { ApiClient } from '../../contracts';
-import { isMockClient } from '../../api/extras';
+import type { ApiClient, ServerMessageOf } from '../../contracts';
 import { changeAnnotation, remoteChange } from '../annotations';
 import { setCtxEffect } from '../context';
 import { currentLang, edText } from '../i18n';
@@ -18,29 +21,7 @@ import { patchUnitsEffect, setUnitsEffect, unitsField, updateUnitMetaEffect } fr
 import { SyncCore, type LogEntry, type PatchMsg, type ReplaceMsg, type ReconcileResult, type SnapshotMsg } from './syncCore';
 
 const SNAPSHOT_WAIT_MS = 5000;
-
-interface RelayMsg {
-  kind: 'applied';
-  tab: string;
-  file: string;
-  entries: Array<{ baseVersion: number; changes: unknown }>;
-}
-
-/** Minimal BroadcastChannel surface (absent in some test environments). */
-interface Channel {
-  postMessage(m: unknown): void;
-  close(): void;
-  onmessage: ((ev: { data: unknown }) => void) | null;
-}
-
-function openChannel(name: string): Channel | null {
-  try {
-    const BC = (globalThis as { BroadcastChannel?: new (name: string) => Channel }).BroadcastChannel;
-    return BC ? new BC(name) : null;
-  } catch {
-    return null;
-  }
-}
+type RemoteChangeMsg = ServerMessageOf<'doc.remoteChange'>;
 
 /** User-facing notices for a reconcile result (null if the sync was silent). */
 export function reconcileNotice(file: string, res: ReconcileResult, lang = currentLang()): { level: 'info' | 'warn'; message: string } | null {
@@ -67,8 +48,8 @@ export class DocSync {
   private reconnecting = false;
   private openSent = false;
   private stopped = false;
-  private readonly tabId = Math.random().toString(36).slice(2);
-  private channel: Channel | null = null;
+  /** The current connection delivered a snapshot of the file (relayed changes are trusted only after it). */
+  private socketSynced = false;
   /** A patch from a version this tab has not reached yet (another tab's change, relayed shortly). */
   private deferredPatch: PatchMsg | null = null;
   /** Messages that refer to the local text (ghost.request, doc.flush): sent after the changes before them. */
@@ -104,11 +85,11 @@ export class DocSync {
       api.on('doc.replace', (m) => {
         if (m.file === this.file) this.onReplace(m);
       }),
+      api.on('doc.remoteChange', (m) => {
+        if (m.file === this.file) this.onRemote(m);
+      }),
       api.onConnection((connected) => this.onConnection(connected)),
     );
-    // only tabs talking to the same server relay changes (a ?mock=1 demo runs its own server in each tab)
-    this.channel = isMockClient(api) ? null : openChannel(`paper-copilot:doc:${this.file}`);
-    if (this.channel) this.channel.onmessage = (ev) => this.onRelay(ev.data);
     if (api.connected) this.open();
     api
       .ready()
@@ -123,12 +104,6 @@ export class DocSync {
     if (this.awaitTimer) clearTimeout(this.awaitTimer);
     for (const off of this.offs) off();
     this.offs = [];
-    try {
-      this.channel?.close();
-    } catch {
-      /* already closed */
-    }
-    this.channel = null;
   }
 
   private open(): void {
@@ -148,6 +123,7 @@ export class DocSync {
     if (this.stopped) return;
     if (!connected) {
       this.openSent = false;
+      this.socketSynced = false;
       // ghost requests and flushes refer to a socket that is gone (the ghost machine times out on its own)
       this.ordered = [];
       return;
@@ -193,6 +169,7 @@ export class DocSync {
     const view = this.hooks.view();
     if (!view) return;
     this.awaitingSnapshot = false;
+    this.socketSynced = true;
     if (!this.core.initialized) {
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: m.text },
@@ -222,14 +199,20 @@ export class DocSync {
   }
 
   private onAck(version: number): void {
-    const done = this.core.ack(version);
-    this.relay(done);
+    this.core.ack(version);
     const next = this.core.drainReplace();
     if (next) {
       if ('apply' in next) this.applyReplace(next.apply);
       else this.open();
     }
+    this.resyncIfBehind();
     this.pump();
+  }
+
+  /** A relayed change was missed: once nothing of ours is pending, a fresh snapshot brings the text. */
+  private resyncIfBehind(): void {
+    if (!this.core.behind || this.awaitingSnapshot || this.core.pending().length > 0 || !this.api.connected) return;
+    this.open();
   }
 
   private onPatch(m: PatchMsg): void {
@@ -279,40 +262,37 @@ export class DocSync {
     // Sync panel shows the report. No second toast here.
   }
 
-  /* ------------------------------------------------------------------ same-browser tabs */
+  /* ------------------------------------------------------------------ other tabs */
 
-  private relay(done: LogEntry[]): void {
-    if (!this.channel || done.length === 0) return;
-    const msg: RelayMsg = { kind: 'applied', tab: this.tabId, file: this.file, entries: done.map((e) => ({ baseVersion: e.baseVersion, changes: e.changes.toJSON() })) };
-    try {
-      this.channel.postMessage(msg);
-    } catch {
-      /* the other tabs catch up through the snapshot path */
-    }
-  }
-
-  /** Another tab's acknowledged changes: adopt them when this tab is exactly at their base version. */
-  private onRelay(data: unknown): void {
-    const m = data as Partial<RelayMsg> | null;
-    if (this.stopped || !m || m.kind !== 'applied' || m.tab === this.tabId || m.file !== this.file || !Array.isArray(m.entries)) return;
+  /** Another socket's accepted change (doc.remoteChange). */
+  private onRemote(m: RemoteChangeMsg): void {
+    if (this.stopped || !this.socketSynced || !this.core.initialized) return;
+    const own = (this.api as { clientId?: unknown }).clientId;
+    if (typeof own === 'string' && (m.originClientId === own || m.originClientId.startsWith(`${own}:`))) return;
     const view = this.hooks.view();
-    if (!view || !this.core.initialized) return;
-    for (const e of m.entries) {
-      // anything else (own pending typing, a gap) is reconciled by the server's next snapshot (rebase)
-      if (e.baseVersion !== this.core.localVersion || this.core.pending().length > 0) continue;
-      let cs: ChangeSet;
-      try {
-        cs = ChangeSet.fromJSON(e.changes);
-      } catch {
-        return;
+    if (!view) return;
+    let cs: ChangeSet;
+    try {
+      cs = ChangeSet.fromJSON(m.changes);
+    } catch {
+      this.core.behind = true;
+      this.resyncIfBehind();
+      return;
+    }
+    const res = this.core.remote(cs, m.version);
+    if (res.kind === 'apply') {
+      if (res.change.length !== view.state.doc.length) {
+        // cannot happen while the log mirrors the editor; never apply a change in the wrong coordinates
+        this.core.behind = true;
+      } else if (!res.change.empty) {
+        view.dispatch({ changes: res.change, annotations: [remoteChange.of(true), Transaction.addToHistory.of(false)] });
       }
-      if (cs.length !== view.state.doc.length || !this.core.adoptRemote(cs)) return;
-      view.dispatch({ changes: cs, annotations: [remoteChange.of(true), Transaction.addToHistory.of(false)] });
+      const p = this.deferredPatch;
+      if (p && p.version <= this.core.localVersion) {
+        this.deferredPatch = null;
+        this.onPatch(p);
+      }
     }
-    const p = this.deferredPatch;
-    if (p && p.version <= this.core.localVersion) {
-      this.deferredPatch = null;
-      this.onPatch(p);
-    }
+    this.resyncIfBehind();
   }
 }

@@ -15,7 +15,8 @@
  *  - restart: a snapshot older than the acknowledged version comes from a new server process that lost
  *    its unsaved text. The acknowledged text is three-way merged (merge3.ts) with the snapshot, on the last
  *    text known to come from disk: edits made on disk meanwhile are kept, the server's lost edits are
- *    re-sent as one change (`diff`), conflicting lines keep the editor's version and are reported.
+ *    re-sent as one change (`diff`), conflicting lines keep the editor's version and are reported; unless
+ *    the snapshot is past version 0 (another tab already restored and edited it): then its lines win.
  * One change in flight (DocSync uses `takeNext`): the server applies a doc.change whenever its baseVersion
  * and length match its own, so a second change sent before a rejection could be applied to the REPLACED
  * text in the wrong coordinates when the lengths happen to agree (a co-author's one-character fix vs one
@@ -41,6 +42,12 @@ export interface LogEntry {
   annotation: ChangeAnnotation | null;
   /** False if the change was made while disconnected (it must be sent after the reconnect snapshot). */
   sent: boolean;
+  /**
+   * The change that re-sends text a restarted server lost (not the author's typing). Until it is acknowledged,
+   * a newer server text (another tab restored first) makes the core RECOMPUTE it rather than rebase it:
+   * rebased like typing, the same lost text would be inserted twice.
+   */
+  restore?: boolean;
 }
 
 export interface ReconcileResult {
@@ -69,9 +76,21 @@ export function textOf(s: string): Text {
   return Text.of(s.split('\n'));
 }
 
-export function toMessage(file: string, e: LogEntry): DocChangeMsg {
-  return { type: 'doc.change', file, baseVersion: e.baseVersion, changes: e.changes.toJSON(), annotation: e.annotation };
+/** `epoch`: the version of the last snapshot/replace the core was reset to (see api.ts doc.change). */
+export function toMessage(file: string, e: LogEntry, epoch?: number): DocChangeMsg {
+  const msg: DocChangeMsg = { type: 'doc.change', file, baseVersion: e.baseVersion, changes: e.changes.toJSON(), annotation: e.annotation };
+  if (epoch !== undefined) msg.epoch = epoch;
+  return msg;
 }
+
+/** What SyncCore.remote did with a doc.remoteChange. */
+export type RemoteResult =
+  /** Integrated: apply `change` (current local coordinates) to the editor as a remote change. */
+  | { kind: 'apply'; change: ChangeSet }
+  /** Already contained in the local text (older than the acknowledged version). */
+  | { kind: 'stale' }
+  /** Not integrated (a gap, a queued replace, unknown text): the tab is behind until the next snapshot. */
+  | { kind: 'behind' };
 
 export class SyncCore {
   initialized = false;
@@ -92,6 +111,18 @@ export class SyncCore {
    * a restarted server): the merge base after a restart.
    */
   diskText: Text | null = null;
+  /** Version of the last snapshot / replace the core was reset to: sent with every doc.change. */
+  epoch = 0;
+  /**
+   * A doc.remoteChange could not be integrated: the server has text this tab has not seen. Cleared by the
+   * next snapshot or replace; DocSync asks for a snapshot once nothing of its own is pending.
+   */
+  behind = false;
+  /**
+   * While a restore change is unacknowledged: the old server's text it restores (`ours`) and the disk text the
+   * merge is based on, so a newer snapshot can recompute the restore (see LogEntry.restore).
+   */
+  private restartInfo: { ours: string; diskBase: string } | null = null;
 
   constructor(readonly file: string) {}
 
@@ -108,11 +139,13 @@ export class SyncCore {
     this.unitsVersion = version;
     this.ackedText = text === undefined ? null : typeof text === 'string' ? textOf(text) : text;
     if (fromDisk && this.ackedText) this.diskText = this.ackedText;
+    this.epoch = version;
+    this.behind = false;
   }
 
   /**
-   * A change the server applied on behalf of another tab (relayed between tabs of the same browser): it is
-   * recorded as an acknowledged entry, so later server spans map through it. Only valid when nothing is
+   * A change the server applied on behalf of another tab (doc.remoteChange): it is recorded as an
+   * acknowledged entry, so later server spans map through it. Only valid when nothing is
    * pending and the change starts at `localVersion`.
    */
   adoptRemote(changes: ChangeSet): boolean {
@@ -131,7 +164,63 @@ export class SyncCore {
     const entry: LogEntry = { baseVersion: this.localVersion, changes, annotation, sent };
     this.log.push(entry);
     this.localVersion++;
-    return toMessage(this.file, entry);
+    return toMessage(this.file, entry, this.epoch);
+  }
+
+  /**
+   * doc.remoteChange: the server applied `changes` (another tab's) at `version - 1`.
+   *  - at the acknowledged version with nothing pending: adopted as an acknowledged entry;
+   *  - at the acknowledged version with pending local changes: the pending entries are REBASED over it
+   *    (annotations kept; the one in flight stays "in flight": the server is past its base version, so it
+   *    rejects it and sends the snapshot that the replay path then reconciles), and the remote change, mapped
+   *    over them, is returned for the editor. Same insertion-order rule as the snapshot rebase (remote first);
+   *  - older than the acknowledged version: already contained ('stale');
+   *  - anything else (a gap, a queued replace, no known server text): 'behind'.
+   */
+  remote(changes: ChangeSet, version: number): RemoteResult {
+    const base = version - 1;
+    if (!this.initialized) return { kind: 'behind' };
+    if (base < this.ackedVersion) return { kind: 'stale' };
+    if (this.queuedReplace || base !== this.ackedVersion) {
+      this.behind = true;
+      return { kind: 'behind' };
+    }
+    const pending = this.pending();
+    if (pending[0]?.restore) {
+      // another tab restored first: our restore is rejected, and the snapshot that follows recomputes it
+      this.behind = true;
+      return { kind: 'behind' };
+    }
+    if (pending.length === 0) {
+      if (this.ackedText && changes.length !== this.ackedText.length) {
+        this.behind = true;
+        return { kind: 'behind' };
+      }
+      if (!this.adoptRemote(changes)) {
+        this.behind = true;
+        return { kind: 'behind' };
+      }
+      return { kind: 'apply', change: changes };
+    }
+    const acked = this.ackedText;
+    if (!acked || changes.length !== acked.length) {
+      this.behind = true;
+      return { kind: 'behind' };
+    }
+    const kept = this.log.filter((e) => e.baseVersion < this.ackedVersion);
+    const out: LogEntry[] = [...kept, { baseVersion: base, changes, annotation: null, sent: true }];
+    let v = base + 1;
+    let mapped = changes;
+    for (const e of pending) {
+      out.push({ baseVersion: v++, changes: e.changes.map(mapped), annotation: e.annotation, sent: e.sent });
+      mapped = mapped.map(e.changes, true);
+    }
+    this.log = out;
+    this.ackedText = changes.apply(acked);
+    this.ackedVersion = base + 1;
+    this.localVersion = v;
+    this.trim();
+    return { kind: 'apply', change: mapped };
   }
 
   /** Changes the server has not acknowledged yet. */
@@ -155,13 +244,14 @@ export class SyncCore {
     const e = this.log.find((x) => !x.sent && x.baseVersion >= this.ackedVersion);
     if (!e) return null;
     e.sent = true;
-    return toMessage(this.file, e);
+    return toMessage(this.file, e, this.epoch);
   }
 
   /** doc.ack(v): the server is at version v. Returns the entries this ack acknowledged. */
   ack(version: number): LogEntry[] {
     const v = Math.min(version, this.localVersion);
     const done = this.log.filter((e) => e.baseVersion >= this.ackedVersion && e.baseVersion < v);
+    if (done.some((e) => e.restore)) this.restartInfo = null;
     if (v > this.ackedVersion) {
       if (this.ackedText) {
         let t: Text | null = this.ackedText;
@@ -288,13 +378,20 @@ export class SyncCore {
       this.reset(V, remaining, snapshot.text, false);
       const resend = remaining.filter((e) => opts.reconnect || !e.sent);
       for (const e of resend) e.sent = opts.connected;
-      return { send: opts.connected ? resend.map((e) => toMessage(this.file, e)) : [], replayed: true, remote: null, diff: null, conflicts: [], mode: 'replay' };
+      return { send: opts.connected ? resend.map((e) => toMessage(this.file, e, this.epoch)) : [], replayed: true, remote: null, diff: null, conflicts: [], mode: 'replay' };
     }
 
     const pending = this.pending();
     const acked = this.ackedText;
     if (!acked || !this.consistent(acked, pending, localText)) return this.legacy(snapshot, localText, opts);
 
+    if (this.restartInfo && pending[0]?.restore && pending[0].changes.length === acked.length) {
+      // our restore was not applied (another tab restored first, or the server restarted again): recompute it
+      // against the server's current text, from the same old server text and disk base
+      const { ours, diskBase } = this.restartInfo;
+      const restored = pending[0].changes.apply(acked);
+      return this.restartMerge(snapshot, ours, diskBase, restored, pending.slice(1), opts);
+    }
     if (V < this.ackedVersion) return this.restart(snapshot, acked, pending, opts);
 
     // Same server process. After a reconnect some pending entries may have been applied with their acks
@@ -364,7 +461,7 @@ export class SyncCore {
       conflicts = [...new Set(after.map((p) => result.lineAt(Math.min(p, result.length)).number))].sort((x, y) => x - y);
     }
     return {
-      send: opts.connected ? out.map((e) => toMessage(this.file, e)) : [],
+      send: opts.connected ? out.map((e) => toMessage(this.file, e, this.epoch)) : [],
       replayed: false,
       remote: local,
       diff: restore && !restore.empty ? restore : null,
@@ -379,14 +476,37 @@ export class SyncCore {
     pending: LogEntry[],
     opts: { connected: boolean; diff: (a: string, b: string) => ChangeSet },
   ): ReconcileResult {
-    const ackedStr = acked.toString();
     const diskBase = this.diskText ? this.diskText.toString() : snapshot.text;
-    const merged = merge3(diskBase, ackedStr, snapshot.text);
+    return this.restartMerge(snapshot, acked.toString(), diskBase, acked, pending, opts);
+  }
+
+  /**
+   * Merge `ours` (the old server's text) with the snapshot on `diskBase`, restore what the server lacks, and
+   * rebase `entries` (the author's typing, based on `entriesBase`) onto the result.
+   */
+  private restartMerge(
+    snapshot: { version: number; text: string },
+    ours: string,
+    diskBase: string,
+    entriesBase: Text,
+    entries: LogEntry[],
+    opts: { connected: boolean; diff: (a: string, b: string) => ChangeSet },
+  ): ReconcileResult {
+    // A restarted server starts at version 0 with the text it read from disk. A snapshot past 0 means another
+    // tab already reconnected, restored the lost text from ITS log and may have typed on: where both sides
+    // changed a line, the server's line descends from ours (same old server state + newer typing), so ours
+    // must not overwrite it (an idle tab would otherwise "restore" an older copy of the line and delete the
+    // other tab's latest characters). Lines only we changed are still restored.
+    const merged = merge3(diskBase, ours, snapshot.text, { prefer: snapshot.version > 0 ? 'theirs' : 'ours' });
     const restore = merged.text === snapshot.text ? null : opts.diff(snapshot.text, merged.text);
-    const serverSide = opts.diff(ackedStr, merged.text);
-    const res = this.rebase(snapshot.version, snapshot.text, acked, pending, serverSide, restore, opts);
-    // the new process read this text from disk
-    this.diskText = textOf(snapshot.text);
+    const serverSide = opts.diff(entriesBase.toString(), merged.text);
+    const res = this.rebase(snapshot.version, snapshot.text, entriesBase, entries, serverSide, restore, opts);
+    if (restore && !restore.empty && this.log[0]) {
+      this.log[0].restore = true;
+      this.restartInfo = { ours, diskBase };
+    } else this.restartInfo = null;
+    // a fresh process read this text from disk
+    if (snapshot.version === 0) this.diskText = textOf(snapshot.text);
     let conflicts = res.conflicts;
     if (merged.conflicts.length) {
       // merge3 line numbers refer to the merged acknowledged text: map them through the rebased entries

@@ -200,8 +200,11 @@ export interface DocService {
    * emit sentences.patch, feed edit pairs to the voice service, ask lint for the changed units and
    * schedule the document lint pass. Annotated changes are re-segmented immediately (no debounce) so
    * provenance is attached to the exact text the AI produced.
+   * When `origin` is given, an accepted change is also emitted on the bus as `doc.remoteChange` (in the
+   * same synchronous step that applies it, so no later message about the file can overtake it); the
+   * WebSocket hub delivers it to every socket except the one whose client id is `origin.clientId`.
    */
-  applyClientChange(msg: Extract<ClientMessage, { type: 'doc.change' }>): Promise<boolean>;
+  applyClientChange(msg: Extract<ClientMessage, { type: 'doc.change' }>, origin?: { clientId: string }): Promise<boolean>;
   /** Run any pending re-segmentation and disk write now. */
   flush(file: string): Promise<void>;
   /** After a pull or an external edit: diff + reanchor, persist, emit doc.replace. */

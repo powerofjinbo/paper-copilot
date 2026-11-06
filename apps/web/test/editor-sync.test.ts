@@ -17,7 +17,7 @@ describe('SyncCore: versions and acks', () => {
     core.reset(7);
     const cs = ChangeSet.of([{ from: 0, insert: 'A' }], 5);
     const m1 = core.local(cs, null, true);
-    expect(m1).toEqual({ type: 'doc.change', file: 'main.tex', baseVersion: 7, changes: cs.toJSON(), annotation: null });
+    expect(m1).toEqual({ type: 'doc.change', file: 'main.tex', baseVersion: 7, changes: cs.toJSON(), annotation: null, epoch: 7 });
     const m2 = core.local(ChangeSet.of([{ from: 6, insert: 'B' }], 6), null, true);
     expect(m2.baseVersion).toBe(8);
     expect(core.localVersion).toBe(9);

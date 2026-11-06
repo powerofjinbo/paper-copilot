@@ -8,6 +8,9 @@
  *  - a region changed identically on both sides is taken once (edits saved before the restart);
  *  - a region changed differently on both sides is a conflict: OUR lines are kept (the author's text is
  *    never lost) and the region's line numbers in the result are reported, so the caller can say so.
+ *    With `prefer: 'theirs'` THEIR lines are kept and nothing is reported: the caller knows that their side
+ *    already descends from ours (another tab restored the same text to the restarted server, then kept
+ *    typing), so our older copy of the line must not overwrite the newer one.
  * No DOM: unit-tested in apps/web/test/editor-sync.test.ts.
  */
 
@@ -98,7 +101,13 @@ export interface Merge3Result {
   conflicts: number[];
 }
 
-export function merge3(base: string, ours: string, theirs: string): Merge3Result {
+export interface Merge3Options {
+  /** Which side a conflicting region keeps (default 'ours'; 'theirs' reports no conflicts). */
+  prefer?: 'ours' | 'theirs';
+}
+
+export function merge3(base: string, ours: string, theirs: string, opts: Merge3Options = {}): Merge3Result {
+  const preferTheirs = opts.prefer === 'theirs';
   if (ours === theirs) return { text: ours, conflicts: [] };
   if (theirs === base) return { text: ours, conflicts: [] };
   if (ours === base) return { text: theirs, conflicts: [] };
@@ -154,6 +163,7 @@ export function merge3(base: string, ours: string, theirs: string): Merge3Result
       const startsWith = (lines: string[], head: string[]) => head.every((l, i) => lines[i] === l);
       if (insT && !insO) out.push(...(startsWith(o.lines, insT) ? o.lines : [...insT, ...o.lines]));
       else if (insO && !insT) out.push(...(startsWith(t.lines, insO) ? t.lines : [...insO, ...t.lines]));
+      else if (preferTheirs) out.push(...t.lines);
       else {
         // differing edits of the same lines (or two different insertions at one point): ours is kept
         conflicts.push(out.length + 1);
