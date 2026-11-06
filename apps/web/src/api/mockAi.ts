@@ -175,7 +175,7 @@ export function verbFirst(s: string): Rewrite {
 }
 
 export function baselineFirst(s: string): Rewrite {
-  const m = /^(\s*)(.+?),\s+compared with\s+([^,;.]+)([,;.].*)$/s.exec(s);
+  const m = /^(\s*)(.+?),\s+compared with\s+((?:[^,;.]|\.(?=\d))+)([,;.].*)$/s.exec(s);
   if (!m) return { text: s, en: '', zh: '' };
   const [, sp = '', main = '', baseline = '', tail = ''] = m;
   const end = tail.startsWith(',') ? tail.slice(1).trimStart() : tail;
@@ -329,20 +329,23 @@ export function draftSeeds(w: FactWords): DraftSeed[] {
 }
 
 export function simulatedFramings(outline: Outline, w: FactWords): string[] {
-  const contrast = outline.contrast.text.trim() || outline.gap.text.trim();
-  const story = outline.story.text.trim();
-  const key = outline.story.keyPhrase.trim();
+  const plain = (x: string) => x.replace(/\\%/g, '%');
+  const contrast = (outline.contrast.text.trim() || outline.gap.text.trim()).replace(/[.\s]+$/, '');
+  // Three alternative one-sentence stories (result first, contrast first, question first); no labels
+  // inside the text, because an adopted framing becomes the story verbatim.
   return [
-    `Result first: a tracker trained without the signal finds ${w.delta} points more displaced targets than the signal-trained baseline, at a lower fake-track rate.`,
-    `Contrast first: ${contrast ? contrast.replace(/[.\s]+$/, '') : 'standard trackers are trained on the signal they are meant to find'}; we show that this is not needed${key ? `, which is the point of "${key}"` : ''}.`,
-    `Question first: can a tracker that never saw the signal find displaced particles as well as one trained on it? ${story ? `Our answer: ${story.replace(/[.\s]+$/, '')}.` : 'On this test set it finds more.'}`,
+    `A tracker trained without the signal finds ${w.delta} points more displaced targets than the signal-trained baseline, at a lower fake-track rate.`,
+    `${contrast ? capitalize(contrast) : 'Trackers for displaced particles are trained on the signal they are meant to find'}; we show that a tracker trained without the signal finds more displaced particles.`,
+    plain(`Can a tracker that never saw the signal find displaced particles as well as one trained on it? On isolated gun particles it finds ${w.effA} of the targets, against ${w.effB} for the signal-trained baseline.`),
   ];
 }
 
 export function simulatedReferee(sectionId: string, title: string, lang: NotesLanguage, w: FactWords, firstSentenceId: string | null): Array<Omit<RefereeQuestion, 'id'>> {
   const zh = lang === 'zh';
   const t = `${title} ${sectionId}`.toLowerCase();
-  const q = (question: string, estimate: string | null, anchored = true): Omit<RefereeQuestion, 'id'> => ({ sectionId, sentenceId: anchored ? firstSentenceId : null, question, estimate });
+  // Notes are plain text, not LaTeX: "0.55%" rather than "0.55\\%".
+  const plain = (x: string) => x.replace(/\\%/g, '%');
+  const q = (question: string, estimate: string | null, anchored = true): Omit<RefereeQuestion, 'id'> => ({ sectionId, sentenceId: anchored ? firstSentenceId : null, question: plain(question), estimate: estimate === null ? null : plain(estimate) });
   const deltaN = Number(w.delta);
   const sigmaN = Number(w.sigma);
   const signif = Number.isFinite(deltaN) && Number.isFinite(sigmaN) && sigmaN > 0 ? (deltaN / sigmaN).toFixed(1) : null;

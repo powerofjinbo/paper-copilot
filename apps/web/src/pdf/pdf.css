@@ -1,0 +1,389 @@
+/* PDF pane. Tokens from styles/tokens.css; the paper stays white in dark mode, slightly dimmed. */
+
+.pdfp {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-sunken);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  --pdfp-hl: rgba(242, 196, 56, 0.42);
+  --pdfp-hl-edge: rgba(201, 150, 10, 0.85);
+  --pdfp-page-shadow: 0 0 0 1px rgba(29, 28, 26, 0.07), 0 1px 3px rgba(29, 28, 26, 0.1);
+}
+
+/* ---------------------------------------------------------------------------------- */
+/* Toolbar                                                                              */
+/* ---------------------------------------------------------------------------------- */
+
+.pdfp-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-elev);
+  font-size: 12px;
+  color: var(--ink-2);
+  min-width: 0;
+}
+.pdfp-pagebox[hidden],
+.pdfp-zoom[hidden] {
+  display: none;
+}
+.pdfp-pagebox {
+  display: flex;
+  margin: 0;
+  flex: 0 0 auto;
+}
+.pdfp-pagelabel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.pdfp-muted {
+  color: var(--ink-3);
+}
+.pdfp-pageinput {
+  width: 3.2em;
+  height: 22px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 12px var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.pdfp-pageinput:disabled {
+  color: var(--ink-3);
+}
+.pdfp-spacer {
+  flex: 1 1 auto;
+}
+/* Stale / updating / failed badge: a pill floating over the top of the pages. */
+.pdfp-status {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 2;
+}
+.pdfp-status > * {
+  pointer-events: auto;
+}
+.pdfp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 11px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-1, 0 1px 2px rgba(29, 28, 26, 0.06));
+  box-sizing: border-box;
+}
+.pdfp-badge-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pdfp-badge.is-warn {
+  color: var(--warn, #935700);
+  background: linear-gradient(var(--warn-bg, rgba(208, 140, 44, 0.14)), var(--warn-bg, rgba(208, 140, 44, 0.14))), var(--bg-elev);
+  border-color: var(--warn-line, rgba(208, 140, 44, 0.45));
+}
+.pdfp-badge.is-error {
+  color: var(--danger, #b3261e);
+  background: linear-gradient(var(--danger-bg, rgba(194, 65, 45, 0.1)), var(--danger-bg, rgba(194, 65, 45, 0.1))), var(--bg-elev);
+  border-color: var(--danger-line, rgba(194, 65, 45, 0.4));
+}
+.pdfp-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pdfp-pulse 1.2s ease-in-out infinite;
+}
+.pdfp-link {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  padding: 0 2px;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.pdfp-zoom {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.pdfp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.pdfp-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pdfp-btn:hover:not(:disabled) {
+  background: var(--bg-hover, rgba(29, 28, 26, 0.045));
+  color: var(--ink);
+}
+.pdfp-btn[aria-pressed='true'] {
+  background: var(--accent-bg, rgba(47, 95, 179, 0.1));
+  color: var(--accent);
+}
+.pdfp-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.pdfp-pct {
+  min-width: 3.6em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+.pdfp-btn:focus-visible,
+.pdfp-link:focus-visible,
+.pdfp-action:focus-visible,
+.pdfp-pageinput:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ---------------------------------------------------------------------------------- */
+/* Pages                                                                                */
+/* ---------------------------------------------------------------------------------- */
+
+.pdfp-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.pdfp-scroll {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+  outline: none;
+}
+.pdfp-scroll:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--focus);
+}
+.pdfp[data-state='empty'] .pdfp-scroll,
+.pdfp[data-state='error'] .pdfp-scroll {
+  visibility: hidden;
+}
+.pdfp-pages {
+  position: relative;
+}
+.pdfp-page {
+  position: absolute;
+  background: #fff;
+  box-shadow: var(--pdfp-page-shadow);
+  cursor: default;
+  overflow: hidden;
+}
+.pdfp-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+}
+.pdfp-hl {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 2px;
+  background: var(--pdfp-hl);
+  box-shadow: 0 0 0 1.5px var(--pdfp-hl-edge);
+  mix-blend-mode: multiply;
+  animation: pdfp-hl 1.6s ease-out forwards;
+}
+.pdfp-click {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent);
+  pointer-events: none;
+  animation: pdfp-click 0.6s ease-out forwards;
+}
+
+/* ---------------------------------------------------------------------------------- */
+/* Messages                                                                             */
+/* ---------------------------------------------------------------------------------- */
+
+.pdfp-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  text-align: center;
+  color: var(--ink-3);
+  pointer-events: none;
+}
+.pdfp-message > * {
+  pointer-events: auto;
+}
+.pdfp-title {
+  margin: 4px 0 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.pdfp-hint {
+  margin: 0;
+  max-width: 30em;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.pdfp-errmsg {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--danger, #b3261e);
+  word-break: break-word;
+}
+.pdfp-glyph {
+  width: 34px;
+  height: 40px;
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.7;
+}
+.pdfp-action {
+  margin-top: 8px;
+  height: 28px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius, 6px);
+  background: var(--bg-elev);
+  color: var(--ink);
+  font: 12.5px var(--font-ui);
+  cursor: pointer;
+}
+.pdfp-action:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.pdfp-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  animation: pdfp-spin 0.8s linear infinite;
+}
+.pdfp-notice {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 6px 12px;
+  border-radius: var(--radius, 6px);
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-2, 0 6px 24px rgba(29, 28, 26, 0.12));
+  font-size: 12px;
+  color: var(--ink-2);
+  animation: pdfp-rise 0.18s ease-out;
+}
+.pdfp-notice.is-error {
+  color: var(--danger, #b3261e);
+  border-color: var(--danger-line, rgba(194, 65, 45, 0.4));
+}
+.pdfp-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@keyframes pdfp-hl {
+  0%, 62% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes pdfp-click {
+  from { opacity: 0.9; transform: scale(0.5); }
+  to { opacity: 0; transform: scale(1.6); }
+}
+@keyframes pdfp-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes pdfp-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@keyframes pdfp-rise {
+  from { opacity: 0; transform: translate(-50%, 4px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdfp-dot, .pdfp-spinner { animation-duration: 2.4s; }
+  .pdfp-click, .pdfp-notice { animation: none; }
+  .pdfp-click { display: none; }
+  .pdfp-hl { animation: pdfp-hl 1.6s steps(1, end) forwards; }
+}
+
+/* Dark mode: the page is paper, so it stays white, a little dimmed against the dark pane. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .pdfp {
+    --pdfp-page-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.45);
+  }
+  :root:not([data-theme='light']) .pdfp-page {
+    filter: brightness(0.9);
+  }
+}
+:root[data-theme='dark'] .pdfp {
+  --pdfp-page-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.45);
+}
+:root[data-theme='dark'] .pdfp-page {
+  filter: brightness(0.9);
+}

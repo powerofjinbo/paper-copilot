@@ -1,7 +1,8 @@
 /**
  * Stable sentence identity across local edits, re-segmentation, pulls and edits made outside the app.
  *
- * OWNER: core-anchoring agent. Replace the `notImplemented` bodies; keep the exported signatures.
+ * OWNER: core-anchoring agent. Implementation: assign.ts (assignUnits), match.ts (matching phases),
+ * adapter.ts (normalize/similarity/token helpers with a not-implemented fallback), lines.ts.
  *
  * Pipeline used by the server after every debounce (local typing) and after every pull/disk change:
  *   1. units' spans are mapped into the new text: `mapUnits(units, changes)` (local, exact ChangeSet)
@@ -176,6 +177,39 @@ export interface AssignResult {
  * Every unit gets hash = hashString(normalizeForHash(text)), textNorm, ctxHash from its in-paragraph
  * neighbours, line, part, kind, sectionId, paragraphId = `${sectionId}/p${paragraphIndex}`, cites and
  * placeholders from `analyze`. Unchanged units keep facts/claims/move.
+ *
+ * Implementation decisions (where the rules above leave room):
+ * - Overlap is only counted between a unit and a segment of the same `kind` (footnote sentences are
+ *   nested inside their host sentence's span). Ties: larger overlap, then document order.
+ * - External mode: an overlap only keeps an id when the texts are equal or similarity >= threshold/2
+ *   (so splits and merges, about 0.5, still match); a sentence rewritten beyond recognition is
+ *   re-anchored by hash/fuzzy or orphaned rather than silently relabelled. After hash matching, groups
+ *   of matched units with identical text are re-paired so ctxHash agrees (repeated sentences whose
+ *   paragraphs moved). Merged-away and unmatched units are orphaned (never `removed`). Units passed in
+ *   with `orphaned: true` can re-attach by exact hash; otherwise they are returned in `orphaned` again.
+ *   Orphans are listed only in `orphaned` (not in `upserts`/`removed`) and keep all metadata.
+ * - "Agreeing neighbour": the unit's previous (next) unit in document order is matched to the
+ *   segment immediately before (after) the candidate. Fuzzy rounds repeat while they make progress.
+ * - Merges: the surviving unit takes the union of facts/claims and `everAi` of the merged units; if
+ *   AI text was merged into a human sentence by typing, the result is 'ai-edited'.
+ * - Splits: the split-off part inherits the original's provenance (state evolved as an edit), gets a
+ *   new id, `splitFrom`, a version row with version 0; only the id keeper yields an EditPair.
+ * - Local fast path: when `dirty` is given, a unit whose span equals its segment's and contains no
+ *   dirty change keeps its hash/textNorm/cites/placeholders without re-normalizing; positional fields
+ *   (line, ctxHash, sectionId, paragraphId, part, kind) are always recomputed.
+ * - An annotation applies to units intersecting `annotatedRange`; without a range, to units named in
+ *   `annotation.sentenceIds`, else to every changed dirty unit. A unit named in `sentenceIds` whose
+ *   text did not change still takes `annotation.state` (e.g. accepting a proposed sentence), with no
+ *   version row. A human-origin annotation with a state (e.g. "rewrite myself" -> 'human') sets that
+ *   state and never yields an EditPair. Without `annotation.state`, AI origins map to: ai_intent ->
+ *   'ai-from-intent', ai_draft/replan -> 'proposed', ai_ghost/ai_rewrite -> 'ai-drafted'.
+ * - An external unit edited locally yields no EditPair (its text is a co-author's, not the AI's).
+ * - Accepted AI states set acceptedAt = now; editing a proposed/unsupported unit counts as acting on
+ *   it (acceptedAt set if empty). AI changes set editDistance = 0 (the text IS the last AI version).
+ * - ctxHash: a missing neighbour contributes '' (hashString('|' + next.hash) for a first sentence);
+ *   a sentence alone in its paragraph gets ''.
+ * - Version rows: version = last + 1 and parentVersion = last (0/null for new units),
+ *   editDistance against the parent text; model/promptHash/instruction/lang only for AI origins.
  */
 export function assignUnits(input: AssignInput): AssignResult {
   return assignUnitsImpl(input);

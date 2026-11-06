@@ -77,3 +77,56 @@
 
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 14px; }
+
+/*
+ * Shell additions (appended by web-shell): hover/active fills, focus ring, status tones, highlight
+ * and shadows. Same three-block structure as above so light, dark and the data-theme override agree.
+ */
+:root {
+  --bg-hover: rgba(29, 28, 26, 0.045);
+  --bg-active: rgba(47, 95, 179, 0.08);
+  --accent-hover: #2a549f;
+  --accent-bg: rgba(47, 95, 179, 0.1);
+  --focus-ring: rgba(47, 95, 179, 0.28);
+  --ok: #2f7a4b;
+  --ok-bg: rgba(47, 122, 75, 0.1);
+  --warn: #935700;
+  --warn-bg: rgba(208, 140, 44, 0.14);
+  --warn-line: rgba(208, 140, 44, 0.45);
+  --danger: #b3261e;
+  --danger-bg: rgba(194, 65, 45, 0.1);
+  --danger-line: rgba(194, 65, 45, 0.4);
+  --ai-bg: rgba(79, 102, 135, 0.12);
+  --highlight: rgba(242, 196, 56, 0.4);
+  --shadow-1: 0 1px 2px rgba(29, 28, 26, 0.06);
+  --shadow-2: 0 6px 24px rgba(29, 28, 26, 0.12), 0 1px 3px rgba(29, 28, 26, 0.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg-hover: rgba(236, 233, 226, 0.06);
+    --bg-active: rgba(126, 166, 239, 0.12);
+    --accent-hover: #93b5f2;
+    --accent-bg: rgba(126, 166, 239, 0.14);
+    --focus-ring: rgba(126, 166, 239, 0.35);
+    --ok: #7cc492;
+    --ok-bg: rgba(124, 196, 146, 0.12);
+    --warn: #e7ae5b;
+    --warn-bg: rgba(227, 166, 78, 0.14);
+    --warn-line: rgba(227, 166, 78, 0.45);
+    --danger: #f08470;
+    --danger-bg: rgba(239, 107, 85, 0.13);
+    --danger-line: rgba(239, 107, 85, 0.45);
+    --ai-bg: rgba(169, 189, 219, 0.13);
+    --highlight: rgba(242, 196, 56, 0.28);
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+}
+:root[data-theme='dark'] {
+  --bg-hover: rgba(236, 233, 226, 0.06); --bg-active: rgba(126, 166, 239, 0.12); --accent-hover: #93b5f2;
+  --accent-bg: rgba(126, 166, 239, 0.14); --focus-ring: rgba(126, 166, 239, 0.35); --ok: #7cc492;
+  --ok-bg: rgba(124, 196, 146, 0.12); --warn: #e7ae5b; --warn-bg: rgba(227, 166, 78, 0.14);
+  --warn-line: rgba(227, 166, 78, 0.45); --danger: #f08470; --danger-bg: rgba(239, 107, 85, 0.13);
+  --danger-line: rgba(239, 107, 85, 0.45); --ai-bg: rgba(169, 189, 219, 0.13); --highlight: rgba(242, 196, 56, 0.28);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4); --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+}

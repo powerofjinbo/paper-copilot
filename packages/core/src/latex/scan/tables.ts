@@ -16,6 +16,11 @@ export const SECTION_LEVELS: ReadonlyMap<string, number> = new Map([
   ['subsubsection', 3],
   ['paragraph', 4],
   ['subparagraph', 4],
+  // KOMA-Script unnumbered headings
+  ['addpart', 0],
+  ['addchap', 0],
+  ['addsec', 1],
+  ['minisec', 4],
 ]);
 
 export const CITE_CMDS: ReadonlySet<string> = new Set([
@@ -104,7 +109,8 @@ export const DROP_ARGS: ReadonlyMap<string, number> = new Map([
   ['Crefformat', 2], ['newacronym', 3], ['acrodef', 2], ['DeclareSIUnit', 2], ['sisetup', 1],
   ['floatsetup', 1], ['restylefloat', 1], ['lstset', 1], ['setlist', 1], ['newcolumntype', 2], ['index', 1],
   ['glossary', 1], ['tnote', 1], ['footnotemark', 0], ['affiliationmark', 1],
-  ['correspondingauthor', 1], ['noaffiliation', 0], ['modulolinenumbers', 0],
+  ['correspondingauthor', 1], ['noaffiliation', 0], ['modulolinenumbers', 0], ['homepage', 1], ['revised', 1],
+  ['PACS', 1], ['subclass', 1], ['emailAdd', 1], ['arxivnumber', 1], ['dedicated', 1], ['journalname', 1],
   ['linenumbers', 0], ['resetlinenumber', 0],
 ]);
 
@@ -181,7 +187,7 @@ export const TEXT_SYMBOLS: ReadonlyMap<string, string> = new Map([
   ['textpercent', '%'], ['GeV', 'GeV'], ['TeV', 'TeV'], ['MeV', 'MeV'], ['keV', 'keV'], ['eV', 'eV'],
   ['PeV', 'PeV'], ['fb', 'fb'], ['pb', 'pb'], ['nb', 'nb'], ['ifb', 'fb−1'], ['ipb', 'pb−1'],
   ['invfb', 'fb−1'], ['invpb', 'pb−1'], ['fbinv', 'fb−1'], ['pbinv', 'pb−1'], ['iab', 'ab−1'], ['mm', 'mm'],
-  ['cm', 'cm'], ['ns', 'ns'], ['ps', 'ps'], ['GeVc', 'GeV/c'], ['TeVc', 'TeV/c'], ['ttbar', 'tt̄'],
+  ['cm', 'cm'], ['ns', 'ns'], ['ps', 'ps'], ['GeVc', 'GeV/c'], ['TeVc', 'TeV/c'],
   ['textasciitilde', '~'], ['textunderscore', '_'], ['textasciicircum', '^'], ['textsection', '§'],
   ['euro', '€'], ['pounds', '£'], ['textdollar', '$'], ['textbullet', '•'], ['textperiodcentered', '·'],
 ]);
@@ -241,7 +247,8 @@ put(ENV_INLINE_LIST, 'inparaenum inparaitem inparadesc');
 put(ENV_ABSTRACT, 'abstract');
 put(ENV_ACK, 'acknowledgments acknowledgements acknowledgment acknowledgement acks funding');
 put(ENV_APPENDIX, 'appendices appendix subappendices');
-put(ENV_TRANSPARENT, 'otherlanguage otherlanguage* samepage linenomath linenomath* NoHyper');
+// revtex widetext wraps a display that is part of the running sentence
+put(ENV_TRANSPARENT, 'otherlanguage otherlanguage* samepage linenomath linenomath* NoHyper widetext');
 put(ENV_DOCUMENT, 'document');
 
 /** Category of an environment name (inline lists from enumitem are `enumerate*`/`itemize*`). */

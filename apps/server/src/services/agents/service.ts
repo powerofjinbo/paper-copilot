@@ -17,6 +17,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 import {
   DraftParagraph,
   FramingsOutput,
@@ -73,6 +74,8 @@ export interface AgentServiceOptions {
   fakeHint?: { draft?: FakeDraftHint };
   /** Environment for the Claude Code process (default: process.env). */
   baseEnv?: Record<string, string | undefined>;
+  /** Test seams: replace core gateSentence / extractFictionalNumbers (default: the core functions). */
+  testing?: { gate?: typeof gateSentence; extractFictionalNumbers?: typeof extractFictionalNumbers };
 }
 
 export interface AgentServiceExt extends AgentService {
@@ -183,6 +186,8 @@ export function insertionPoint(state: DocState, sectionId: string): number {
 }
 
 export function createAgentService(ctx: Ctx, opts: AgentServiceOptions = {}): AgentServiceExt {
+  const gate = opts.testing?.gate ?? gateSentence;
+  const extractFictional = opts.testing?.extractFictionalNumbers ?? extractFictionalNumbers;
   const lang = (): Lang => ctx.config.notesLanguage;
   const running = new Map<string, string>();
   const controllers = new Set<AbortController>();
@@ -253,7 +258,7 @@ export function createAgentService(ctx: Ctx, opts: AgentServiceOptions = {}): Ag
   function fictionalNumbers(): string[] {
     const refs = readSkillReferences(ctx.config.skillDir);
     const stamp = hashString(Object.entries(refs).map(([k, v]) => k + v.length + hashString(v)).join('|'));
-    if (fictionalCache?.stamp !== stamp) fictionalCache = { stamp, numbers: extractFictionalNumbers(refs) };
+    if (fictionalCache?.stamp !== stamp) fictionalCache = { stamp, numbers: extractFictional(refs) };
     return fictionalCache.numbers;
   }
 
@@ -313,7 +318,7 @@ export function createAgentService(ctx: Ctx, opts: AgentServiceOptions = {}): Ag
       }
     };
     const dir = ctx.config.skillDir;
-    const skillMd = tryOr(() => readFileSync(`${dir}/SKILL.md`, 'utf8'), '');
+    const skillMd = tryOr(() => readFileSync(join(dir, 'SKILL.md'), 'utf8'), '');
     const references = readSkillReferences(dir);
     return buildSystemBlocks({
       task,
@@ -619,7 +624,7 @@ export function createAgentService(ctx: Ctx, opts: AgentServiceOptions = {}): Ag
     const hint: FakeDraftHint = { ...(opts.fakeHint?.draft ?? {}), ...((req as DraftReq & { fakeHint?: FakeDraftHint }).fakeHint ?? {}) };
     progress(`${simLabel(lang())}drafting ${paragraphs.length} paragraphs from the plan and the fact renderings`);
     const e = env();
-    const fails = (text: string) => !gateSentence(text, { mode: 'draft', ...e }).ok;
+    const fails = (text: string) => !gate(text, { mode: 'draft', ...e }).ok;
     const bad = hint.unsupported || hint.retryFixes ? unsupportedSentence(fails) : null;
     const signal = new AbortController().signal;
     for (const [idx, p] of paragraphs.entries()) {
@@ -660,7 +665,7 @@ export function createAgentService(ctx: Ctx, opts: AgentServiceOptions = {}): Ag
       const planFactIds = [...new Set(paragraphs.flatMap((p) => p.plan.remaining.flatMap((s) => s.factIds)))];
       let envCache: GateEnv | null = null;
       const env = () => (envCache ??= gateEnv(planFactIds));
-      const collector = new DraftCollector(planned, env);
+      const collector = new DraftCollector(planned, env, gate);
       const last: { verdict: Verdict | null } = { verdict: null };
       const gateHook = createGateHook(collector, (v) => {
         last.verdict = v;

@@ -36,11 +36,10 @@ function normalize(list: readonly SentenceUnit[], doc: Text): SentenceUnit[] {
   const len = doc.length;
   const out: SentenceUnit[] = [];
   for (const u of list) {
-    let start = clamp(u.start, len);
+    const start = clamp(u.start, len);
     let end = clamp(u.end, len);
     if (end < start) end = start;
-    if (start !== u.start || end !== u.end) u = { ...u, start, end, line: doc.lineAt(start).number };
-    out.push(u);
+    out.push(start !== u.start || end !== u.end ? { ...u, start, end, line: doc.lineAt(start).number } : u);
   }
   out.sort((a, b) => a.start - b.start || a.end - b.end);
   return out;

@@ -43,9 +43,38 @@
  *   terminal punctuation and closing quotes/brackets and any attached \cite/\footnote.
  * - Headings (\section{..} etc.) are not sentences; they are reported in `sections`.
  * - Must be fast: a 10,000-word paper in under 30 ms on a laptop; pure string scanning, no regex backtracking blow-ups.
+ *
+ * Implementation notes (scan/scanner.ts builds the mask as a class per UTF-16 unit, scan/split.ts applies
+ * the boundary rule on it):
+ * - Intent lines are read as comments: they never end a paragraph and never join a sentence's words.
+ * - A `}` closing a group opened inside the sentence, `''`/`'` closing quotes, and `~\cite{..}` directly
+ *   after the punctuation also stay with the sentence they end.
+ * - A sentence needs two consecutive ASCII letters of running text (style_check drops the others, e.g. a
+ *   lone `$N$.`); such fragments produce no unit.
+ * - Floats contribute only their captions; `\caption[short]{long}` segments the long argument; subfloat
+ *   and \subcaptionbox captions are captions too. Text inside skipped material still reports its
+ *   \label, \ref and \cite keys.
+ * - `\be ... \ee` style macros defined with \newcommand/\def for math environments are display math;
+ *   plain-text macros ending in a period (`\newcommand{\etc}{etc.}`) end sentences like style_check's
+ *   macro expansion; abbreviation macros (`\eg`, `\etal`) never do.
+ * - Part rules follow style_check part_for_heading: subsections inherit the part of their section; in a
+ *   full document, text after the abstract and before the first heading is 'intro' (style_check
+ *   build_blocks: a letter without an Introduction heading); acknowledgment/reference headings are
+ *   'body' (style_check drops them; units keep their provenance).
+ * - `\begin{acknowledgments}` / revtex `\acknowledgments` open a section 'acknowledgments'; a JHEP-style
+ *   `\abstract{..}` (also in the preamble) is the abstract. `sections` also lists these pseudo-sections
+ *   and 'front' / 'body' when text precedes the first heading, so every sentence's sectionId is in it.
+ * - Inline environments (inparaenum, revtex widetext around a display, otherlanguage) stay inside the
+ *   sentence and balance like braces; an unclosed construct (while the author types) never swallows
+ *   the rest of the file: it is read as text until it is closed. Brace and environment pairs are found
+ *   in one pass, so even broken input segments in linear time.
+ * - An optional `\item[label]` is structure, not part of the unit (style_check keeps it in its text).
  */
 import type { Part, UnitKind } from '../schemas';
-import { notImplemented } from '../util';
+import { DEFAULT_ABBREVIATIONS } from './abbreviations';
+import { scanIntentLines } from './scan/intent';
+import { Scanner, type ParaRange, type SecInfo } from './scan/scanner';
+import { splitParagraph } from './scan/split';
 
 export interface SegSentence {
   start: number;
@@ -114,13 +143,195 @@ export interface SegmentOptions {
   abbreviations?: readonly string[];
 }
 
-export function segment(source: string, opts: SegmentOptions = {}): Segmentation {
-  return notImplemented('segment', source, opts);
+/** Sorted line-start offsets of a text (line k+1 starts at starts[k]). */
+function lineStarts(text: string): Int32Array {
+  let count = 1;
+  for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) count++;
+  const starts = new Int32Array(count);
+  let k = 1;
+  for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) starts[k++] = i + 1;
+  return starts;
 }
+
+function lineAt(starts: Int32Array, offset: number): number {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (starts[mid]! <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo + 1;
+}
+
+let abbrCacheKey: readonly string[] | null = null;
+let abbrCache: ReadonlySet<string> = new Set();
+
+function abbreviationSet(list: readonly string[]): ReadonlySet<string> {
+  if (list !== abbrCacheKey) {
+    abbrCache = new Set(list.map((a) => a.trim().toLowerCase()).filter((a) => a.length > 0));
+    abbrCacheKey = list;
+  }
+  return abbrCache;
+}
+
+/** Section slug: lower-case, runs of non-alphanumerics to '-'. */
+function slug(title: string): string {
+  const s = title
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '');
+  return s || 'section';
+}
+
+function baseSectionId(sec: SecInfo, fragment: boolean): string {
+  switch (sec.kind) {
+    case 'abstract':
+      return 'abstract';
+    case 'ack':
+      return 'acknowledgments';
+    case 'front':
+      return fragment ? 'body' : 'front';
+    default:
+      if (sec.label) return sec.label;
+      if (sec.part === 'abstract' && /^abstract[.:]?$/i.test(sec.plain.trim())) return 'abstract';
+      return 'sec:' + slug(sec.plain);
+  }
+}
+
+export function segment(source: string, opts: SegmentOptions = {}): Segmentation {
+  const abbr = abbreviationSet(opts.abbreviations ?? DEFAULT_ABBREVIATIONS);
+  const intentLines = scanIntentLines(source);
+  // Intent lines are read as comment lines (same length, so offsets are unchanged).
+  let work = source;
+  if (intentLines.length > 0) {
+    let w = '';
+    let last = 0;
+    for (const l of intentLines) {
+      w += source.slice(last, l.start) + '%' + ' '.repeat(Math.max(0, l.end - l.start - 1));
+      last = l.end;
+    }
+    work = w + source.slice(last);
+  }
+  const sc = new Scanner(work);
+  sc.run();
+  const view = { src: work, cls: sc.cls, jump: sc.jump, rk: sc.rk, tokenText: sc.tokenText };
+
+  // Split every paragraph range; keep the ones that produced sentences.
+  interface RawPara {
+    range: ParaRange;
+    spans: number[];
+  }
+  const raws: RawPara[] = [];
+  const spans: number[] = [];
+  for (const range of sc.paras) {
+    spans.length = 0;
+    splitParagraph(view, range.start, range.end, abbr, spans);
+    if (spans.length > 0) raws.push({ range, spans: spans.slice() });
+  }
+  raws.sort((a, b) => a.spans[0]! - b.spans[0]! || a.range.start - b.range.start);
+
+  // Pseudo-section for text before the first heading ('front', or 'body' in fragment mode).
+  const front: SecInfo = { kind: 'front', level: 1, title: '', plain: '', start: Number.MAX_SAFE_INTEGER, part: 'body', label: null, id: '' };
+  let frontUsed = false;
+  const secOf = (r: ParaRange): SecInfo => r.sec ?? front;
+  for (const r of raws) {
+    if (r.range.sec) continue;
+    if (!frontUsed || r.spans[0]! < front.start) {
+      front.start = r.spans[0]!;
+      front.part = r.range.kind === 'prose' ? r.range.part : front.part;
+    }
+    frontUsed = true;
+  }
+  const allSecs: SecInfo[] = frontUsed ? [...sc.secs, front] : sc.secs.slice();
+  allSecs.sort((a, b) => a.start - b.start);
+  const used = new Set<string>();
+  for (const sec of allSecs) {
+    const base = baseSectionId(sec, sc.fragment);
+    let id = base;
+    for (let k = 2; used.has(id); k++) id = `${base}-${k}`;
+    used.add(id);
+    sec.id = id;
+  }
+
+  // Sentences in document order; paragraphs indexed by their first sentence.
+  const starts = lineStarts(source);
+  interface Tmp {
+    s: SegSentence;
+    para: number;
+  }
+  const tmp: Tmp[] = [];
+  const paragraphs: SegParagraph[] = [];
+  raws.forEach((r, pIndex) => {
+    const sec = secOf(r.range);
+    for (let k = 0; k < r.spans.length; k += 2) {
+      const start = r.spans[k]!;
+      const end = r.spans[k + 1]!;
+      tmp.push({
+        para: pIndex,
+        s: {
+          start,
+          end,
+          line: lineAt(starts, start),
+          text: source.slice(start, end),
+          part: r.range.part,
+          kind: r.range.kind,
+          sectionId: sec.id,
+          sectionTitle: sec.title,
+          paragraphIndex: pIndex,
+          indexInParagraph: k / 2,
+        },
+      });
+    }
+    paragraphs.push({
+      index: pIndex,
+      start: r.spans[0]!,
+      end: r.spans[r.spans.length - 1]!,
+      sectionId: sec.id,
+      part: r.range.part,
+      kind: r.range.kind,
+      sentenceIndices: [],
+    });
+  });
+  tmp.sort((a, b) => a.s.start - b.s.start || a.para - b.para);
+  const sentences: SegSentence[] = new Array(tmp.length);
+  for (let k = 0; k < tmp.length; k++) {
+    const t = tmp[k]!;
+    sentences[k] = t.s;
+    paragraphs[t.para]!.sentenceIndices.push(k);
+  }
+
+  const sections: SegSection[] = allSecs.map((sec) => ({
+    id: sec.id,
+    title: sec.title,
+    level: sec.level,
+    start: sec.start,
+    line: lineAt(starts, sec.start),
+    part: sec.part,
+    label: sec.label,
+  }));
+
+  return {
+    sentences,
+    sections,
+    paragraphs,
+    intentLines: intentLines.map((l) => ({ start: l.start, end: l.end, line: l.line, text: l.text })),
+    labels: sc.labels.slice(),
+    refs: sc.refs.slice(),
+    cites: sc.cites.slice(),
+    fragment: sc.fragment,
+  };
+}
+
+let lineCacheText: string | null = null;
+let lineCacheStarts: Int32Array = new Int32Array(1);
 
 /** 1-based line number of an offset (binary search over a precomputed line-start table is fine). */
 export function lineOf(source: string, offset: number): number {
-  let line = 1;
-  for (let i = 0; i < offset && i < source.length; i++) if (source.charCodeAt(i) === 10) line++;
-  return line;
+  if (source !== lineCacheText) {
+    lineCacheStarts = lineStarts(source);
+    lineCacheText = source;
+  }
+  // a newline at `offset` itself still belongs to the line it ends
+  return lineAt(lineCacheStarts, Math.max(0, Math.min(offset, source.length)));
 }

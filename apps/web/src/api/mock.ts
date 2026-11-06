@@ -413,8 +413,8 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
     const seg = this.segmentNow();
     if (seg && seg.sections.length) {
       const heads: SectionHead[] = [];
-      if (seg.sentences.some((s) => s.sectionId === 'abstract')) heads.push({ id: 'abstract', title: 'Abstract' });
-      for (const s of seg.sections) if (s.level <= 1) heads.push({ id: s.id, title: s.title });
+      for (const s of seg.sections) if (s.level <= 1 && !heads.some((h) => h.id === s.id)) heads.push({ id: s.id, title: s.title });
+      if (!heads.some((h) => h.id === 'abstract') && seg.sentences.some((s) => s.sectionId === 'abstract')) heads.unshift({ id: 'abstract', title: 'Abstract' });
       return heads;
     }
     return sectionsFromSource(this.text);
@@ -556,7 +556,9 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
     for (const u of res.upserts) changed.set(u.id, u);
     for (const [id, u0] of changed) {
       let u = u0;
-      let extra = ann?.annotation.factIds ?? [];
+      // The annotation's facts belong to the units it wrote, not to neighbours re-hashed by the change.
+      const inAnn = !!ann && u.start < Math.max(ann.range.to, ann.range.from + 1) && u.end > ann.range.from;
+      let extra = inAnn ? (ann?.annotation.factIds ?? []) : [];
       if (ann?.annotation.origin === 'ai_draft') {
         const key = this.unitText(u).trim();
         const d = this.pendingDrafts.get(key);
@@ -1004,7 +1006,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
         };
       });
       for (const s of sentences) this.pendingDrafts.set(s.text.trim(), s);
-      const inSection = this.units.filter((u) => u.sectionId === req.sectionId);
+      const inSection = this.units.filter((u) => u.sectionId === req.sectionId && u.kind === 'prose');
       const afterSentenceId = req.afterSentenceId ?? inSection[inSection.length - 1]?.id ?? null;
       const pid = (req.paragraphIds && section?.paragraphs.find((p) => req.paragraphIds?.includes(p.pid))?.pid) || `${req.sectionId}/draft-${this.jobSeq}`;
       const job = section?.paragraphs.find((p) => p.pid === pid)?.job || (this.notesLanguage === 'zh' ? '用数字和基线给出主要结果' : 'State the main result as a number against the baseline');

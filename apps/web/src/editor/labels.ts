@@ -48,6 +48,9 @@ export const STATE_ORDER: readonly SentenceState[] = [
   'placeholder',
 ];
 
+/** The primary modifier as shown in key hints: ⌘ on Apple platforms, Ctrl elsewhere. */
+export const MOD_KEY = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl';
+
 export function relativeTime(iso: string | null | undefined, now = Date.now()): string {
   if (!iso) return '';
   const t = Date.parse(iso);

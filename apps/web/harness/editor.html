@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>paper-copilot · editor harness</title>
+    <style>
+      .h-app { display: flex; flex-direction: column; height: 100%; }
+      .h-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--bg-elev); font: 12.5px var(--font-ui); color: var(--ink-2); }
+      .h-bar strong { color: var(--ink); font-weight: 600; margin-right: 8px; }
+      .h-bar button { font: 12px var(--font-ui); height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--ink); cursor: pointer; }
+      .h-bar button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+      .h-bar .h-spacer { flex: 1; }
+      .h-main { flex: 1; display: flex; min-height: 0; }
+      .h-editor { flex: 1; min-width: 0; position: relative; }
+      .h-side { width: 260px; border-left: 1px solid var(--line); background: var(--bg-sunken); padding: 10px 12px; overflow: auto; font: 12px/1.5 var(--font-ui); color: var(--ink-2); }
+      .h-side h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-3); margin: 12px 0 4px; font-weight: 600; }
+      .h-side button { display: block; width: 100%; text-align: left; border: none; background: none; padding: 3px 4px; border-radius: 4px; color: var(--ink); font: 12px var(--font-ui); cursor: pointer; }
+      .h-side button:hover { background: var(--bg); }
+      .h-side code { font-size: 11px; }
+      @media (max-width: 1100px) { .h-side { display: none; } }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./editor.tsx"></script>
+  </body>
+</html>

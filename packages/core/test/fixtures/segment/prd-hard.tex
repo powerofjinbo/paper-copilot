@@ -1,0 +1,144 @@
+% Synthetic PRD-style manuscript for segmenter tests (paper-copilot).
+% It mixes the constructs a real revtex4-2 draft uses. Periods in comments. Must be ignored.
+\documentclass[aps,prd,twocolumn,superscriptaddress,nofootinbib]{revtex4-2}
+\usepackage{amsmath,graphicx,hyperref}
+\usepackage[capitalise]{cleveref}
+\newcommand{\be}{\begin{equation}}
+\newcommand{\ee}{\end{equation}}
+\newcommand{\etal}{et al.}
+\newcommand{\pT}{p_{\mathrm{T}}}
+\newcommand{\ttbar}{\ensuremath{t\bar{t}}}
+\newcommand{\GNN}{GNN}
+\def\HL{HL-LHC}
+
+\begin{document}
+
+\preprint{UCI-TR-2026-01}
+\title{Tracking displaced particles with a graph neural network trained on generic events}
+\author{A. Author}
+\email{a.author@uci.edu}
+\thanks{Corresponding author. Second sentence of a thanks.}
+\affiliation{Department of Physics and Astronomy, University of California, Irvine, CA 92697, USA}
+\author{B. Author}
+\affiliation{CERN, 1211 Geneva 23, Switzerland}
+\collaboration{The Canto Collaboration}
+\date{\today}
+
+\begin{abstract}
+Long-lived particles (LLPs) decay far from the collision point. Their tracks are hard to find, e.g.\ for $d_0 > 10$~mm.
+We train a \GNN{} tracker on \ttbar{} events only and test it on displaced signals.
+It finds 96.9\% of the targets, i.e., 2.3 points more than the baseline. Is this enough?
+\end{abstract}
+
+\maketitle
+
+\section{Introduction}
+\label{sec:intro}
+Searches for LLPs at the \HL{} need efficient tracking~\cite{Ju2022Zenodo,Lee2019}.
+Graph neural networks were shown to work for prompt tracks by Ju \etal~\cite{Ju2021}, and Wang et al.\ extended them to large radii~\cite{Wang2022LRT}.
+这里写一下为什么只用ttbar训练很重要
+However, every study so far trained on the signal it evaluates (cf.\ Refs.~\cite{Lee2019,Wang2022LRT}).
+In this paper we ask a simple question: does a tracker trained without the signal still find it?
+We show that it does.\footnote{A preliminary version appeared in a workshop note. It used fewer events.} The answer holds for all species (see Sec.~\ref{sec:results}).
+
+The rest of this paper is organized as follows.
+Section~\ref{sec:method} defines the targets; \cref{sec:results} gives the results; App.~\ref{app:sim} describes the simulation.
+$N$ events are used in total.
+1000 events are kept for validation.
+\Cref{fig:eff} summarizes the main result.
+
+\section{Method}
+\label{sec:method}
+A target particle has $\pT > 1$~GeV and $|\eta| < 4$ (approx.\ the tracker acceptance).
+The efficiency is defined as
+\be
+  \epsilon = \frac{N_{\text{matched}}}{N_{\text{targets}}}.
+\ee
+The fake rate is
+\begin{align*}
+  f &= \frac{N_{\text{fake}}}{N_{\text{tracks}}},
+\end{align*}
+where a fake track matches no particle.
+Both rates use the same population, cf.~Eq.~(\ref{eq:eff}) and Eqs.~\eqref{eq:a}--\eqref{eq:b}.
+The total uncertainty combines two terms,
+\[
+  \sigma^2 = \sigma_{\text{boot}}^2 + \sigma_{\text{seed}}^2 .
+\]
+The bootstrap term dominates. % a comment. With a period.
+We quote 50\% and 95\% intervals; the price is \$0 per event (vs.\ \$5 for the full simulation).
+
+\paragraph{Selection.} Events pass a trigger with $\pT > 25$~GeV. We then apply
+\begin{itemize}
+  \item a vertex cut, and
+  \item a track-quality cut. It removes 3\% of the tracks.
+\end{itemize}
+The cuts are listed in \cref{tab:cuts}.
+
+\begin{description}
+  \item[Efficiency:] the fraction of targets with a matched track.
+  \item[Fake rate:] the fraction of tracks without a matched target.
+\end{description}
+
+\subsection{Training}
+The model is trained for 50 epochs with a learning rate of $10^{-3}$.
+We use three seeds. The spread among them is small.
+``Generic'' here means \emph{no signal at all}. The \textbf{only} input is the hit list.
+
+\section{Results}
+\label{sec:results}
+On isolated particles the tracker finds $96.94\%$ of the targets, compared with $94.62\%$ for the baseline~\cite{Ju2021}.
+This is a gain of $2.32 \pm 0.28$ points (\cref{fig:eff}).
+The gain is largest at large displacement, w.r.t.\ the prompt region.
+In ttbar the results are similar; see Figs.~\ref{fig:eff} and~\ref{fig:fake}.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig/eff.pdf}
+  \caption[Efficiency versus displacement]{Efficiency versus transverse displacement. Solid: the \ttbar-trained tracker; dashed: the baseline. The ratio is shown in the lower panel.}
+  \label{fig:eff}
+\end{figure}
+
+\begin{figure*}
+  \subfloat[Efficiency.]{\includegraphics[width=0.45\linewidth]{a.pdf}\label{fig:sub-a}}
+  \subfloat[Fake rate.]{\includegraphics[width=0.45\linewidth]{b.pdf}}
+  \caption{Comparison of the two trackers. Both use the same track builder.}
+  \label{fig:fake}
+\end{figure*}
+
+\begin{table}[b]
+  \caption{Selection cuts.\label{tab:cuts}}
+  \begin{tabular}{lc}
+    \hline
+    Cut & Value. With a period. \\
+    $\pT$ & $> 1$~GeV~\cite{Lee2019} \\
+    \hline
+  \end{tabular}
+\end{table}
+
+\iffalse
+This paragraph was commented out. It must not appear.
+\fi
+
+\begin{verbatim}
+Verbatim text. It must not appear.
+\end{verbatim}
+
+\section{Summary and outlook}
+\label{sec:concl}
+We have shown that generic training is enough.
+Future work will add pileup.
+
+\begin{acknowledgments}
+We thank the Canto team for discussions. This work was supported by the U.S. Department of Energy.
+\end{acknowledgments}
+
+\appendix
+\section{Detector simulation}
+\label{app:sim}
+The detector is simulated with Geant4~\cite{Geant4}.
+The magnetic field is 2~T.
+
+\bibliography{refs}
+
+\end{document}
+Text after the end of the document. It must not appear.

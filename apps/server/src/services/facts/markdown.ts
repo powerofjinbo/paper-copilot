@@ -111,10 +111,24 @@ function canonicalOp(op: string): string {
   }
 }
 
+const GREEK: Record<string, string> = {
+  α: 'alpha', β: 'beta', γ: 'gamma', δ: 'delta', ε: 'epsilon', ζ: 'zeta', η: 'eta', θ: 'theta', ι: 'iota', κ: 'kappa',
+  λ: 'lambda', μ: 'mu', µ: 'mu', ν: 'nu', ξ: 'xi', π: 'pi', ρ: 'rho', σ: 'sigma', τ: 'tau', υ: 'upsilon', φ: 'phi',
+  χ: 'chi', ψ: 'psi', ω: 'omega', Γ: 'Gamma', Δ: 'Delta', Θ: 'Theta', Λ: 'Lambda', Ξ: 'Xi', Π: 'Pi', Σ: 'Sigma',
+  Φ: 'Phi', Ψ: 'Psi', Ω: 'Omega',
+};
+
+/** Greek letters -> their names (η -> eta), for ids. */
+export function transliterate(s: string): string {
+  return s.replace(/[\u0370-\u03ff\u00b5]/g, (c) => GREEK[c] ?? c);
+}
+
 /** Markdown/LaTeX-light line -> plain text with the same meaning (keeps `|abs|` bars). */
 export function plainMdLine(line: string): string {
   let s = line;
   s = s.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '');
+  s = s.replace(/\\([|*_#`[\]()<>])/g, '$1'); // markdown escapes (\| inside tables)
+  s = s.replace(/&(lt|gt|ge|le|amp|nbsp);/g, (_m, e: string) => ({ lt: '<', gt: '>', ge: '≥', le: '≤', amp: '&', nbsp: ' ' })[e] ?? _m);
   s = s.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
   s = s.replace(/\*\*|__/g, '');
   s = s.replace(/(^|[\s(])\*(\S(?:[^*]*\S)?)\*(?=[\s.,;:)]|$)/g, '$1$2');
@@ -141,7 +155,7 @@ function unitSlug(unit: string): string {
 }
 
 export function slugWords(text: string, max = 48): string {
-  const words = text
+  const words = transliterate(text)
     .normalize('NFKD')
     .replace(/[^\x00-\x7F]/g, ' ')
     .split(/[^A-Za-z0-9_-]+/)
@@ -221,7 +235,7 @@ export function findComparisons(plain: string): Comparison[] {
     // An arithmetic continuation makes it an expression ("= 1000 pT / (0.3 x 2.0)").
     if (/^\s*(?:[x×*/+·^]|\\times|\\cdot)(?:\s|$|\d|\()/.test(rest)) continue;
     const op = canonicalOp(opText);
-    const qm = QTY_RE.exec(before);
+    const qm = QTY_RE.exec(before.slice(-80));
     let qty: string | null = qm ? qm[1]!.replace(/[.'-]+$/, '') : null;
     if (qty === '') qty = null;
     if (qty && !qty.startsWith('|') && STOP.has(qty.toLowerCase())) qty = null;
@@ -355,7 +369,7 @@ export function parseDefinitionsMarkdown(text: string, artifact: string): MdFact
     const h = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
     if (h) {
       flush();
-      section = stripInline(h[2]!);
+      section = h[2]!.replace(/\*\*|__|`/g, '').replace(/\s+/g, ' ').trim();
       continue;
     }
     if (line.trim() === '') {

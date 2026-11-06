@@ -14,6 +14,8 @@ import { unitAtPos, unitBefore } from '../units';
 const ABBR: ReadonlySet<string> = new Set(DEFAULT_ABBREVIATIONS.map((a) => a.toLowerCase()));
 
 const END_RE = /[.?!]["”’)\]]*[ \t\n]+$/;
+/** A sentence that is finished: terminal punctuation, closers, and attached \cite / \footnote. */
+const FINISHED_RE = /[.?!]["”’)\]]*(?:\\(?:cite[a-zA-Z]*|footnote)(?:\[[^\]]*\])?\{[^}]*\})*\s*$/;
 const BOUNDARY_RE = /[.?!]["”’)\]]*[ \t\n]+/g;
 
 function tokenBefore(text: string, punctIndex: number): string {
@@ -64,21 +66,31 @@ export function scanSentenceStart(text: string, pos: number, limit = 0, abbrevia
 /**
  * The start of the current sentence at `pos`: the containing unit's start when the cursor is inside a unit
  * (after its first character), else a scan back to the previous boundary (not crossing the previous unit).
+ * `slice(from, to)` reads the document (absolute offsets), so only a small window is ever copied.
  */
-export function sentenceStartAt(text: string, units: readonly SentenceUnit[], pos: number): number {
+export function sentenceStartIn(slice: (from: number, to: number) => string, units: readonly SentenceUnit[], pos: number): number {
   const u = unitAtPos(units, pos);
   if (u && u.start < pos) return u.start;
   const prev = unitBefore(units, pos);
-  const limit = prev ? prev.end : Math.max(0, pos - 2000);
-  return scanSentenceStart(text, pos, limit);
+  // Text typed right after an unfinished sentence continues it: locally a unit's end does not grow with
+  // typing (assoc -1) until the server's next patch.
+  const prevOpen = prev ? !FINISHED_RE.test(slice(prev.start, prev.end)) : false;
+  const limit = Math.max(prev ? (prevOpen ? prev.start : prev.end) : 0, pos - 2000);
+  const window = slice(limit, pos);
+  return limit + scanSentenceStart(window, window.length, 0);
 }
 
 /** Text of the current sentence before the cursor (what the ghost must continue verbatim). */
-export function sentencePrefix(text: string, units: readonly SentenceUnit[], pos: number): string {
-  const s = sentenceStartAt(text, units, pos);
-  const prefix = text.slice(s, pos);
-  // a prefix never spans a blank line or a comment line
+export function sentencePrefixIn(slice: (from: number, to: number) => string, units: readonly SentenceUnit[], pos: number): string {
+  const s = sentenceStartIn(slice, units, pos);
+  const prefix = slice(s, pos);
+  // a prefix never spans a blank line
   return prefix.includes('\n\n') ? prefix.slice(prefix.lastIndexOf('\n\n') + 2) : prefix;
+}
+
+/** Same as sentencePrefixIn over a plain string. */
+export function sentencePrefix(text: string, units: readonly SentenceUnit[], pos: number): string {
+  return sentencePrefixIn((a, b) => text.slice(a, b), units, pos);
 }
 
 /** English words in a LaTeX prefix (commands, math, citations and numbers are not words). */

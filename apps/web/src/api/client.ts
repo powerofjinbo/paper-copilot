@@ -117,6 +117,9 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly queue: ClientMessage[] = [];
   private readonly openFiles = new Set<string>();
+  /** Files re-opened automatically on the current connection; absorbs one echoed doc.open each. */
+  private reopened = new Set<string>();
+  private reopenedTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly listeners = new Map<string, Set<AnyListener>>();
   private readonly connListeners = new Set<(c: boolean) => void>();
   private readyWaiters: Array<() => void> = [];
@@ -171,7 +174,11 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
   }
 
   send(msg: ClientMessage): void {
-    if (msg.type === 'doc.open') this.openFiles.add(msg.file);
+    if (msg.type === 'doc.open') {
+      this.openFiles.add(msg.file);
+      // A client that re-opens its file right after a reconnect would only get a second identical snapshot.
+      if (this._connected && this.reopened.delete(msg.file)) return;
+    }
     const ws = this.ws;
     if (this._connected && ws && ws.readyState === WS_OPEN) {
       this.rawSend(msg);
@@ -187,6 +194,8 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
     this.disposed = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+    if (this.reopenedTimer) clearTimeout(this.reopenedTimer);
+    this.reopenedTimer = null;
     const ws = this.ws;
     this.ws = null;
     if (ws) {
@@ -263,6 +272,12 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
       this.attempts = 0;
       this.rawSend({ type: 'hello', clientId: this.clientId });
       for (const file of this.openFiles) this.rawSend({ type: 'doc.open', file });
+      this.reopened = new Set(this.openFiles);
+      if (this.reopenedTimer) clearTimeout(this.reopenedTimer);
+      this.reopenedTimer = setTimeout(() => {
+        this.reopened.clear();
+        this.reopenedTimer = null;
+      }, 2000);
       const pending = this.queue.splice(0, this.queue.length);
       for (const m of pending) {
         if (m.type === 'hello' || m.type === 'doc.open') continue; // just sent
@@ -355,7 +370,7 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
         cache: 'no-store',
       });
       const body = await readBody(res);
-      if (!res.ok) throw new ApiError(messageOf(body, `session request failed (${res.status})`), res.status, body);
+      if (!res.ok) throw new ApiError(messageOf(body, `Cannot reach the paper-copilot server (session request failed with HTTP ${res.status}).`), res.status, body);
       const tok = body && typeof body === 'object' ? (body as { token?: unknown }).token : undefined;
       if (typeof tok !== 'string' || !tok) throw new ApiError('the session response has no token', res.status, body);
       this.token = tok;

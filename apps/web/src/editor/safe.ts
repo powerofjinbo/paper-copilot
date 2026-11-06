@@ -179,7 +179,7 @@ function roundTo(x: number, decimals: number): number {
   return Math.round(x * f) / f;
 }
 
-function matchLocal(tok: NumeralToken, facts: Fact[]): NumeralMatch[] {
+function matchLocal(tok: NumeralToken, facts: readonly Fact[]): NumeralMatch[] {
   const out: NumeralMatch[] = [];
   for (const f of facts) {
     if (f.excluded || typeof f.value !== 'number') continue;
@@ -199,9 +199,9 @@ function matchLocal(tok: NumeralToken, facts: Fact[]): NumeralMatch[] {
   return out;
 }
 
-export function matchesOf(tok: NumeralToken, facts: Fact[]): NumeralMatch[] {
+export function matchesOf(tok: NumeralToken, facts: readonly Fact[]): NumeralMatch[] {
   if (facts.length === 0) return [];
-  return guard('matchNumeral', () => matchNumeral(tok, facts), () => matchLocal(tok, facts));
+  return guard('matchNumeral', () => matchNumeral(tok, facts as Fact[]), () => matchLocal(tok, facts));
 }
 
 function fmtSig(x: number, sig: number | null): string {
