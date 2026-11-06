@@ -17,7 +17,7 @@
 - `powerofjinbo/HEP-Pilot`: reuse the JSON shapes for grounding: results manifest (`id, definition, value, unit, uncertainties, artifact, validation_state: candidate|reproduced|independently_validated`), `evidence.jsonl` (claim → artifact + SHA-256 + command), note-writer `claim_map` (`claim_id, text, evidence[], citations[], qualification, status: supported|placeholder|excluded`), citation gate, and the rule "prose must not contain independently typed copies of mutable numbers".
 - Voice corpus on Google Drive (Drive connector): `FCC_ee_qqlvqq_M.pdf`, `A_muon_missing_m_for_bkg_reject_LDMX_M.pdf` / `_BE.pdf`, the Google Doc "Thesis Proposal: Reconstructing Displaced Tracks…" (2026-10-31), Writing 45/60 essays. The TIME paper text was not written by the user and is excluded from the voice corpus.
 
-**Research facts the design rests on** (full notes: `<scratchpad>/research/*.md`; final design document: `…/scratchpad/design/synthesize.md`).
+**Research facts the design rests on** (the research notes are summarized below; the full design is in [design.md](design.md)).
 - Agent SDK (TS 0.3.318, peer deps zod 4, @anthropic-ai/sdk ≥ 0.93, @modelcontextprotocol/sdk): skills load from disk (`settingSources`, `additionalDirectories`, per-query `skills: ['hep-paper-writing']`; `settingSources: []` loads none); subagents with own model/tools/skills; in-process MCP tools (`tool()`, `createSdkMcpServer`); PreToolUse/PostToolUse/Stop hooks (`updatedToolOutput`, deny); sessions resume/fork; structured outputs via `outputFormat`; `maxBudgetUsd`. SDK-built apps must authenticate with an **API key** (docs forbid offering claude.ai login). Ghost text should be direct Messages API calls (the SDK loop adds latency and does not stream subagent deltas).
 - Models and prices (per MTok): haiku-5-5 $0.10/$0.50, cache read $0.01, thinking may be disabled at effort low (~0.5–1.0 s TTFT, ~170 tok/s, third-party single runs; Anthropic publishes no TTFT numbers; low effort can leak reasoning-like text); sonnet-5-5 $2/$10, no-thinking only via `thinking: {type: 'between_tools'}`; opus-5-5 $4/$20. Caching: 512-token minimum, 4 breakpoints, 5-min TTL refreshed on read, 1-h TTL at 2× write cost; caches are per model; changing effort/thinking/`output_config.format` invalidates; never edit earlier turns of a stored conversation (preserved thinking) → sentence-level requests are stateless single shots built from document state.
 - Editor stack: CodeMirror 6 primitives (mark decorations for sentences, widget decorations for gray multi-line ghost text, gutter markers, hover tooltips, `Prec.highest` Tab keymap; test Chinese IME composition with a widget at the cursor); `@marimo-team/codemirror-ai` 0.3.10 (Apache-2.0) exposes `nextEditPrediction({fetchFn, delay, defaultKeymap})` and `aiExtension({prompt, keymaps})` (built for code diffs; use as reference, budget a home-grown StateField widget); `@codemirror/legacy-modes` stex for highlighting (MIT; `codemirror-lang-latex` is AGPL); LaTeX AST with offsets: `@unified-latex/unified-latex-util-parse` 1.8.4 (slice source by offsets, never re-print); `.bib`: `@retorquere/bibtex-parser` 13.0.15; PDF: `pdfjs-dist` 6.5.438; SyncTeX via the `synctex` CLI. Avoid AGPL code (Overleaf CE, TeXlyre-BusyTeX).
@@ -159,7 +159,7 @@ packages/client-core/ ghost state machine + sentence-action contracts (shared by
 sidecar/lintd.py    Python JSON-lines server importing style_check.py from the skill path; sidecar/tests/
 scripts/bench/      ttft.ts (latency harness), segmenter-compare.ts (vs style_check --dump), prewarm-format.ts
 fixtures/           a synthetic revtex4-2 paper built from Canto README facts + its results/*_claim.json copies; a small .bib
-docs/design.md      the synthesized design (copied from the scratchpad); docs/adr/ for decisions
+docs/design.md      the synthesized design; docs/adr/ for decisions
 ```
 
 ## Implementation phases
@@ -198,7 +198,7 @@ Honest total: 5–6 months part-time for one developer with Claude Code. The Cod
 
 ## Critical files
 
-- Skill: `~/.claude/skills/hep-paper-writing/SKILL.md` (block A; Step 0 items, templates, guardrails, checklist → outline schema, move tags, gate rules, review rubric) and `scripts/style_check.py` (`analyse`, `run_checks`, `flag`, `split_sentences`, `ABBR` → `lintd.py` and the segmenter rules).
-- HEP-Pilot shapes: `<scratchpad>/repos/HEP-Pilot/schemas/results-manifest.schema.json`, `references/artifact-contracts.md`, `agents/roles/note-writer.md` (fact store, `independent_validations`, claim map).
-- Canto inputs: `…/scratchpad/repos/Displaced_tracks_GNN/results/addendum_g_g1_v1_claim.json`, `results/*.csv`, `docs/definitions.md`, `docs/paper_facts.md`, `README.md` (extractor locators, cut/definition facts, literature-record shape, fixture content).
-- Design and research: `…/scratchpad/design/synthesize.md` (full design; copy into `docs/design.md`), `…/scratchpad/design/judge_*.json`, `…/scratchpad/research/*.md`.
+- Skill (`powerofjinbo/hep-writing-skill`, installed at `~/.claude/skills/hep-paper-writing/`): `SKILL.md` (block A; Step 0 items, templates, guardrails, checklist → outline schema, move tags, gate rules, review rubric) and `scripts/style_check.py` (`analyse`, `run_checks`, `flag`, `split_sentences`, `ABBR` → `sidecar/lintd.py` and the segmenter rules).
+- HEP-Pilot shapes (`powerofjinbo/HEP-Pilot`): `schemas/results-manifest.schema.json`, `references/artifact-contracts.md`, `agents/roles/note-writer.md` (fact store, `independent_validations`, claim map).
+- Canto inputs (`powerofjinbo/Displaced_tracks_GNN`; trimmed copies in `fixtures/canto-demo/repo/`): `results/addendum_g_g1_v1_claim.json`, `results/*.csv`, `docs/definitions.md`, `docs/paper_facts.md`, `README.md` (extractor locators, cut/definition facts, literature-record shape, fixture content).
+- Design: [design.md](design.md).

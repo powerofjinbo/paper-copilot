@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out the hep-paper-writing skill (used by the linter sidecar and prompt tests)
+        uses: actions/checkout@v4
+        with:
+          repository: powerofjinbo/hep-writing-skill
+          path: .skill
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install TeX Live (latexmk, revtex4-2, synctex)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends latexmk texlive-latex-base texlive-latex-recommended \
+            texlive-latex-extra texlive-publishers texlive-fonts-recommended texlive-science
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - name: Unit and integration tests (simulated AI, no API key)
+        run: pnpm test
+        env:
+          PAPER_SKILL_DIR: ${{ github.workspace }}/.skill
+          PAPER_FAKE_LLM: '1'
+      - run: pnpm --filter @paper-copilot/web build
