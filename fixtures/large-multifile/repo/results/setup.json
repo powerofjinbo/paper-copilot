@@ -1,0 +1,6 @@
+{
+ "sqrt_s_tev": 14,
+ "n_layers": 22,
+ "n_ttbar_events": 10000,
+ "n_signal_events": 10000
+}

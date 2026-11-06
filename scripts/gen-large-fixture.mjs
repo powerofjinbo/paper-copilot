@@ -522,7 +522,7 @@ RES.push([
   S(`On the displaced test particles, the generic-trained tracker finds ${pct(H.eff_A)} of the targets.`),
   S(`The signal-trained tracker finds ${pct(H.eff_B)} of the same targets.`),
   S(`The difference is ${H.delta_points.toFixed(2)}~$\\pm$~${H.sigma_points.toFixed(2)} points, in favour of the tracker that never saw the signal.`),
-  S(`The test set holds ${thousands(H.n_targets)} target particles, so the difference corresponds to about two hundred particles.`),
+  S(`The test set holds ${thousands(H.n_targets)} target particles, so the difference is far more than a handful of particles.`),
   S(`${tab('headline')} lists the efficiencies together with the fake-track and duplicate rates.`),
 ]);
 RES.push([
@@ -537,7 +537,7 @@ for (let i = 0; i < DISP.length; i++) {
   if (i === 0) {
     RES.push([
       S(`${Fig('eff_disp')} shows the efficiency as a function of the transverse displacement of the production vertex.`),
-      S(`Close to the beam line, between zero and ${d.r_hi_mm}~mm, both trackers find more than ${pct(Math.min(d.eff_A, d.eff_B) - 0.0005, 1)} of the targets.`),
+      S(`Close to the beam line, between zero and ${d.r_hi_mm}~mm, the two trackers find ${pct(d.eff_A)} and ${pct(d.eff_B)} of the targets.`),
     ]);
   } else {
     const p = RES[RES.length - 1];
@@ -699,16 +699,17 @@ const APPX_SEEDS = [
   ],
 ];
 
+/** Footnotes, attached to the sentence that starts with the given text (see attachFootnotes). */
 const FOOTNOTES = [
-  S('The module map is built from training events only, so it contains no information about the test sample.'),
-  S('We use the true hit-to-particle assignment only for training and for the evaluation, never inside the pipeline.'),
-  S('The quadrature sum assumes that the two components are independent, which holds because they come from different sources of randomness.'),
-  S('A track may match at most one particle and a particle at most one track under double majority.'),
-  S('The pile-up events are drawn from the same generic sample as the training events but from disjoint event numbers.'),
-  S('The timing excludes reading the events from disk and writing the tracks.'),
-  S('Heavy-flavour hadrons travel a few millimetres before they decay, so the generic sample does contain some displaced tracks.'),
-  S('Fixing the seed of the bootstrap makes the uncertainty itself reproducible.'),
-];
+  ['Dedicated large-radius tracking', 'Large-radius passes usually run only on the hits that the prompt pass left unused.'],
+  ['This scarcity is exactly', 'Heavy-flavour hadrons travel a few millimetres before they decay, so the generic sample does contain some displaced tracks.'],
+  ['The signal sample contains', 'The decay length of each heavy neutral lepton is drawn from an exponential distribution with the nominal lifetime.'],
+  ['A module map, learned', 'The module map is built from training events only, so it contains no information about the test sample.'],
+  ['A fake track is a track', 'A track may match at most one particle and a particle at most one track under double majority.'],
+  ['The difference is ', 'The quadrature sum assumes that the two components are independent, which holds because they come from different sources of randomness.'],
+  ['Neither tracker was trained with pile-up', 'The pile-up events are drawn from the same generic sample as the training events but from disjoint event numbers.'],
+  ['Graph construction takes', 'The timing excludes reading the events from disk and writing the tracks.'],
+].map(([at, text]) => [at, S(text)]);
 
 /* ---- more prose (each block is placed below) ---- */
 const INTRO_MORE = [
@@ -831,7 +832,7 @@ const RES_LRT = [
     S('We show it only to place the learned trackers on a familiar scale.'),
   ],
   [
-    S('Many searches need both decay products of the long-lived particle, not just one of them.'),
+    S(`Many searches need both decay products of the long-lived particle, because a vertex fit combines them${cite('Vertexing')}.`),
     S(`The generic-trained tracker finds both daughters in ${pct(lrt.pair_eff_A)} of the signal events, against ${pct(lrt.pair_eff_B)} for the signal-trained tracker.`),
     S('The pair efficiency is roughly the square of the single-particle efficiency, so small gains per particle become larger gains per event.'),
     S('The daughters of one decay are often close to each other, and a tracker can merge them into one track.'),
@@ -884,7 +885,7 @@ const APPX_GRAPH = [
     S('The module map lists, for every module, the modules on the next layer that particles reached in the training events.'),
     S('A pair of hits enters the graph only if their modules are listed together.'),
     S('The map is built once from the generic training events and used for both trackers.'),
-    S('Building it from signal events instead changes the graph by less than one edge in a thousand.'),
+    S('Building it from signal events instead changes only a negligible fraction of the edges of the graph.'),
     S('The choice of events for the map therefore does not affect the comparison.'),
   ],
   [
@@ -906,7 +907,7 @@ const APPX_CHECKS = [
   [
     S('A last check concerns the test events themselves.'),
     S('We split the external test sample into halves by event number and evaluated each half separately.'),
-    S('Both halves give differences within one standard deviation of the full result.'),
+    S('Both halves agree with the full result within its uncertainty.'),
     S('The result is therefore not driven by a small group of unusual events.'),
   ],
 ];
@@ -927,6 +928,106 @@ const SUMMARY_MORE = [
     S('The generic-trained tracker is better on displaced particles even though it saw almost none of them in training.'),
     S('Its advantage grows where the signal-trained tracker should be strongest, at large displacement.'),
     S('And it degrades more slowly when the conditions of the test events move away from those of the training.'),
+  ],
+];
+
+
+const INTRO_RELATED = [
+  [
+    S('Learned tracking has developed quickly over the last decade.'),
+    S('The first studies classified hit pairs with simple networks and built tracks by hand.'),
+    S('Graph networks then made it possible to reason over many hits at once.'),
+    S('Metric learning replaced hand-written geometric rules in the construction of the graph.'),
+    S('End-to-end pipelines now take raw hits and return tracks with parameters.'),
+    S('Throughout this development, the training events were drawn from the process under study.'),
+  ],
+];
+const METHOD_PREP = [
+  [
+    S('Before the graph is built, the hits of each event are sorted by layer and by azimuthal angle.'),
+    S('Hits from the same module that lie closer than the sensor pitch are merged into one space point.'),
+    S('The merged space point keeps the identity of the particle that left most of its charge.'),
+    S('Space points are written to disk together with the truth information needed for training and evaluation.'),
+    S('The truth information never reaches the network at inference time.'),
+  ],
+  [
+    S('Events are processed one at a time, without batching across events at inference.'),
+    S('Each event is independent, so the pipeline can be distributed over many processors without communication.'),
+    S('The same code runs the training, the validation and the evaluation, with only the input files changed.'),
+    S('This guarantees that the two trackers see the same preprocessing.'),
+  ],
+];
+const RES_EVENT = [
+  [
+    S('The efficiency averages over particles, but a search selects events.'),
+    S('We therefore also counted, event by event, how many displaced targets each tracker finds.'),
+    S('In most signal events both trackers find the same displaced particles.'),
+    S('Where they differ, the generic-trained tracker usually finds one more particle than the signal-trained tracker.'),
+    S('Events in which the signal-trained tracker finds more are less common and contain mostly soft particles near the edge of the acceptance.'),
+  ],
+  [
+    S('The training size matters for both trackers.'),
+    S('With half of the training events, both trackers lose some efficiency, and the difference between them stays about the same.'),
+    S('With a quarter of the training events, the signal-trained tracker loses more, and the difference grows.'),
+    S('The generic-trained tracker is thus less sensitive to the amount of training data.'),
+    S('This is consistent with the larger number of particles per generic event.'),
+  ],
+];
+const DISCUSSION_MORE = [
+  [
+    S('Several open questions remain.'),
+    S('We have not studied how the result changes with the geometry of the detector.'),
+    S('A detector with fewer layers gives a learned tracker less information per particle and may change the balance between the trackers.'),
+    S('We have also not studied tracks from particles that are not charged leptons or hadrons, such as long-lived charged particles that decay inside the tracker.'),
+    S('Such particles leave short tracks that end abruptly, which neither training sample contains in large numbers.'),
+    S('Each of these questions can be answered with the same controlled comparison.'),
+  ],
+];
+const APPX_CURVES = [
+  [
+    S('Both trackers converge within the allotted epochs.'),
+    S('The validation loss of the generic-trained tracker flattens earlier than that of the signal-trained tracker.'),
+    S('Neither tracker shows signs of overfitting: the training and validation losses stay close until the end.'),
+    S('The epoch with the best validation efficiency lies in the last third of the training for every seed.'),
+    S('Training for longer does not change the efficiencies within the seed spread.'),
+  ],
+];
+
+
+const RES_PROMPT = [
+  [
+    S('Prompt particles provide a control for the whole comparison.'),
+    S('On prompt targets in the signal events, the two trackers agree to within their uncertainties.'),
+    S('The same holds for prompt targets in held-out generic events.'),
+    S('The difference on displaced targets is therefore not a general offset between the trackers.'),
+    S('It appears only for the particles whose production point lies away from the beam line.'),
+    S('This pattern is what one expects if the signal-trained tracker has learned the topology of one decay rather than the geometry of tracks.'),
+  ],
+];
+const METHOD_HW = [
+  [
+    S('Training and inference run on one graphics processor per job.'),
+    S('A full training run of either tracker takes less than a day.'),
+    S('The evaluation of all test samples for one network takes a few hours.'),
+    S('All runs use the same software versions, which are recorded with their outputs.'),
+    S('Floating-point results differ slightly between processors, but by far less than the seed spread.'),
+  ],
+];
+const INTRO_CONTRIB = [
+  [
+    S('Our contribution is a controlled measurement, not a new method.'),
+    S('It isolates the effect of the training sample on a learned tracker.'),
+    S('It reports that effect with an uncertainty that includes the randomness of the training.'),
+    S('And it checks that the effect survives changes of the signal model, the conditions and the analysis choices.'),
+  ],
+];
+const APPX_DATA = [
+  [
+    S('The test samples are stored separately from the training and validation samples.'),
+    S('Access to them was restricted until the pipeline was frozen.'),
+    S('The list of test events and the bootstrap event lists were fixed at the same time.'),
+    S('Any later change of the analysis would have been recorded with its date and reason.'),
+    S('No such change was needed.'),
   ],
 ];
 
@@ -1009,11 +1110,19 @@ const TABLES = {
 /* Layout: one sentence per line / one paragraph per line / hard-wrapped                 */
 /* ------------------------------------------------------------------------------------ */
 
-let fnIndex = 0;
-/** Attach a footnote to the end of a sentence (inside its terminal punctuation, as authors do). */
-function withFootnote(s) {
-  const f = FOOTNOTES[fnIndex++ % FOOTNOTES.length];
-  return s.replace(/([.?!])$/, `\\footnote{${f}}$1`);
+/** Attach each footnote to the end of its sentence (before the terminal punctuation, as authors do). */
+function attachFootnotes(blocks) {
+  for (const [at, text] of FOOTNOTES) {
+    let done = false;
+    for (const paras of blocks)
+      for (const p of paras)
+        for (let i = 0; i < p.length && !done; i++)
+          if (p[i].startsWith(at)) {
+            p[i] = p[i].replace(/([.?!])$/, `\\footnote{${text}}$1`);
+            done = true;
+          }
+    if (!done) throw new Error(`footnote anchor not found: ${at}`);
+  }
 }
 const perLine = (paras) => paras.map((p) => p.join('\n')).join('\n\n');
 const perPara = (paras) => paras.map((p) => p.join(' ')).join('\n\n');
@@ -1040,20 +1149,17 @@ const DISPLAY = {
 };
 
 function intro() {
-  const paras = INTRO.map((p) => [...p]);
-  paras[1][3] = withFootnote(paras[1][3]);
-  paras[7][1] = withFootnote(paras[7][1]);
+  const base = INTRO.map((p) => [...p]);
+  const more = INTRO_MORE.map((p) => [...p]);
+  const paras = [...base.slice(0, 2), more[0], base[2], ...INTRO_RELATED, more[1], base[3], more[2], ...base.slice(4, 6), ...INTRO_CONTRIB, ...base.slice(6, 8), more[3], ...base.slice(8)];
   return ['% Introduction (one sentence per line).', '\\section{Introduction}', '\\label{sec:intro}', '', perLine(paras), ''].join('\n');
 }
 
 function method() {
   const det = METHOD_DET.map((p) => [...p]);
-  det[1][2] = withFootnote(det[1][2]);
   const g = METHOD_GRAPH.map((p) => [...p]);
-  g[0][3] = withFootnote(g[0][3]);
   const tr = METHOD_TRAIN.map((p) => [...p]);
   const mt = METHOD_METRIC.map((p) => [...p]);
-  mt[0][0] = withFootnote(mt[0][0]);
   const out = [
     '% Method (one paragraph per line).',
     '\\section{Detector, samples and method}',
@@ -1062,9 +1168,11 @@ function method() {
     '\\subsection{Detector and samples}',
     '\\label{sec:detector}',
     '',
-    perPara(det.slice(0, 2)),
+    perPara(det.slice(0, 1)),
     '',
     figure('detector'),
+    '',
+    perPara([det[1], ...METHOD_SIM, ...METHOD_PREP]),
     '',
     TABLES.samples,
     '',
@@ -1100,24 +1208,32 @@ function method() {
     '',
     perPara(mt.slice(2)),
     '',
+    '\\subsection{Track fit and validation}',
+    '\\label{sec:validation}',
+    '',
+    perPara([...METHOD_FIT, ...METHOD_HW]),
+    '',
   ];
   return out.join('\n');
 }
 
 function results() {
   const r = RES.map((p) => [...p]);
-  r[1][4] = withFootnote(r[1][4]);
-  r[6][4] = withFootnote(r[6][4]);
-  r[8][1] = withFootnote(r[8][1]);
+  const extra = [...RES_KIN, ...RES_SIGNAL, ...RES_LRT, ...RES_FAIL, ...RES_EVENT, ...RES_PROMPT];
+  r.splice(6, 0, ...extra);
   const blocks = ['% Results (hard-wrapped at about 100 columns).', '\\section{Results}', '\\label{sec:results}', ''];
-  const place = { 0: ['table:headline'], 1: ['fake'], 2: ['eff_disp'], 4: ['eff_species', 'table:species'], 5: ['pileup'], 6: ['resolution'], 7: ['graph'], 8: ['timing'], 9: ['ablation'] };
+  const X = extra.length;
+  const place = { 0: ['table:headline'], 1: ['fake'], 2: ['eff_disp'], 4: ['eff_species', 'table:species'], 5: ['pileup'], [6 + X]: ['resolution'], [7 + X]: ['graph'], [8 + X]: ['timing'], [9 + X]: ['ablation'] };
   r.forEach((p, i) => {
     if (i === 2) blocks.push('\\subsection{Displacement, species and pile-up}', '\\label{sec:dependence}', '');
-    if (i === 6) blocks.push('\\subsection{Resolution, graph and timing}', '\\label{sec:resolution}', '');
-    if (i === 10) blocks.push('\\subsection{Checks and interpretation}', '\\label{sec:checks}', '');
+    if (i === 6) blocks.push('\\subsection{Kinematics, signal points and pairs}', '\\label{sec:kinematics}', '');
+    if (i === 6 + RES_KIN.length + RES_SIGNAL.length + RES_LRT.length) blocks.push('\\subsection{Failure modes}', '\\label{sec:failures}', '');
+    if (i === 6 + X) blocks.push('\\subsection{Resolution, graph and timing}', '\\label{sec:resolution}', '');
+    if (i === 10 + X) blocks.push('\\subsection{Checks and interpretation}', '\\label{sec:checks}', '');
     blocks.push(wrapped([p]), '');
     for (const f of place[i] ?? []) blocks.push(f.startsWith('table:') ? TABLES[f.slice(6)] : figure(f, f === 'eff_disp'), '');
   });
+  blocks.push('\\section{Discussion}', '\\label{sec:discussion}', '', wrapped([...DISCUSSION, ...DISCUSSION_MORE]), '');
   return blocks.join('\n');
 }
 
@@ -1131,14 +1247,24 @@ function appendix() {
     '',
     figure('bootstrap'),
     '',
+    '\\section{Graph construction and features}',
+    '\\label{app:graph}',
+    '',
+    perLine(APPX_GRAPH),
+    '',
     '\\section{Seeds, hyperparameters and training statistics}',
     '\\label{app:seeds}',
     '',
-    perLine(APPX_SEEDS),
+    perLine([...APPX_SEEDS, ...APPX_CURVES]),
     '',
     figure('seeds'),
     '',
     TABLES.hyper,
+    '',
+    '\\section{Further checks and reproducibility}',
+    '\\label{app:checks}',
+    '',
+    perLine([...APPX_CHECKS, ...APPX_REPRO, ...APPX_DATA]),
     '',
   ].join('\n');
 }
@@ -1173,7 +1299,7 @@ function main() {
     '\\section{Summary}',
     '\\label{sec:summary}',
     '',
-    perLine(SUMMARY),
+    perLine([SUMMARY[0], ...SUMMARY_MORE, SUMMARY[1]]),
     '',
     '\\begin{acknowledgments}',
     S('We thank the authors of the open simulation and tracking software that this study builds on.'),
@@ -1192,6 +1318,8 @@ function main() {
 /* ------------------------------------------------------------------------------------ */
 /* Write                                                                                 */
 /* ------------------------------------------------------------------------------------ */
+
+attachFootnotes([INTRO, INTRO_MORE, METHOD_DET, METHOD_GRAPH, METHOD_METRIC, RES]);
 
 const files = {
   'tex/main.tex': main(),
@@ -1220,7 +1348,8 @@ for (const [k, v] of Object.entries(REPO)) files[`repo/${k}`] = v;
 
 // every bib entry is cited, every figure and table referenced
 const allTex = Object.entries(files).filter(([k]) => k.endsWith('.tex')).map(([, v]) => v).join('\n');
-for (const b of BIB) if (!allTex.includes(b.key)) throw new Error(`bib key never cited: ${b.key}`);
+const uncited = BIB.filter((b) => !allTex.includes(b.key)).map((b) => b.key);
+if (uncited.length) throw new Error(`bib keys never cited: ${uncited.join(', ')}`);
 for (const k of Object.keys(FIGS)) if (!allTex.includes(`\\ref{fig:${k}}`)) throw new Error(`figure never referenced: ${k}`);
 for (const k of Object.keys(TABLES)) if (!allTex.includes(`\\ref{tab:${k}}`)) throw new Error(`table never referenced: ${k}`);
 

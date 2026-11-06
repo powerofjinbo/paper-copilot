@@ -91,6 +91,8 @@ export class DraftCollector {
   private readonly attempts = new Map<string, number>();
   private readonly failures = new Map<string, Map<number, number>>();
   private readonly pending: Array<{ toolUseId: string | null; input: unknown }> = [];
+  /** The latest proposal of each paragraph the gate sent back for a fix (the run may end before the fix). */
+  private readonly lastRetry = new Map<string, unknown>();
   private env: GateEnv | null = null;
   /** Every verdict, in order (for job results and logs). */
   readonly log: Array<{ pid: string | null; status: Verdict['status']; failing: number }> = [];
@@ -140,9 +142,19 @@ export class DraftCollector {
     if (idx >= 0) this.pending.splice(idx, 1);
   }
 
-  /** Judge proposals whose hook never ran (as final attempts, so nothing is lost). */
+  /**
+   * Judge proposals whose hook never ran (as final attempts, so nothing is lost), then close every
+   * paragraph whose last proposal was sent back for a fix that never came (the model stopped, or the
+   * run hit its turn / budget / time limit): its passing sentences are kept as proposed and the failing
+   * ones as unsupported with the gate's placeholders, instead of losing the whole paragraph.
+   */
   finalize(): void {
     for (const p of this.pending.splice(0)) this.propose(p.input, { final: true });
+    for (const pid of this.order) {
+      const raw = this.lastRetry.get(pid);
+      if (raw !== undefined && !this.accepted.has(pid)) this.propose(raw, { final: true });
+    }
+    this.lastRetry.clear();
   }
 
   private remainingNote(): string {
@@ -206,6 +218,7 @@ export class DraftCollector {
         'Fix only these sentences and keep the others verbatim. Use only numbers from get_facts (at the given renderings) and only cite keys from get_lit; where the data is missing, write a descriptive placeholder such as [fact?: what is missing] instead of a number.',
         `Then call propose_paragraph again with the whole paragraph (pid "${input.pid}"). A sentence that fails twice is kept as "unsupported" for the author to resolve.`,
       ].join('\n');
+      this.lastRetry.set(input.pid, raw);
       return this.finish({ status: 'retry', pid: input.pid, message, failing: failed }, failing.length);
     }
 
@@ -229,6 +242,7 @@ export class DraftCollector {
     });
     const paragraph: DraftParagraph = { pid: input.pid, job: plan.job.trim() || (input.job ?? '').trim(), sentences: out };
     this.accepted.set(input.pid, paragraph);
+    this.lastRetry.delete(input.pid);
     const unsupported = out.filter((s) => s.state === 'unsupported').length;
     const message = [
       `Faithfulness gate: paragraph "${input.pid}" accepted with ${out.length} sentences${unsupported ? ` (${unsupported} kept as unsupported for the author: ${failing.map((i) => i + 1).join(', ')})` : ''}.`,

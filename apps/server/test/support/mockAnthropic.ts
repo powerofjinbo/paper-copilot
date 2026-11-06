@@ -220,9 +220,15 @@ function contentBlocks(content: unknown): unknown[] {
 /** All violations of one /v1/messages (or count_tokens) request. */
 export function validateMessagesRequest(headers: Record<string, string>, body: Record<string, unknown> | null, o: { apiKey: string | null; policy: 'api' | 'app'; countTokens?: boolean }): Violation[] {
   const v: Violation[] = [];
-  const key = headers['x-api-key'];
-  if (!key) v.push({ level: 'api', code: 'auth_missing', message: `no x-api-key header${headers.authorization ? ' (an Authorization header was sent instead)' : ''}` });
-  else if (o.apiKey !== null && key !== o.apiKey) v.push({ level: 'api', code: 'auth_wrong_key', message: 'x-api-key is not the expected test key' });
+  // An API key travels as `x-api-key` (the Claude Code CLI, older SDKs) or as `Authorization: Bearer
+  // <key>` (@anthropic-ai/sdk 1.x sends every credential that way); the API accepts both.
+  const xKey = headers['x-api-key'] || null;
+  const bearer = /^Bearer\s+(\S+)$/i.exec(headers.authorization ?? '')?.[1] ?? null;
+  const key = xKey ?? bearer;
+  if (!key) v.push({ level: 'api', code: 'auth_missing', message: `no x-api-key or Authorization: Bearer header${headers.authorization ? ' (a non-Bearer Authorization header was sent)' : ''}` });
+  else if (o.apiKey !== null && key !== o.apiKey) v.push({ level: 'api', code: 'auth_wrong_key', message: 'the credential sent is not the expected test key' });
+  if (xKey && bearer && xKey !== bearer) v.push({ level: 'api', code: 'auth_conflict', message: 'x-api-key and Authorization carry different credentials' });
+  if (o.policy === 'app' && (xKey && bearer)) v.push({ level: 'app', code: 'auth_two_headers', message: 'paper-copilot sends its key in exactly one header' });
   if (!headers['anthropic-version']) v.push({ level: 'api', code: 'version_missing', message: 'no anthropic-version header' });
   if (!body) {
     v.push({ level: 'api', code: 'body_not_json', message: 'request body is not a JSON object' });
@@ -513,7 +519,7 @@ export class MockAnthropic {
 
     rec.stream = body?.stream === true;
     rec.violations = validateMessagesRequest(headers, body, this.opts);
-    const authFail = rec.violations.find((x) => x.code === 'auth_missing' || x.code === 'auth_wrong_key');
+    const authFail = rec.violations.find((x) => x.code === 'auth_missing' || x.code === 'auth_wrong_key' || x.code === 'auth_conflict');
     if (authFail) return apiError(401, 'authentication_error', 'invalid x-api-key');
     if (this.opts.rejectInvalid && rec.violations.some((x) => x.level === 'api')) return apiError(400, 'invalid_request_error', rec.violations.filter((x) => x.level === 'api').map((x) => x.message).join('; '));
 

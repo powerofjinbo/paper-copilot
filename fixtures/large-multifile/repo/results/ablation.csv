@@ -1,0 +1,5 @@
+variant,label,eff_A
+full,full model,0.95523017274
+no_edge_features,without edge features,0.947772725676
+four_iterations,four message-passing steps,0.939635166919
+no_curvature_loss,without the curvature term,0.949432501773

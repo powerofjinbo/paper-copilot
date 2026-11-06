@@ -1,6 +1,6 @@
 {
- "d0_res_gnn_mm": 0.043,
- "d0_res_ckf_mm": 0.036,
- "z0_res_gnn_mm": 0.095,
- "z0_res_ckf_mm": 0.09
+ "d0_resolution_mm": 0.0183426486133,
+ "z0_resolution_mm": 0.068683553155,
+ "pt_resolution_frac": 0.019327906087,
+ "phi0_resolution_mrad": 0.405882384337
 }

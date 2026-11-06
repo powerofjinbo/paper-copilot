@@ -752,7 +752,7 @@ export function createAgentService(ctx: Ctx, opts: AgentServiceOptions = {}): Ag
           });
         progress(resumable ? `drafter resumes session ${resumable.sessionId}` : 'drafter started (new session)');
         outcome = await run(resumable);
-        if (resumable && !outcome.ok && !outcome.sawAssistant) {
+        if (resumable && !outcome.ok && !outcome.sawAssistant && !outcome.refusedAuth && !outcome.fatalApiError) {
           progress('the stored drafting session could not be resumed; starting a new one');
           outcome = await run(null);
         }

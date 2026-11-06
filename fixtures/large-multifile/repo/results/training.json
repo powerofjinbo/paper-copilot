@@ -1,0 +1,12 @@
+{
+ "n_train_events": 8000,
+ "n_val_events": 1000,
+ "n_test_events": 1000,
+ "n_epochs": 60,
+ "batch_size": 16,
+ "learning_rate": 0.0003,
+ "n_seeds": 3,
+ "hidden_dim": 128,
+ "n_message_passing": 8,
+ "n_parameters": 1344392
+}

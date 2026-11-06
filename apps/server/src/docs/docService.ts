@@ -59,6 +59,7 @@ import {
 } from '@paper-copilot/core';
 import { HttpError, type Ctx, type DocService, type DocState } from '../contracts';
 import { writeFileAtomic } from '../infra';
+import { flattenTex } from '../services/build/flatten';
 import type { PaperDbExt } from '../store/db';
 import { createHistoryLog, type HistoryLog } from './history';
 import { fromDisk, isTexName, listFiles, resolveInTex, sortTexFiles, toDisk, type DiskForm } from './text';
@@ -1054,6 +1055,59 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
   };
 
   /* ------------------------------------------------------------------------------------ */
+  /* Labels of files that are not open (multi-file projects)                               */
+  /* ------------------------------------------------------------------------------------ */
+
+  /**
+   * A `\ref` in sections/results.tex usually points at a label in another file of the \input tree
+   * (sec:intro, a figure in main.tex). The gate blocks a \ref to an unknown label, so labels() must cover
+   * the whole document, not only the files the editor has open: the main file's \input tree (current
+   * mirror text for open files, disk otherwise) is walked and every file that is not open is segmented
+   * from disk (cached by its text). The disk part is cached for LABELS_DISK_TTL_MS per set of open file
+   * versions, so a ghost request or a lint pass does not re-read the tree on every keystroke.
+   */
+  const LABELS_DISK_TTL_MS = 1000;
+  const diskSegLabels = new Map<string, { raw: string; labels: string[] }>();
+  let unopenedCache: { key: string; at: number; labels: string[] } | null = null;
+  const unopenedLabels = (): string[] => {
+    const key = [...states.values()].map((st) => `${st.file}@${st.version}`).join('|');
+    const t = Date.now();
+    if (unopenedCache && unopenedCache.key === key && t - unopenedCache.at < LABELS_DISK_TTL_MS) return unopenedCache.labels;
+    const raws = new Map<string, string | null>();
+    const read = (rel: string): string | null => {
+      const st = states.get(rel);
+      if (st) return textOf(st);
+      if (!raws.has(rel)) {
+        let raw: string | null = null;
+        try {
+          const abs = resolveInTex(ctx.paths.tex, rel).abs;
+          if (existsSync(abs) && isTexName(rel)) raw = readFileSync(abs, 'utf8');
+        } catch {
+          raw = null;
+        }
+        raws.set(rel, raw);
+      }
+      return raws.get(rel) ?? null;
+    };
+    const main = ctx.config.mainFile || 'main.tex';
+    const tree = soft('flatten (labels)', () => flattenTex(main, { texRoot: ctx.paths.tex, read }).files, [] as string[]);
+    const out: string[] = [];
+    for (const rel of tree) {
+      if (states.has(rel)) continue;
+      const raw = read(rel);
+      if (raw === null) continue;
+      let c = diskSegLabels.get(rel);
+      if (!c || c.raw !== raw) {
+        c = { raw, labels: soft('segment (labels)', () => segment(fromDisk(raw).text).labels, [] as string[]) };
+        diskSegLabels.set(rel, c);
+      }
+      out.push(...c.labels);
+    }
+    unopenedCache = { key, at: t, labels: out };
+    return out;
+  };
+
+  /* ------------------------------------------------------------------------------------ */
   /* Service                                                                               */
   /* ------------------------------------------------------------------------------------ */
 
@@ -1252,6 +1306,7 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
         flushSegment(st);
         out.push(...st.seg.labels);
       }
+      out.push(...unopenedLabels());
       return uniq(out);
     },
 

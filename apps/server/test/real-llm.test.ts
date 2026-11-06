@@ -11,11 +11,12 @@
  * Every test ends with zero validation violations recorded by the mock.
  */
 import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerMessage, SentenceVersion } from '@paper-copilot/core';
 import type { Ctx } from '../src/contracts';
 import { createLlmService, createRealLlmClient } from '../src/services/llm';
-import { makeTempProject, makeTestCtx, type TempProject } from './helpers/ctx';
+import { SKILL_DIR, makeTempProject, makeTestCtx, type TempProject } from './helpers/ctx';
 import { DRAFT, MAIN, MAIN_TEXT, PREFIX, U1, fakeDb, fakeFacts, fakeLit, fakeVoice, outline, standardDocs, type FakeDocs } from './support/llmFixtures';
 import { errorReply, jsonReply, startMockAnthropic, textReply, type MockAnthropic, type RecordedRequest } from './support/mockAnthropic';
 
@@ -120,16 +121,19 @@ describe('ghost on the real client', () => {
     const reqs = mock.messages();
     expect(reqs).toHaveLength(1);
     const q = reqs[0]!;
-    expect(q.headers['x-api-key']).toBe(KEY);
-    expect(q.headers.authorization).toBeUndefined();
+    // @anthropic-ai/sdk 1.x sends the API key as a Bearer credential; exactly one auth header, the app's key.
+    expect(q.headers.authorization).toBe(`Bearer ${KEY}`);
+    expect(q.headers['x-api-key']).toBeUndefined();
     expect(q.headers['anthropic-version']).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(q.headers['x-stainless-retry-count']).toBe('0');
     expect(q.stream).toBe(true);
     expect(q.body).toMatchObject({ model: 'claude-haiku-5-5', max_tokens: 200, thinking: { type: 'disabled' }, output_config: { effort: 'low', format: { type: 'json_schema' } }, stream: true });
     for (const k of ['temperature', 'top_p', 'top_k', 'cache_control', 'tools']) expect(q.body).not.toHaveProperty(k);
     const sys = systemOf(q);
-    expect(sys.map((b) => b.cache_control)).toEqual([{ type: 'ephemeral', ttl: '1h' }, { type: 'ephemeral', ttl: '5m' }, { type: 'ephemeral', ttl: '5m' }]);
-    expect(sys[0]!.text).toContain('hep-paper-writing'.slice(0, 3));
+    // [A skill 1h, B paper 5m, C exemplars 5m, task rules uncached]: the 1h breakpoint comes first.
+    expect(sys.map((b) => b.cache_control)).toEqual([{ type: 'ephemeral', ttl: '1h' }, { type: 'ephemeral', ttl: '5m' }, { type: 'ephemeral', ttl: '5m' }, undefined]);
+    // block A carries the author's skill file unchanged
+    expect(sys[0]!.text).toContain(readFileSync(join(SKILL_DIR, 'SKILL.md'), 'utf8').split('\n').find((l) => l.trim().length > 20)!.trim());
     expect(userText(q)).toContain(PREFIX);
 
     const lines = await costLines(svc);
@@ -250,6 +254,25 @@ describe('ghost on the real client', () => {
     const sent = await ghost(svc);
     expect(sent.map((m) => m.type)).toEqual(['ghost.error']);
     expect(mock.messages()).toHaveLength(1);
+  });
+
+  it('ANTHROPIC_CUSTOM_HEADERS of another tool never reaches the API (it would replace the app key)', async () => {
+    const saved = process.env.ANTHROPIC_CUSTOM_HEADERS;
+    process.env.ANTHROPIC_CUSTOM_HEADERS = 'Authorization: Bearer sk-ant-other-tool\nx-gateway-tenant: someone-else';
+    try {
+      mock.enqueue(jsonReply(GOOD_GHOST));
+      const svc = build();
+      const sent = await ghost(svc);
+      expect(sent.map((m) => m.type)).toEqual(['ghost.result']);
+      const q = mock.messages()[0]!;
+      expect(q.headers.authorization).toBe(`Bearer ${KEY}`);
+      expect(q.headers['x-gateway-tenant']).toBeUndefined();
+      // the variable is restored for whoever set it
+      expect(process.env.ANTHROPIC_CUSTOM_HEADERS).toContain('x-gateway-tenant');
+    } finally {
+      if (saved === undefined) delete process.env.ANTHROPIC_CUSTOM_HEADERS;
+      else process.env.ANTHROPIC_CUSTOM_HEADERS = saved;
+    }
   });
 
   it('a stalled stream (headers, then silence) ends with an error after the idle timeout instead of hanging', async () => {
@@ -458,7 +481,7 @@ describe('pre-warm and keep-alive on the real client', () => {
         pending.push(fn);
         return realSetTimeout(() => {}, 2 ** 31 - 1).unref();
       }
-      return realSetTimeout(fn, ms, ...rest);
+      return realSetTimeout(fn, ms, ...(rest as []));
     }) as typeof setTimeout);
     mock.enqueue(jsonReply(GOOD_GHOST));
     mock.fallback = () => textReply('{');

@@ -39,6 +39,20 @@ export class LlmAbortError extends Error {
   }
 }
 
+/**
+ * A stream that did not complete: it stalled (no event within the idle timeout) or ended without
+ * message_stop (a proxy or the connection cut it). Its text is never used; retryable on action routes.
+ */
+export class LlmStreamError extends Error {
+  constructor(
+    readonly reason: 'stalled' | 'incomplete',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'LlmStreamError';
+  }
+}
+
 export function isAbortError(e: unknown): boolean {
   if (e instanceof LlmAbortError) return true;
   if (e instanceof Anthropic.APIUserAbortError) return true;
@@ -51,6 +65,7 @@ const RETRY_TYPES = new Set(['overloaded_error', 'rate_limit_error', 'api_error'
 /** 429 / 529 / overloaded / 5xx / connection errors are worth a retry; 4xx client errors are not. */
 export function isRetryable(e: unknown): boolean {
   if (isAbortError(e)) return false;
+  if (e instanceof LlmStreamError) return true;
   if (e instanceof Anthropic.APIConnectionError) return true;
   if (e instanceof Anthropic.APIError) {
     if (typeof e.status === 'number' && RETRY_STATUS.has(e.status)) return true;
@@ -176,6 +191,8 @@ export interface StreamResult {
   stopReason: string | null;
   /** ms from `t0` to the first text delta (null if no text arrived). */
   ttftMs: number | null;
+  /** True once message_stop arrived (the server finished the message). */
+  complete: boolean;
 }
 
 /**
@@ -190,8 +207,12 @@ export async function consumeStream(events: AsyncIterable<Anthropic.RawMessageSt
   let usage: Usage = { input_tokens: 0, output_tokens: 0 };
   let stopReason: string | null = null;
   let ttftMs: number | null = null;
+  let complete = false;
   for await (const ev of events) {
     switch (ev.type) {
+      case 'message_stop':
+        complete = true;
+        break;
       case 'message_start':
         model = ev.message.model ?? null;
         messageId = ev.message.id ?? null;
@@ -218,7 +239,29 @@ export async function consumeStream(events: AsyncIterable<Anthropic.RawMessageSt
         break;
     }
   }
-  return { text, model, messageId, usage, stopReason, ttftMs };
+  return { text, model, messageId, usage, stopReason, ttftMs, complete };
+}
+
+/**
+ * Re-arm `onIdle` on every event of `events`. The SDK's request timeout ends when the response
+ * headers arrive, so without this a stream that stops sending would be awaited forever.
+ */
+async function* watchIdle<T>(events: AsyncIterable<T>, idleMs: number, onIdle: () => void): AsyncGenerator<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const arm = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(onIdle, idleMs);
+    (timer as { unref?: () => void }).unref?.();
+  };
+  arm();
+  try {
+    for await (const ev of events) {
+      arm();
+      yield ev;
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /** Parse structured output; null when it is not JSON (truncation, refusal). */
@@ -270,9 +313,14 @@ export interface RealClientOptions {
    * Default: PAPER_PREWARM_MODE, else 'one-with-format'. A 400 on a zero-token warm falls back to 'one-with-format'.
    */
   prewarmMode?: PrewarmMode;
-  /** Request timeouts per route class, ms. */
+  /** Request timeouts per route class, ms (until the response headers: the SDK's `timeout`). */
   ghostTimeoutMs?: number;
   actionTimeoutMs?: number;
+  /**
+   * Longest silence between two stream events before the request is aborted as stalled, ms (the API
+   * sends ping events while it works). Default: 10 s on the ghost route, 90 s on the others.
+   */
+  streamIdleTimeoutMs?: number;
 }
 
 export type PrewarmMode = 'zero' | 'zero-with-format' | 'one-with-format';
@@ -297,17 +345,39 @@ export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> 
   });
 }
 
+/** Environment variables the SDK constructor reads that would change what the app sends. */
+const SDK_ENV_IGNORED = ['ANTHROPIC_CUSTOM_HEADERS'] as const;
+
 /**
  * The SDK client with an explicit key and base URL (never ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN /
  * profiles from the environment) and SDK retries off. Also used by scripts/bench.
+ *
+ * The SDK also merges ANTHROPIC_CUSTOM_HEADERS (set for a gateway by Claude Code users or another
+ * tool) into every request, AFTER its auth headers: an `Authorization` or `x-api-key` line there would
+ * replace the app's key, and any other header would be sent to the API. It is hidden from the
+ * constructor (which reads the environment synchronously, so nothing else runs in between).
+ * SDK debug logging (ANTHROPIC_LOG) is pinned to 'warn': request bodies hold unpublished text.
  */
 export function createAnthropicSdk(opts: { apiKey: string; baseURL?: string | null; fetch?: typeof fetch; maxRetries?: number }): Anthropic {
-  return new Anthropic({
-    apiKey: opts.apiKey,
-    baseURL: opts.baseURL || DEFAULT_BASE_URL,
-    maxRetries: opts.maxRetries ?? 0,
-    ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  });
+  const saved: Array<[string, string]> = [];
+  for (const k of SDK_ENV_IGNORED) {
+    const v = process.env[k];
+    if (v !== undefined) {
+      saved.push([k, v]);
+      delete process.env[k];
+    }
+  }
+  try {
+    return new Anthropic({
+      apiKey: opts.apiKey,
+      baseURL: opts.baseURL || DEFAULT_BASE_URL,
+      maxRetries: opts.maxRetries ?? 0,
+      logLevel: 'warn',
+      ...(opts.fetch ? { fetch: opts.fetch } : {}),
+    });
+  } finally {
+    for (const [k, v] of saved) process.env[k] = v;
+  }
 }
 
 export function createRealLlmClient(opts: RealClientOptions): LlmClient {
@@ -323,10 +393,37 @@ export function createRealLlmClient(opts: RealClientOptions): LlmClient {
     const params = buildMessageParams(req, { stream: true }) as Anthropic.MessageCreateParamsStreaming;
     const t0 = performance.now();
     const timeout = req.route === 'ghost' ? (opts.ghostTimeoutMs ?? 15_000) : (opts.actionTimeoutMs ?? 180_000);
-    const { data: stream, request_id } = await sdk.messages.create(params, { signal: req.signal ?? null, timeout, maxRetries: 0 }).withResponse();
-    const r = await consumeStream(stream, t0);
+    const idleMs = opts.streamIdleTimeoutMs ?? (req.route === 'ghost' ? 10_000 : 90_000);
+    // One controller for the caller's cancel and the stall watchdog, so either ends the HTTP request.
+    const ctl = new AbortController();
+    const onCallerAbort = () => ctl.abort();
+    if (req.signal?.aborted) ctl.abort();
+    req.signal?.addEventListener('abort', onCallerAbort, { once: true });
+    let stalled = false;
+    let r: StreamResult;
+    let request_id: string | null | undefined;
+    try {
+      const resp = await sdk.messages.create(params, { signal: ctl.signal, timeout, maxRetries: 0 }).withResponse();
+      request_id = resp.request_id;
+      r = await consumeStream(
+        watchIdle(resp.data, idleMs, () => {
+          stalled = true;
+          ctl.abort();
+        }),
+        t0,
+      );
+    } catch (e) {
+      if (stalled && !req.signal?.aborted) throw new LlmStreamError('stalled', `the response stream stalled (no data for ${Math.round(idleMs / 1000)} s)`);
+      throw e;
+    } finally {
+      req.signal?.removeEventListener('abort', onCallerAbort);
+    }
     // The SDK ends iteration silently when the request signal aborts; surface it as an abort.
     if (req.signal?.aborted) throw new LlmAbortError();
+    if (stalled) throw new LlmStreamError('stalled', `the response stream stalled (no data for ${Math.round(idleMs / 1000)} s)`);
+    // A stream that ended without message_stop was cut (proxy, connection): its text may be any prefix
+    // of the answer, so it is never taken as one.
+    if (!r.complete) throw new LlmStreamError('incomplete', 'the response stream ended before the message was complete');
     const model = r.model ?? req.model;
     const json = req.schema ? parseJsonOutput(r.text) : null;
     let costUsd = 0;

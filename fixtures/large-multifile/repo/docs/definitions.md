@@ -1,14 +1,14 @@
 # Definitions
 
-Fixed before any test number was produced. Units: mm, GeV.
+Fixed before any performance number is produced. Units: mm, GeV, rad.
 
 ## Targets
 
-- **Target particle**: pT > 1 GeV, |eta| < 2.5 and >= 5 space points.
-- **Displaced target**: a target with production radius r_prod > 2 mm.
-- **Pixel seed**: three hits on the innermost layers; a seed needs |z0| < 150 mm.
+- Target particle: pT > 1 GeV, |eta| < 4 and >= 5 space points.
+- Displaced particle: a target with |d0| > 2 mm.
+- Track quality: tracks with |T| >= 5 hits enter the fake rate.
 
-## Matching
+## Graph
 
-- **Double majority**: a track matches a particle if more than half of its hits come from that particle and more than half of the particle hits are on the track.
-- **Fake track**: a track that matches no particle.
+- Edge selection: edges with score > 0.5 are kept.
+- Module map: hit pairs with |dz| < 300 mm on adjacent layers.

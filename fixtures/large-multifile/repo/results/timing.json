@@ -1,10 +1,7 @@
 {
- "gnn": {
-  "time_ms": 215.7,
-  "memory_gb": 3.5
- },
- "ckf": {
-  "time_ms": 1054.2,
-  "memory_gb": 1
- }
+ "graph_build_time_ms": 55.8756358179,
+ "inference_time_ms": 179.304623089,
+ "track_build_time_ms": 24.0827456501,
+ "baseline_total_time_ms": 295.868861137,
+ "total_time_ms": 259.263004557
 }
