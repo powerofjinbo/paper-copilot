@@ -372,14 +372,7 @@ describe('gateSentence: claim strength and placeholders', () => {
 
 describe('gateSentence: the fixture paper', () => {
   function sentences(): string[] {
-    try {
-      const seg = segment(MAIN);
-      if (seg.sentences.length) return seg.sentences.map((s) => s.text);
-    } catch {
-      /* segmenter not ready */
-    }
-    const body = MAIN.slice(MAIN.indexOf('\\begin{document}'), MAIN.indexOf('\\end{document}'));
-    return body.split('\n').filter((l) => l.trim() && !/^\s*[\\%]/.test(l) && !l.includes('&'));
+    return segment(MAIN).sentences.map((s) => s.text);
   }
 
   it('passes every sentence of the fixture with no blocking issue', () => {
