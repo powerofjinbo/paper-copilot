@@ -160,8 +160,15 @@ describe('gate hook and editor tools', () => {
     expect(spec.updatedToolOutput[0]!.type).toBe('text');
     expect(spec.updatedToolOutput[0]!.text).toMatch(/NOT accepted/);
     expect(verdicts.map((v) => v.status)).toEqual(['retry']);
-    c.finalize(); // the pending entry was taken by the hook: nothing is judged twice
-    expect(c.paragraphs()).toEqual([]);
+    // The pending entry was taken by the hook (it is not judged again as a pending proposal); the run
+    // ended before the fix, so finalize closes the paragraph once from its last proposal: the failing
+    // sentence is kept as unsupported with a placeholder, not dropped with the paragraph.
+    c.finalize();
+    expect(c.log.map((l) => l.status)).toEqual(['retry', 'accepted']);
+    expect(c.paragraphs().map((p) => p.sentences.map((x) => x.state))).toEqual([['unsupported']]);
+    expect(c.paragraphs()[0]!.sentences[0]!.text).not.toContain('5.55');
+    c.finalize();
+    expect(c.log).toHaveLength(2);
     expect(await hook(hookInput(input, 'tu2', 'mcp__editor__get_facts'), 'tu2', { signal })).toEqual({});
   });
 

@@ -402,8 +402,6 @@ describe.skipIf(CLI_PROBLEM !== null)('the real Claude Code process against the 
     );
     const req = { sectionId: RESULTS_SECTION, paragraphIds: null, fromNotes: false, file: 'main.tex', afterSentenceId: null };
     const j = await finish(ctx.agents.draft(req));
-    if (process.env.DEBUG_AGENTS) for (const r of mock.messages()) console.log('REQ', r.seq, JSON.stringify([...toolResults(r)]).slice(0, 1500), JSON.stringify(r.body!.tools ? (r.body!.tools as Array<{ name: string }>).map((t) => t.name) : []));
-    if (process.env.DEBUG_AGENTS) console.log(progress().join('\n'), JSON.stringify(initLog()));
     expect(j.state, `${j.message}\n${progress().join('\n')}`).toBe('done');
 
     const init = initLog();
@@ -444,6 +442,26 @@ describe.skipIf(CLI_PROBLEM !== null)('the real Claude Code process against the 
     expect(resumed.headers['x-claude-code-session-id']).toBe(stored.sessionId);
     // usage of the resumed run is recorded once more, as a delta (not the cumulative total again)
     expect(recorded.length).toBeGreaterThan(firstUsage);
+    // In the resumed run the model stopped after the gate asked for a fix: the paragraph is still
+    // delivered (grounded sentence proposed, the invented one unsupported), not lost with the run.
+    const ev2 = ctx.events.filter((e): e is Extract<ServerMessage, { type: 'draft.proposed' }> => e.type === 'draft.proposed')[1]!;
+    expect(ev2.paragraphs[0]!.sentences.map((s) => [s.state, s.text.includes('7.7')])).toEqual([
+      ['proposed', false],
+      ['unsupported', false],
+    ]);
+  });
+
+  it('refuses a run whose credential is not the app key (a project apiKeyHelper would bill another account)', async () => {
+    const settingsDir = join(project.paths.claudeCwd, '.claude');
+    mkdirSync(settingsDir, { recursive: true });
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(join(settingsDir, 'settings.json'), JSON.stringify({ apiKeyHelper: 'echo sk-ant-someone-else' }));
+    mock.fallback = scriptedModel([() => structuredOutput(BRIEF)], side);
+    const j = await finish(ctx.agents.readRepo());
+    expect(j.state).toBe('error');
+    expect(j.message).toMatch(/would not use the app's API key.*apiKeyHelper/);
+    expect(mock.messages().filter((r) => systemText(r).includes('APP SYSTEM'))).toEqual([]);
+    expect(existsSync(project.paths.repoBrief) ? readFileSync(project.paths.repoBrief, 'utf8') : '').not.toContain('The Canto tracker');
   });
 
   it('a run over its budget stops with error_max_budget_usd and the job fails with that reason', async () => {

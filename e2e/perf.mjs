@@ -5,12 +5,15 @@
  * the lint sidecar when python3 and the skill are present), Chromium driven by Playwright.
  *
  *   node e2e/perf.mjs [--shots DIR] [--work DIR] [--port 4419] [--no-build] [--keep] [--headed] [--json FILE]
+ *                     [--stress K]   (sections/results.tex repeated K times: a thesis-size file, for profiling)
  *
  * Measures, for main.tex and sections/results.tex (opened through the workspace store, as the file
  * switcher will do):
  *   open        navigation (main.tex) / file switch (results.tex) until every sentence is decorated
- *   key.js      keydown -> end of the keystroke's task (CodeMirror update, unit mapping, decorations)
- *   key.render  key.js + style recalculation and layout of the editor (forced after the task)
+ *   key.update  EditorView.update of the keystroke's transaction (state fields, unit mapping, view
+ *               plugins, decorations, DOM sync), timed by wrapping the live view
+ *   key.render  key.update + CodeMirror's measure pass before the next frame (layout read and write);
+ *               also keydown -> end of the update (input queueing included)
  *   key.slow    Event Timing entries (keydown/keypress/input to next paint) of 50 ms or more
  *   patch       last keystroke -> sentences.patch for the file (server debounce is 300 ms; the budget
  *               is the time after it)
@@ -18,7 +21,7 @@
  *   compile     POST /api/compile on the multi-file tree (latexmk), and SyncTeX forward into results.tex
  *   memory      JS heap of the page (CDP Performance.getMetrics) and RSS of the server process group
  *   scroll      frame times while scrolling results.tex from top to bottom
- * and prints a table. Budgets: typing p95 key.render < 16 ms, patch < 500 ms after the debounce,
+ * and prints a table. Budgets: typing p95 key.render < 16 ms (one frame), patch < 500 ms after the debounce,
  * open < 2 s. Exit code 1 if a budget is missed or a check fails.
  *
  * The project is a temp copy of the fixture (sync mode none); screenshots (deviceScaleFactor 1) go to
@@ -48,6 +51,7 @@ const BUILD = !args.includes('--no-build');
 const KEEP = args.includes('--keep');
 const HEADED = args.includes('--headed');
 const JSON_OUT = arg('--json', '');
+const STRESS = Math.max(1, Number(arg('--stress', '1')) || 1);
 mkdirSync(SHOTS, { recursive: true });
 mkdirSync(WORK, { recursive: true });
 
@@ -140,9 +144,20 @@ function buildWeb() {
 
 function makeProject() {
   const fx = join(ROOT, 'fixtures', 'large-multifile');
+  // a fresh project every run (a --work dir kept from an earlier run holds its .paper sidecar)
+  rmSync(P.proj, { recursive: true, force: true });
+  rmSync(P.repo, { recursive: true, force: true });
   cpSync(join(fx, 'repo'), P.repo, { recursive: true });
   mkdirSync(P.proj, { recursive: true });
   cpSync(join(fx, 'tex'), P.tex, { recursive: true });
+  if (STRESS > 1) {
+    // --stress K: sections/results.tex repeated K times (labels made unique), a thesis-size file
+    const f = join(P.tex, 'sections', 'results.tex');
+    const src = readFileSync(f, 'utf8');
+    const copies = [src];
+    for (let k = 2; k <= STRESS; k++) copies.push(src.replace(/\\label\{([^}]*)\}/g, `\\label{$1-${k}}`).replace(/^(.*\S.*)$/gm, (l) => (/^\s*[\\%]/.test(l) ? l : l.replace(/\. ([A-Z])/, `. In copy ${k}, $1`))));
+    writeFileSync(f, copies.join('\n'));
+  }
   const argv = ['src/cli.ts', 'init', P.proj, '--repo', P.repo, '--sync', 'none'];
   if (SKILL) argv.push('--skill', SKILL);
   const r = run(process.execPath, [TSX, ...argv], { cwd: join(ROOT, 'apps', 'server') });
@@ -178,23 +193,13 @@ async function waitFor(fn, a, ms, what) {
   }
 }
 
-/** Installed once per page: key timing, Event Timing, a log of server messages with page timestamps. */
+/** Installed once per page: Event Timing and a log of server messages with page timestamps. */
 function instrument() {
-  const perf = (window.__perf = { keys: [], slow: [], msgs: [], frames: [] });
-  let t0 = null;
+  const perf = (window.__perf = { keys: [], slow: [], msgs: [], lastKeyAt: null });
   window.addEventListener(
     'keydown',
     (e) => {
-      if (e.key.length !== 1 && e.key !== 'Backspace') return;
-      t0 = performance.now();
-      const start = t0;
-      setTimeout(() => {
-        const js = performance.now() - start;
-        // force style + layout of the editor: what the next frame has to do before it can paint
-        const el = document.querySelector('.cm-content');
-        if (el) void el.getBoundingClientRect().height;
-        perf.keys.push({ at: start, js, render: performance.now() - start });
-      }, 0);
+      if (e.key.length === 1 || e.key === 'Backspace') perf.lastKeyAt = performance.now();
     },
     true,
   );
@@ -209,6 +214,39 @@ function instrument() {
   for (const type of ['sentences.patch', 'doc.ack', 'lint.update', 'doc.snapshot', 'compile.status']) {
     api.on(type, (m) => perf.msgs.push({ type, at: performance.now(), file: m.file ?? null, scope: m.scope ?? null, n: m.upserts?.length ?? m.units?.length ?? m.flags?.length ?? null, state: m.state ?? null }));
   }
+}
+
+/**
+ * Time the editor's own work per keystroke (installed on each new EditorView: a file switch makes one).
+ * `update` = EditorView.update for a doc-changing transaction (state fields, unit mapping, view plugins,
+ * decorations, DOM sync); `measure` = the layout read/write pass CodeMirror runs before the next frame.
+ * `latency` = keydown -> end of that update (queueing included). Wall time of the JS, not of the paint.
+ */
+function instrumentView() {
+  const content = document.querySelector('.cm-content');
+  const view = content?.cmTile?.root?.view;
+  if (!view) throw new Error('EditorView not found');
+  if (view.__perfWrapped) return;
+  view.__perfWrapped = true;
+  const perf = window.__perf;
+  let open = null;
+  const update = view.update.bind(view);
+  view.update = (trs) => {
+    const doc = trs.some((t) => t.docChanged);
+    const t0 = performance.now();
+    update(trs);
+    const t1 = performance.now();
+    if (doc) {
+      open = { at: perf.lastKeyAt ?? t0, update: t1 - t0, measure: 0, latency: perf.lastKeyAt !== null ? t1 - perf.lastKeyAt : null };
+      perf.keys.push(open);
+    }
+  };
+  const measure = view.measure.bind(view);
+  view.measure = (flush) => {
+    const t0 = performance.now();
+    measure(flush);
+    if (open) open.measure += performance.now() - t0;
+  };
 }
 
 async function openMeasured(file) {
@@ -254,7 +292,8 @@ async function typePhrase(text, delay = 40) {
     await page.keyboard.type(ch);
     await sleep(delay);
   }
-  return pc(() => window.__perf.keys.at(-1)?.at ?? performance.now());
+  await sleep(50);
+  return pc(() => window.__perf.lastKeyAt);
 }
 
 async function measureTyping(file, prefix, phrase) {
@@ -275,9 +314,10 @@ async function measureTyping(file, prefix, phrase) {
     const patch = window.__perf.msgs.find((m) => m.type === 'sentences.patch' && m.file === f && m.at > t);
     return { keys: window.__perf.keys.slice(), slow: window.__perf.slow.slice(), patchAt: patch.at, lastKey: t };
   }, [file, lastKey]);
-  const js = r.keys.map((k) => k.js);
-  const render = r.keys.map((k) => k.render);
-  return { n: r.keys.length, jsP50: pct(js, 0.5), jsP95: pct(js, 0.95), renderP50: pct(render, 0.5), renderP95: pct(render, 0.95), renderMax: Math.max(...render), slow: r.slow.length, patch: r.patchAt - r.lastKey, patchAt: r.patchAt };
+  const js = r.keys.map((k) => k.update);
+  const render = r.keys.map((k) => k.update + k.measure);
+  const lat = r.keys.map((k) => k.latency).filter((x) => x !== null);
+  return { n: r.keys.length, jsP50: pct(js, 0.5), jsP95: pct(js, 0.95), renderP50: pct(render, 0.5), renderP95: pct(render, 0.95), renderMax: Math.max(...render), latP95: pct(lat, 0.95), slow: r.slow.length, patch: r.patchAt - r.lastKey, patchAt: r.patchAt };
 }
 
 async function heapMb(cdp) {
@@ -342,24 +382,26 @@ async function main() {
     row('server start (paper open)', serverStartMs, 'ms', null, 'includes the startup fact scan');
     const openMain = await openMeasured('main.tex');
     await pc(instrument);
+    await pc(instrumentView);
     row('open main.tex (navigation -> decorated)', openMain, 'ms', BUDGET.open);
     await shot('01-main');
     const mem1 = await heapMb(cdp);
 
     const tMain = await measureTyping('main.tex', 'We asked whether a graph-neural-network tracker', ' really');
-    row('main.tex keystroke js p95', tMain.jsP95, 'ms', null, `p50 ${tMain.jsP50.toFixed(1)}, ${tMain.n} keys`);
-    row('main.tex keystroke render p95', tMain.renderP95, 'ms', BUDGET.keyRenderP95, `p50 ${tMain.renderP50.toFixed(1)}, max ${tMain.renderMax.toFixed(1)}`);
+    row('main.tex keystroke update p95', tMain.jsP95, 'ms', null, `p50 ${tMain.jsP50.toFixed(2)}, ${tMain.n} keys; keydown->updated p95 ${tMain.latP95?.toFixed(1)}`);
+    row('main.tex keystroke update+measure p95', tMain.renderP95, 'ms', BUDGET.keyRenderP95, `p50 ${tMain.renderP50.toFixed(2)}, max ${tMain.renderMax.toFixed(1)}`);
     row('main.tex keystroke -> sentences.patch', tMain.patch, 'ms', null, `server debounce ${SEG_DEBOUNCE} ms`);
     row('main.tex patch after debounce', tMain.patch - SEG_DEBOUNCE, 'ms', BUDGET.patchAfterDebounce);
 
     const openRes = await openMeasured('sections/results.tex');
     row('open sections/results.tex (file switch -> decorated)', openRes, 'ms', BUDGET.open);
+    await pc(instrumentView);
     const units = await pc(() => window.__paper.workspace.getState().units.length);
     await shot('02-results');
 
     const tRes = await measureTyping('sections/results.tex', 'The gap between the trackers widens with displacement.', ' and at every momentum');
-    row('results.tex keystroke js p95', tRes.jsP95, 'ms', null, `p50 ${tRes.jsP50.toFixed(1)}, ${tRes.n} keys, ${units} units`);
-    row('results.tex keystroke render p95', tRes.renderP95, 'ms', BUDGET.keyRenderP95, `p50 ${tRes.renderP50.toFixed(1)}, max ${tRes.renderMax.toFixed(1)}`);
+    row('results.tex keystroke update p95', tRes.jsP95, 'ms', null, `p50 ${tRes.jsP50.toFixed(2)}, ${tRes.n} keys, ${units} units; keydown->updated p95 ${tRes.latP95?.toFixed(1)}`);
+    row('results.tex keystroke update+measure p95', tRes.renderP95, 'ms', BUDGET.keyRenderP95, `p50 ${tRes.renderP50.toFixed(2)}, max ${tRes.renderMax.toFixed(1)}`);
     row('results.tex input events >= 50 ms (Event Timing)', tRes.slow + tMain.slow, 'count', 1);
     row('results.tex keystroke -> sentences.patch', tRes.patch, 'ms', null, `server debounce ${SEG_DEBOUNCE} ms`);
     row('results.tex patch after debounce', tRes.patch - SEG_DEBOUNCE, 'ms', BUDGET.patchAfterDebounce);
@@ -380,18 +422,32 @@ async function main() {
     const scroll = await measureScroll();
     row('scroll results.tex frame p95', scroll.p95, 'ms', null, `${scroll.frames} frames, p50 ${scroll.p50.toFixed(1)}, max ${scroll.max.toFixed(1)}`);
 
-    // compile the multi-file tree; SyncTeX forward from results.tex
+    // compile the multi-file tree from scratch (the save after typing schedules one; a manual compile
+    // right after it finds latexmk up to date, so the first running -> ok span is the real cost)
     const c = await pc(async () => {
       const t0 = performance.now();
       await window.__paper.api.compile();
       return { ms: performance.now() - t0 };
     });
     await waitFor(() => window.__paper.workspace.getState().compile.state === 'ok', null, 120000, 'compile ok');
-    row('compile (latexmk, 5 files)', c.ms, 'ms', null);
+    const spans = await pc(() => {
+      const out = [];
+      let start = null;
+      for (const m of window.__perf.msgs) {
+        if (m.type !== 'compile.status') continue;
+        if (m.state === 'running') start = m.at;
+        else if (start !== null && (m.state === 'ok' || m.state === 'error')) {
+          out.push(m.at - start);
+          start = null;
+        }
+      }
+      return out;
+    });
+    row('compile (latexmk, 5 files, POST -> status)', c.ms, 'ms', null, spans.length ? `running -> ok spans: ${spans.map((x) => x.toFixed(0)).join(', ')} ms` : '');
     const fwd = await pc(async () => {
       const ws = window.__paper.workspace.getState();
       const t = ws.editor.getText();
-      const u = ws.units.find((x) => t.slice(x.start, x.end).startsWith('The signal-trained tracker finds'));
+      const u = ws.units.find((x) => t.slice(x.start, x.end).replace(/\s+/g, ' ').startsWith('The signal-trained tracker finds'));
       const t0 = performance.now();
       const box = await window.__paper.api.synctexForward('sections/results.tex', u.line);
       const ms = performance.now() - t0;
