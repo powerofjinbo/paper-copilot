@@ -333,6 +333,17 @@ export function terminologyReport(units: readonly ConsistencyUnit[], terms: read
     }
     return out;
   };
+  /**
+   * How a form is written: its most common mid-sentence spelling ("pile-up"), or, when every use opens a
+   * sentence ("Pile-up is ..."), the spelling with the sentence capital undone.
+   */
+  const surface = (runs: Tok[][]): string => {
+    const counts = new Map<string, number>();
+    for (const r of runs) if (r.length && !r[0]!.initial) { const f = r.map((x) => x.w).join(' '); counts.set(f, (counts.get(f) ?? 0) + 1); }
+    if (counts.size) return [...counts.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]![0];
+    const r = runs[0] ?? [];
+    return r.map((x, k) => (k === 0 && /^[A-Z][a-z]/.test(x.w) && !/[A-Z]/.test(x.w.slice(1)) ? x.lw : x.w)).join(' ');
+  };
   const formRow = (form: string, occ: Tok[]): TermForm => {
     const ids = [...new Set(occ.map((t) => us[t.unit]!.id))];
     return { form, count: occ.length, sentenceIds: ids.slice(0, 50), first: occ.length ? sentenceRef(us[Math.min(...occ.map((t) => t.unit))]!) : null };
@@ -346,19 +357,21 @@ export function terminologyReport(units: readonly ConsistencyUnit[], terms: read
     const cl = closed.length >= 5 ? (words.get(closed) ?? []) : [];
     const opens = openRuns(parts);
     const forms: Array<{ form: string; occ: Tok[] }> = [];
-    if (hyph.length) forms.push({ form: hyph[0]!.w, occ: hyph });
-    if (cl.length) forms.push({ form: cl[0]!.w, occ: cl });
+    if (hyph.length) forms.push({ form: surface(hyph.map((t) => [t])), occ: hyph });
+    if (cl.length) forms.push({ form: surface(cl.map((t) => [t])), occ: cl });
     if (opens.length) {
       // an open form counts for a discovered compound only if the hyphenated one is used as a noun too
       // ("the pile-up is", "pile-up." vs "pile up"), not only attributively ("fake-track rate" vs "a fake track")
       const nounPos = hyph.some((t) => t.punctAfter || (t.next !== null && FUNCTION_WORDS.has(t.next) && !['and', 'or', 'nor', 'to'].includes(t.next)));
       const bothAttr = hyph.some((t) => !t.punctAfter && nounish(t.next)) && opens.some((o) => !o[o.length - 1]!.punctAfter && nounish(o[o.length - 1]!.next));
-      if (fromList || nounPos || bothAttr || hyph.length === 0) forms.push({ form: opens[0]!.map((t) => t.w).join(' '), occ: opens.map((o) => o[0]!) });
+      if (fromList || nounPos || bothAttr || hyph.length === 0) forms.push({ form: surface(opens), occ: opens.map((o) => o[0]!) });
     }
     if (forms.length < 2) return;
     done.add(key);
     forms.sort((a, b) => b.occ.length - a.occ.length);
     const listForm = fromList ? forms.find((f) => f.form.toLowerCase() === term.toLowerCase()) : undefined;
+    // the list's spelling wins (its case too: the case check reports capitals separately)
+    if (listForm) listForm.form = term.trim();
     const preferred = listForm?.form ?? forms[0]!.form;
     const row: TermVariantRow = { term: fromList ? term : forms[0]!.form, kind: 'hyphen', family: null, forms: forms.map((f) => formRow(f.form, f.occ)), preferred, fromList };
     variants.push(row);

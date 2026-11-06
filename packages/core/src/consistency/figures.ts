@@ -56,6 +56,8 @@ interface RawFloat {
   graphics: string[];
   subpanels: number;
   captionRaw: string;
+  /** File offsets of its sub-panels (their captions are not the float's caption). */
+  panelSpans: Array<[number, number]>;
 }
 
 function lineAtOffset(text: string, off: number): number {
@@ -64,23 +66,80 @@ function lineAtOffset(text: string, off: number): number {
   return n;
 }
 
-/** Argument of the first `\caption[..]{..}` in a span (raw LaTeX), or ''. */
-function captionArg(src: string): string {
-  const m = /\\caption\s*(?:\[[^\]]*\]\s*)?\{/.exec(src);
-  if (!m) return '';
-  let depth = 1;
-  let i = m.index + m[0].length;
-  const start = i;
-  for (; i < src.length && depth > 0; i++) {
+/** Offset just past the balanced `{...}` group that opens at `open` (src[open] === '{'), or src.length. */
+function groupEnd(src: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
     const c = src[i];
     if (c === '\\') {
       i++;
       continue;
     }
     if (c === '{') depth++;
-    else if (c === '}') depth--;
+    else if (c === '}' && --depth === 0) return i + 1;
   }
-  return src.slice(start, Math.max(start, i - 1));
+  return src.length;
+}
+
+/**
+ * Spans of the sub-panels of a float (subfigure/subtable environments, \subfloat, \subfigure,
+ * \subtable and \subcaptionbox commands with their arguments): their \caption and \label belong to a
+ * panel, not to the float.
+ */
+function subPanelSpans(src: string): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  const envRe = /\\begin\s*\{(sub(?:figure|table)\*?)\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = envRe.exec(src))) {
+    const endRe = new RegExp(`\\\\end\\s*\\{${m[1]!.replace('*', '\\*')}\\}`, 'g');
+    endRe.lastIndex = m.index + m[0].length;
+    const e = endRe.exec(src);
+    out.push([m.index, e ? e.index + e[0].length : src.length]);
+  }
+  const cmdRe = /\\(subfloat|subfigure|subtable|subcaptionbox)(?![A-Za-z])/g;
+  while ((m = cmdRe.exec(src))) {
+    let i = m.index + m[0].length;
+    let groups = m[1] === 'subcaptionbox' ? 2 : 1;
+    while (i < src.length && groups > 0) {
+      while (i < src.length && /\s/.test(src[i]!)) i++;
+      if (src[i] === '[') {
+        let depth = 0;
+        for (; i < src.length; i++) {
+          if (src[i] === '[') depth++;
+          else if (src[i] === ']' && --depth === 0) break;
+        }
+        i++;
+        continue;
+      }
+      if (src[i] !== '{') break;
+      i = groupEnd(src, i);
+      groups--;
+    }
+    out.push([m.index, i]);
+  }
+  return out;
+}
+
+const inSpans = (spans: ReadonlyArray<[number, number]>, off: number): boolean => spans.some(([a, b]) => off >= a && off < b);
+
+/** Argument of the float's own `\caption[..]{..}` (the first outside its sub-panels, else the first), or ''. */
+function captionArg(src: string, spans: ReadonlyArray<[number, number]> = []): string {
+  const re = /\\caption\s*(?:\[[^\]]*\]\s*)?\{/g;
+  let m: RegExpExecArray | null;
+  let first: RegExpExecArray | null = null;
+  let own: RegExpExecArray | null = null;
+  while ((m = re.exec(src))) {
+    first ??= m;
+    if (!inSpans(spans, m.index)) {
+      own = m;
+      break;
+    }
+  }
+  const c = own ?? first;
+  if (!c) return '';
+  const open = c.index + c[0].length - 1;
+  const end = groupEnd(src, open);
+  return src.slice(open + 1, Math.max(open + 1, end - 1));
 }
 
 function scanFloats(file: string, text: string, posOf: (file: string, offset: number) => number[]): RawFloat[] {
@@ -96,16 +155,21 @@ function scanFloats(file: string, text: string, posOf: (file: string, offset: nu
     endRe.lastIndex = m.index + m[0].length;
     const e = endRe.exec(src);
     const end = e ? e.index + e[0].length : src.length;
-    const inner = src.slice(m.index, end);
-    const labels: string[] = [];
+    const at = m.index;
+    const inner = src.slice(at, end);
+    const spans = subPanelSpans(inner);
+    // the float's own label first (outside its sub-panels), then the panels' labels: a \ref to a panel cites the float
+    const own: string[] = [];
+    const panel: string[] = [];
     try {
-      for (const kc of scanLatex(inner).keyCommands) if (kc.kind === 'label') labels.push(...kc.keys);
+      for (const kc of scanLatex(inner).keyCommands) if (kc.kind === 'label') (inSpans(spans, kc.start) ? panel : own).push(...kc.keys);
     } catch {
       /* no labels */
     }
+    const labels = [...own, ...panel];
     const graphics = [...inner.matchAll(/\\includegraphics\s*(?:\[[^\]]*\]\s*)?\{([^{}]*)\}/g)].map((g) => g[1]!.trim());
     const subpanels = (inner.match(/\\begin\s*\{sub(?:figure|table)\}|\\subfloat\b|\\subcaptionbox\b|\\subfigure\b/g) ?? []).length;
-    out.push({ kind, file, pos: posOf(file, m.index), start: m.index, end, line: lineAtOffset(text, m.index), labels, graphics, subpanels, captionRaw: captionArg(inner) });
+    out.push({ kind, file, pos: posOf(file, m.index), start: m.index, end, line: lineAtOffset(text, m.index), labels, graphics, subpanels, captionRaw: captionArg(inner, spans), panelSpans: spans.map(([a, b]) => [at + a, at + b] as [number, number]) });
     re.lastIndex = end;
   }
   return out;
@@ -222,7 +286,9 @@ export function figurePlan(files: readonly FigurePlanFile[], units: readonly Con
   const rows: FloatPlanRow[] = raws.map((r, i) => {
     const number = ++counters[r.kind];
     const fileUnits = unitsOf.get(r.file) ?? [];
-    const caps = fileUnits.filter((u) => u.kind === 'caption' && u.start !== undefined && u.start >= r.start && u.start < r.end);
+    const allCaps = fileUnits.filter((u) => u.kind === 'caption' && u.start !== undefined && u.start >= r.start && u.start < r.end);
+    const ownCaps = allCaps.filter((u) => !inSpans(r.panelSpans, u.start!));
+    const caps = ownCaps.length ? ownCaps : allCaps;
     const captionLatex = caps.length ? caps.map((u) => u.text).join(' ') : r.captionRaw;
     let captionPlain = '';
     try {

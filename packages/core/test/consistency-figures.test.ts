@@ -153,8 +153,34 @@ describe('figurePlan rules', () => {
     expect(r2.floats[0]!.firstRef).toMatchObject({ sentenceId: null, line: expect.any(Number) });
   });
 
+  it('sub-panels: the float is named by its own label and caption; a \\ref to a panel cites the float', () => {
+    const SUB = doc(
+      [
+        'Figure~\\ref{fig:b} comes first, then Fig.~\\ref{fig:a} and panel~\\ref{fig:b_right}.',
+        '\\begin{figure}\\includegraphics{a.pdf}\\caption{Efficiency versus $p_T$.}\\label{fig:a}\\end{figure}',
+        '\\begin{figure*}',
+        '\\subfloat[Fake rate\\label{fig:b_left}]{\\includegraphics{b1.pdf}}',
+        '\\begin{subfigure}{0.5\\linewidth}\\includegraphics{b2.pdf}\\caption{Duplicates}\\label{fig:b_right}\\end{subfigure}',
+        '\\caption{Fake rate (left) and duplicate rate (right) versus pile-up.}',
+        '\\label{fig:b}',
+        '\\end{figure*}',
+      ].join('\n'),
+    );
+    const plan = figurePlan([{ file: 'main.tex', text: SUB }], unitsOf('main.tex', SUB), null);
+    const b = plan.floats[1]!;
+    expect(plan.floats).toHaveLength(2);
+    expect(b).toMatchObject({ number: 2, label: 'fig:b', labels: ['fig:b', 'fig:b_left', 'fig:b_right'], refCount: 2, outOfOrder: true });
+    expect(b.caption).toMatch(/^Fake rate \(left\) and duplicate rate \(right\) versus pile-up/);
+    expect(b.checklist.find((c) => c.key === 'panels')!.status).toBe('ok');
+    expect(plan.flags.find((f) => f.kind === 'float_order')!.message).toMatch(/^Fig\. 2 \(fig:b\)/);
+    // from segmentations alone the own caption is the one read
+    const fromSeg = figurePlan([{ file: 'main.tex', text: SUB, seg: segment(SUB) }], [], null);
+    expect(fromSeg.floats[1]!.label).toBe('fig:b');
+  });
+
   it('never throws on odd input', () => {
     expect(() => figurePlan([], [], null)).not.toThrow();
+    expect(() => figurePlan([{ file: 'x.tex', text: '\\begin{figure}\\subfloat[\\caption{x}\\label{fig:y}' }], [], null)).not.toThrow();
     expect(() => figurePlan([{ file: 'x.tex', text: '\\begin{figure}\\caption{unclosed \\label{fig:x' }], [], withClaims([['c', 'fig:x']]))).not.toThrow();
     expect(() => figurePlan(null as never, null as never, undefined)).not.toThrow();
   });

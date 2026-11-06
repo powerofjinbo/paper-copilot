@@ -180,7 +180,9 @@ export function assignUnitsImpl(input: AssignInput): AssignResult {
   // A deletion point ON a span edge counts: mapUnits maps start with assoc +1 and end with assoc -1, so an
   // edge insertion never enters the span, but text deleted at a sentence's first or last characters
   // leaves its deletion point exactly on the new edge (and the text changed).
-  const isDirty = (s: SegSentence): boolean => dirty === undefined || dirty.some((r) => touches(r, s.start, s.end));
+  // The same holds for a replacement that swallowed a span's first (or last) characters: its new range
+  // ends exactly on the span's start (or begins on its end), so a range touching an edge counts too.
+  const isDirty = (s: SegSentence): boolean => dirty === undefined || dirty.some((r) => r.from <= s.end && s.start <= r.to);
   const annRange = input.annotatedRange ?? null;
   /** Does the annotation act on this segment (with optional previous unit)? */
   const annApplies = (s: SegSentence, u: SentenceUnit | null, textChanged: boolean): boolean => {

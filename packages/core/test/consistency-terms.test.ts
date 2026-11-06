@@ -132,6 +132,18 @@ describe('terminologyReport: variants', () => {
     expect(r2.variants.find((v) => v.kind === 'hyphen')!.preferred).toBe('pile-up');
   });
 
+  it('a sentence-initial capital is not the spelling shown or kept', () => {
+    const src = doc('Pile-up is high in this run. Pile-up grows with luminosity. The pileup is simulated, and we vary the pile-up.');
+    const r = terminologyReport(unitsOf('main.tex', src), [term('pile-up')]);
+    const row = r.variants.find((v) => v.kind === 'hyphen')!;
+    expect(row.preferred).toBe('pile-up');
+    expect(row.forms.map((f) => f.form)).toEqual(['pile-up', 'pileup']);
+    expect(r.flags.find((f) => f.kind === 'variant_hyphen')!.message).toBe('One term, 2 spellings: "pile-up" 3×, "pileup" 1×. Keep "pile-up".');
+    // discovered (no list) and every hyphenated use opens a sentence: the capital is undone
+    const r2 = terminologyReport(unitsOf('main.tex', doc('Pile-up is high in this run. The pileup is simulated, and the pileup varies.')));
+    expect(r2.variants.find((v) => v.kind === 'hyphen')!.forms.map((f) => f.form)).toEqual(['pileup', 'pile-up']);
+  });
+
   it('an attributive compound next to the open noun is not a variant', () => {
     const src = doc('The fake-track rate is low.\n\nA fake track has few hits.\n\nThe data set is large, and this dataset is ours.');
     const r = terminologyReport(unitsOf('main.tex', src));
