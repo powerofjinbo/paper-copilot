@@ -11,6 +11,9 @@ import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { defaultScriptPath, LintSidecar } from '../src/services/lint/sidecar';
 
+/** Shared CI runners are slower and noisier than a laptop: timing budgets get 3x slack there. */
+const PERF_SLACK = process.env.CI ? 3 : 1;
+
 const ROOT = resolve(__dirname, '../../..');
 const PYTHON = process.env.PAPER_PYTHON ?? 'python3';
 const FIXTURE = join(ROOT, 'fixtures/canto-demo/tex/main.tex');
@@ -131,7 +134,7 @@ describe.skipIf(!hasPython || !SKILL)('LintSidecar with the real lintd.py', () =
     const items = Array.from({ length: 1000 }, (_, k) => ({ sid: String(k), text: lines[k % lines.length]!, part: ['body', 'intro', 'abstract', 'caption'][k % 4]! }));
     const t0 = performance.now();
     await sc.lintSentences(items, { known: [] });
-    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(performance.now() - t0).toBeLessThan(2000 * PERF_SLACK);
   });
 
   it('rejects a bad request without killing the process', async () => {

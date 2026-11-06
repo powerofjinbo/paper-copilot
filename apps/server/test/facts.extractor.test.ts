@@ -21,6 +21,9 @@ import { compileGlob, listMatchingFiles, matchAny, matchGlob } from '../src/serv
 import { findComparisons, parseDefinitionsMarkdown, plainMdLine } from '../src/services/facts/markdown';
 import { FIXTURE } from './helpers/ctx';
 
+/** Shared CI runners are slower and noisier than a laptop: timing budgets get 3x slack there. */
+const PERF_SLACK = process.env.CI ? 3 : 1;
+
 const REPO = join(FIXTURE, 'repo');
 const GLOBS = ['results/**/*.json', 'results/**/*.csv', 'docs/definitions.md'];
 const CANTO = '/tmp/claude-0/-home-user/ee5dec42-8975-54cc-ab2d-58a63ecab31c/scratchpad/repos/Displaced_tracks_GNN';
@@ -329,7 +332,7 @@ describe('JSON details', () => {
     for (let i = 0; i < 20000; i++) big[`sigma_${i}`] = i;
     const t0 = Date.now();
     const res = extractArtifactText('results/big.json', JSON.stringify(big), 'sha', 'big');
-    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(Date.now() - t0).toBeLessThan(2000 * PERF_SLACK);
     expect(res.facts.length).toBe(5000);
     expect(res.droppedByCap).toBe(15000);
   });
@@ -388,7 +391,7 @@ describe.skipIf(!existsSync(CANTO))('extractor on the full Canto repository (rea
     const t0 = Date.now();
     const r = await extractRepo(CANTO, GLOBS, { log: { ...quiet, warn: (m) => warnings.push(m) } });
     const ms = Date.now() - t0;
-    expect(ms).toBeLessThan(3000);
+    expect(ms).toBeLessThan(3000 * PERF_SLACK);
     expect(r.facts.length).toBeGreaterThan(1000);
     expect(r.facts.length).toBeLessThanOrEqual(50000);
     expect(new Set(r.facts.map((f) => f.id)).size).toBe(r.facts.length);

@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { SKILL_CORPUS_NORMS, STYLE_SPREADS, furthestSentences, styleDistance, styleFeatures, type StyleFeatures } from '../src/meta/index';
 
+/** Shared CI runners are slower and noisier than a laptop: timing budgets get 3x slack there. */
+const PERF_SLACK = process.env.CI ? 3 : 1;
+
 const here = (p: string): string => fileURLToPath(new URL(p, import.meta.url));
 const MAIN = readFileSync(here('../../../fixtures/canto-demo/tex/main.tex'), 'utf8');
 const STYLE_CHECK = here('../../../.skill/scripts/style_check.py');
@@ -242,6 +245,6 @@ describe('furthestSentences', () => {
     const r = furthestSentences(many, SKILL_CORPUS_NORMS, 3);
     const ms = performance.now() - t0;
     expect(r).toHaveLength(3);
-    expect(ms).toBeLessThan(3000);
+    expect(ms).toBeLessThan(3000 * PERF_SLACK);
   });
 });

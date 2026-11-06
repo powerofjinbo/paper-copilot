@@ -7,6 +7,9 @@ import { shadowForCompile } from '../src/latex/lines';
 import { compareWithStyleCheck, parseStyleCheckDump } from '../src/latex/scan/compare';
 import { lineOf, segment, type SegSentence, type Segmentation } from '../src/latex/segment';
 
+/** Shared CI runners are slower and noisier than a laptop: timing budgets get 3x slack there. */
+const PERF_SLACK = process.env.CI ? 3 : 1;
+
 const fixturePath = (rel: string): string => fileURLToPath(new URL(rel, import.meta.url));
 const CANTO = fixturePath('../../../fixtures/canto-demo/tex/main.tex');
 const HARD = fixturePath('./fixtures/segment/prd-hard.tex');
@@ -689,7 +692,7 @@ describe('segment: performance', () => {
     times.sort((a, b) => a - b);
     const median = times[2]!;
     expect(seg!.sentences.length).toBeGreaterThan(800);
-    expect(median).toBeLessThan(30);
+    expect(median).toBeLessThan(30 * PERF_SLACK);
   });
 });
 

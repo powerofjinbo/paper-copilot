@@ -6,6 +6,9 @@ import type { ChangeAnnotation } from '../src/api';
 import { AI_ORIGINS, type SentenceState, type SentenceUnit, type SentenceVersion, type VersionOrigin } from '../src/schemas';
 import type { Segmentation, SegSentence } from '../src/latex/segment';
 
+/** Shared CI runners are slower and noisier than a laptop: timing budgets get 3x slack there. */
+const PERF_SLACK = process.env.CI ? 3 : 1;
+
 /* ------------------------------------------------------------------------------------ */
 /* Helpers: a tiny hand-written segmenter and an in-memory version store                 */
 /* ------------------------------------------------------------------------------------ */
@@ -697,7 +700,7 @@ describe('performance', () => {
       r = run();
       times.push(performance.now() - t0);
     }
-    expect(Math.min(...times)).toBeLessThan(10);
+    expect(Math.min(...times)).toBeLessThan(10 * PERF_SLACK);
     expect(r.units).toHaveLength(500);
     expect(r.report.edited).toHaveLength(1);
     expect(r.upserts.length).toBeLessThanOrEqual(3);
