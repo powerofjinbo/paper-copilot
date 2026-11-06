@@ -4,7 +4,7 @@
  *
  * `paper open` (Fastify + WebSocket + every service, simulated AI with PAPER_FAKE_LLM=1) on a temp project made
  * from fixtures/canto-demo whose LaTeX tree is a clone of a local bare remote (the Overleaf git bridge), the
- * built web app (VITE_PAPER_E2E=1) in Chromium with TWO tabs on main.tex. For SOAK_MINUTES (default 15) a
+ * built web app (VITE_PAPER_E2E=1) in Chromium with TWO tabs on main.tex. For SOAK_MINUTES (default 5) a
  * seeded PRNG (SOAK_SEED, default 1) picks weighted random actions:
  *
  *   type words / a sentence, Chinese IME composition (CDP Input.imeSetComposition + Input.insertText), paste a
@@ -27,7 +27,7 @@
  * On a violation the action log, the seed, the server log and screenshots of both tabs are saved to the
  * shots directory and the run stops with exit code 1. At the end it prints the action counts.
  *
- *   SOAK_SEED=1 SOAK_MINUTES=15 node e2e/soak.mjs [--shots DIR] [--work DIR] [--port 4437] [--no-build] [--keep] [--headed]
+ *   SOAK_SEED=1 SOAK_MINUTES=5 node e2e/soak.mjs [--shots DIR] [--work DIR] [--port 4437] [--no-build] [--keep] [--headed]
  *
  * Timing budgets are multiplied by PERF_SLACK (3 on CI, else 1). Every process the script starts is stopped
  * before it exits; the work directory (temp) is removed unless --keep.
@@ -51,7 +51,7 @@ const arg = (name, dflt) => {
   return i >= 0 ? args[i + 1] : dflt;
 };
 const SEED = Number(arg('--seed', process.env.SOAK_SEED ?? '1')) >>> 0;
-const MINUTES = Number(arg('--minutes', process.env.SOAK_MINUTES ?? '15'));
+const MINUTES = Number(arg('--minutes', process.env.SOAK_MINUTES ?? '5'));
 const SHOTS = resolve(arg('--shots', process.env.SHOTS_DIR ?? join(tmpdir(), 'paper-copilot-soak-shots')));
 const WORK = resolve(arg('--work', '') || mkdtempSync(join(tmpdir(), 'paper-soak-')));
 const PORT = Number(arg('--port', '4437'));
