@@ -1,0 +1,22 @@
+{
+ "ttbar": {
+  "n_train": 8000,
+  "n_val": 1000,
+  "n_test": 1000
+ },
+ "hnl10": {
+  "n_train": 0,
+  "n_val": 500,
+  "n_test": 4000
+ },
+ "hnl15": {
+  "n_train": 0,
+  "n_val": 500,
+  "n_test": 3500
+ },
+ "zdark": {
+  "n_train": 0,
+  "n_val": 400,
+  "n_test": 2500
+ }
+}

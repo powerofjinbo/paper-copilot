@@ -1,0 +1,10 @@
+{
+ "gnn": {
+  "time_ms": 215.7,
+  "memory_gb": 3.5
+ },
+ "ckf": {
+  "time_ms": 1054.2,
+  "memory_gb": 1
+ }
+}

@@ -1,0 +1,5 @@
+sample,n_test_events,fake_rate_gnn,fake_rate_ckf
+ttbar,1000,0.0078,0.0144
+hnl10,4000,0.0059,0.0156
+hnl15,3500,0.0069,0.0177
+zdark,2500,0.0055,0.0181

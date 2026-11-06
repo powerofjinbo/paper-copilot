@@ -1,0 +1,28 @@
+{
+ "bins": {
+  "r0": {
+   "delta_points": 2.46,
+   "sigma_points": 0.26
+  },
+  "r1": {
+   "delta_points": 5.79,
+   "sigma_points": 0.42
+  },
+  "r2": {
+   "delta_points": 11.63,
+   "sigma_points": 0.61
+  },
+  "r3": {
+   "delta_points": 14.69,
+   "sigma_points": 0.79
+  },
+  "r4": {
+   "delta_points": 19.73,
+   "sigma_points": 0.92
+  },
+  "r5": {
+   "delta_points": 24.64,
+   "sigma_points": 1.1
+  }
+ }
+}
