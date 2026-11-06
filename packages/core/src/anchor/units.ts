@@ -10,11 +10,13 @@
  *   3. `assignUnits()` matches new segments to previous units, keeps ids, creates new units, evolves
  *      provenance states, and emits version rows, edit pairs and a report.
  */
-import type { ChangeDesc, ChangeSet } from '@codemirror/state';
+import { ChangeSet, type ChangeDesc, type ChangeSpec } from '@codemirror/state';
+import DiffMatchPatch from 'diff-match-patch';
 import type { ChangeAnnotation, ReanchorReport } from '../api';
 import type { EditPair, SentenceUnit, SentenceVersion } from '../schemas';
 import type { Segmentation } from '../latex/segment';
-import { notImplemented } from '../util';
+import { assignUnitsImpl } from './assign';
+import { LineTable } from './lines';
 
 /**
  * Map unit spans through a change set. `start` maps with assoc +1 (text inserted exactly at a sentence
@@ -23,17 +25,68 @@ import { notImplemented } from '../util';
  * If `newText` is given, `line` is recomputed.
  */
 export function mapUnits(units: SentenceUnit[], changes: ChangeDesc, newText?: string): SentenceUnit[] {
-  return notImplemented('mapUnits', units, changes, newText);
+  const oldLen = changes.length;
+  const lines = newText !== undefined ? new LineTable(newText) : null;
+  const clamp = (p: number): number => (p < 0 ? 0 : p > oldLen ? oldLen : p);
+  return units.map((u) => {
+    // Defensive clamp: a span outside the old document would make mapPos throw.
+    const s0 = clamp(u.start);
+    const e0 = Math.max(s0, clamp(u.end));
+    const start = changes.mapPos(s0, 1);
+    let end = changes.mapPos(e0, -1);
+    if (end < start) end = start;
+    const line = lines ? lines.lineOf(start) : u.line;
+    if (start === u.start && end === u.end && line === u.line) return u;
+    return { ...u, start, end, line };
+  });
 }
 
 /** Ranges touched by a change set, in new-document coordinates, merged and sorted. */
 export function changedRanges(changes: ChangeDesc): Array<{ from: number; to: number }> {
-  return notImplemented('changedRanges', changes);
+  const raw: Array<{ from: number; to: number }> = [];
+  changes.iterChangedRanges((_fromA, _toA, fromB, toB) => raw.push({ from: fromB, to: toB }));
+  raw.sort((a, b) => a.from - b.from || a.to - b.to);
+  const out: Array<{ from: number; to: number }> = [];
+  for (const r of raw) {
+    const last = out[out.length - 1];
+    // Overlapping or touching ranges merge (a deletion point next to an insertion is one region).
+    if (last && r.from <= last.to) last.to = Math.max(last.to, r.to);
+    else out.push({ from: r.from, to: r.to });
+  }
+  return out;
 }
 
 /** A ChangeSet that turns `oldText` into `newText`, computed with diff-match-patch (semantic cleanup). */
 export function diffChanges(oldText: string, newText: string): ChangeSet {
-  return notImplemented('diffChanges', oldText, newText);
+  if (oldText === newText) return ChangeSet.empty(oldText.length);
+  const dmp = new DiffMatchPatch();
+  // No deadline: the diff must be deterministic. Line mode keeps large documents fast.
+  dmp.Diff_Timeout = 0;
+  const diffs = dmp.diff_main(oldText, newText, true);
+  dmp.diff_cleanupSemantic(diffs);
+  const specs: ChangeSpec[] = [];
+  let pos = 0;
+  let pending: { from: number; to: number; insert: string } | null = null;
+  const flush = (): void => {
+    if (pending && (pending.to > pending.from || pending.insert.length > 0)) specs.push(pending);
+    pending = null;
+  };
+  for (const [op, chunk] of diffs) {
+    if (op === 0) {
+      flush();
+      pos += chunk.length;
+    } else if (op === -1) {
+      pending ??= { from: pos, to: pos, insert: '' };
+      pending.to += chunk.length;
+      pos += chunk.length;
+    } else {
+      pending ??= { from: pos, to: pos, insert: '' };
+      pending.insert += chunk;
+    }
+  }
+  flush();
+  // Split inserted text on '\n' only, so '\r\n' keeps its two code units and offsets stay exact.
+  return ChangeSet.of(specs, oldText.length, '\n');
 }
 
 export interface TextAnalysis {
@@ -77,7 +130,11 @@ export interface AssignResult {
   units: SentenceUnit[];
   /** New version rows to append, in order. */
   versions: SentenceVersion[];
-  /** Units created or changed (for sentences.patch). */
+  /**
+   * Units created or changed (for sentences.patch), compared field by field with the MAPPED `prev`:
+   * a unit whose only difference is the span shift already applied by mapUnits is not included
+   * (clients map the same change), but one whose ctxHash, paragraphId, line or state changed is.
+   */
   upserts: SentenceUnit[];
   /** Ids that disappeared (deleted or merged into another unit). */
   removed: string[];
@@ -121,7 +178,7 @@ export interface AssignResult {
  * placeholders from `analyze`. Unchanged units keep facts/claims/move.
  */
 export function assignUnits(input: AssignInput): AssignResult {
-  return notImplemented('assignUnits', input);
+  return assignUnitsImpl(input);
 }
 
 /** Convenience for external changes: diffChanges + mapUnits + assignUnits(changeSource 'external'). */
@@ -131,5 +188,7 @@ export function reanchor(
   seg: Segmentation,
   input: Omit<AssignInput, 'text' | 'seg' | 'changeSource' | 'dirty'>,
 ): AssignResult {
-  return notImplemented('reanchor', oldText, newText, seg, input);
+  const changes = diffChanges(oldText, newText);
+  const prev = mapUnits(input.prev, changes, newText);
+  return assignUnitsImpl({ ...input, prev, text: newText, seg, changeSource: 'external' });
 }
