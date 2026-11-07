@@ -1,13 +1,19 @@
-/** Top bar: project and file, the simulated-AI badge, compile status, Pull/Push, cost, language, theme. */
-import { useEffect, useRef, useState } from 'react';
+/**
+ * Top bar, deliberately short: app name · project / file switcher (per-file proposed counts) · compile
+ * status pill (click compiles; the caret shows errors, the log, the PDF pane and forward search) · Sync
+ * (Pull / Push… / last pull report) · submission status (green ready / amber n issues, opens ④) · the
+ * simulated-AI badge (fake mode only) · ⚙ Settings · ? help.
+ */
+import { useId, useMemo, useState } from 'react';
 import type { ApiClient } from '../contracts';
-import { isMockClient } from '../api/extras';
 import { htmlLang, useT } from '../i18n';
-import { useShell, type ThemePref } from '../state/extra';
+import { useShell } from '../state/extra';
 import { useWorkspace } from '../state/store';
-import { compileNow, forwardSync, openPush, pullNow, revealLine } from './actions';
-import { IconCheck, IconLocate, IconMonitor, IconMoon, IconPdf, IconPlay, IconPull, IconPush, IconSparkle, IconSun, IconWarn, Spinner } from './Icons';
-import { Badge, Button, IconButton } from './ui';
+import { compileNow, forwardSync, openPush, openStep, pullNow, revealLine, runSubmissionCheck, switchFile } from './actions';
+import { IconCheck, IconChevronDown, IconFile, IconGear, IconHelp, IconLocate, IconPdf, IconPlay, IconPull, IconPush, IconSparkle, IconSync, IconWarn, Spinner } from './Icons';
+import { PopoverButton } from './Popover';
+import { openTodoCount, submissionStatus } from './steps';
+import { Badge, IconButton } from './ui';
 
 function BrandMark() {
   return (
@@ -19,141 +25,295 @@ function BrandMark() {
   );
 }
 
-function CompileStatus() {
+/** Project name / file, as a dropdown of the project's .tex files with their open review counts. */
+function FileSwitcher() {
+  const t = useT();
+  const project = useWorkspace((s) => s.project);
+  const file = useWorkspace((s) => s.file);
+  const units = useWorkspace((s) => s.units);
+  const files = useShell((s) => s.files);
+  const list = useMemo(() => {
+    if (files.length) return files.map((f) => ({ file: f.file, review: f.proposed + f.unsupported, depth: f.depth, included: f.included }));
+    return (project?.files ?? []).map((f) => ({ file: f, review: 0, depth: 0, included: true }));
+  }, [files, project]);
+  // the open file's count is live (units), the others come from GET /api/files
+  const liveReview = useMemo(() => units.filter((u) => u.state === 'proposed' || u.state === 'unsupported').length, [units]);
+  const label = (
+    <>
+      <span className="crumb-project">{project?.config.name ?? '…'}</span>
+      <span className="crumb-sep" aria-hidden="true">
+        /
+      </span>
+      <span className="crumb-file mono">{file ?? '—'}</span>
+      {list.length > 1 ? <IconChevronDown size={13} className="crumb-caret" /> : null}
+    </>
+  );
+  if (list.length <= 1) {
+    return (
+      <span className="crumbs" title={project?.config.texRoot ?? undefined}>
+        {label}
+      </span>
+    );
+  }
+  return (
+    <PopoverButton className="crumbs crumbs-btn" title={`${t('top.switchFile')}: ${file ?? ''}`} role="menu" align="start" popClass="file-menu" label={label} testId="file-switcher">
+      {(close) => (
+        <>
+          <div className="menu-title">{t('top.files')}</div>
+          {list.map((f) => {
+            const n = f.file === file ? liveReview : f.review;
+            const current = f.file === file;
+            return (
+              <button
+                key={f.file}
+                type="button"
+                role="menuitem"
+                className={`menu-item file-item${current ? ' is-current' : ''}`}
+                style={{ paddingLeft: 10 + Math.min(3, f.depth) * 12 }}
+                aria-current={current ? 'true' : undefined}
+                data-file={f.file}
+                onClick={() => {
+                  close();
+                  switchFile(f.file);
+                }}
+              >
+                <IconFile size={13} />
+                <span className="mono file-name">{f.file}</span>
+                {n > 0 ? (
+                  <span className="file-count" title={t('top.fileReview', { n })}>
+                    {t('top.fileReview', { n })}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </>
+      )}
+    </PopoverButton>
+  );
+}
+
+function compileLabel(t: ReturnType<typeof useT>, compile: ReturnType<typeof useWorkspace.getState>['compile']): string {
+  return compile.state === 'running'
+    ? t('compile.running')
+    : compile.state === 'error'
+      ? t('compile.error', { n: compile.errors.length })
+      : compile.state === 'ok'
+        ? compile.pdfVersion === null
+          ? t('compile.okNoPdf')
+          : t('compile.ok')
+        : compile.pdfVersion !== null
+          ? t('compile.lastPdf')
+          : t('compile.idle');
+}
+
+/** Status pill: click compiles; the caret opens the errors, the log, the PDF pane toggle and forward search. */
+function CompilePill({ api }: { api: ApiClient }) {
   const t = useT();
   const compile = useWorkspace((s) => s.compile);
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  const label =
-    compile.state === 'running'
-      ? t('compile.running')
-      : compile.state === 'error'
-        ? t('compile.error', { n: compile.errors.length })
-        : compile.state === 'ok'
-          ? compile.pdfVersion === null
-            ? t('compile.okNoPdf')
-            : t('compile.ok')
-          : compile.pdfVersion !== null
-            ? t('compile.lastPdf')
-            : t('compile.idle');
-  const icon = compile.state === 'running' ? <Spinner size={12} /> : compile.state === 'error' ? <IconWarn size={14} /> : compile.state === 'ok' ? <IconCheck size={14} /> : <span className="dot dot-idle" aria-hidden="true" />;
+  const rightPane = useWorkspace((s) => s.rightPane);
+  const setRightPane = useWorkspace((s) => s.setRightPane);
+  const pdfFitHidden = useShell((s) => s.fitHidden.pdf);
+  const pdfShown = rightPane === 'pdf' && !pdfFitHidden;
+  const statusId = useId();
+  const label = compileLabel(t, compile);
+  const icon = compile.state === 'running' ? <Spinner size={12} /> : compile.state === 'error' ? <IconWarn size={14} /> : compile.state === 'ok' ? <IconCheck size={14} /> : <IconPlay size={12} />;
   return (
-    <div className="compile-status" ref={ref}>
-      <button type="button" className={`compile-pill compile-${compile.state}`} aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen((o) => !o)} title={compile.logTail ? compile.logTail.slice(-400) : label}>
+    <div className={`compile-split compile-${compile.state}`}>
+      <button
+        type="button"
+        className={`compile-pill compile-${compile.state}`}
+        onClick={() => void compileNow(api)}
+        aria-label={t('compile.button')}
+        aria-describedby={statusId}
+        aria-keyshortcuts="Control+S Meta+S"
+        title={`${label} — ${t('compile.clickToCompile')}`}
+      >
         {icon}
-        <span className="compile-pill-label">{label}</span>
+        <span className="compile-pill-label" id={statusId}>
+          {label}
+        </span>
       </button>
-      {open ? (
-        <div className="popover compile-popover" role="dialog" aria-label={t('compile.errors')}>
-          <h3 className="popover-title">{t('compile.errors')}</h3>
-          {compile.errors.length ? (
-            <ul className="compile-errors">
-              {compile.errors.map((e, i) => (
-                <li key={i}>
-                  {e.line !== null ? (
-                    <button
-                      type="button"
-                      className="link-btn"
-                      onClick={() => {
-                        revealLine(e.line!);
-                        setOpen(false);
-                      }}
-                    >
-                      {e.file}:{e.line}
-                    </button>
-                  ) : (
-                    <span className="mono">{e.file}</span>
-                  )}{' '}
-                  <span>{e.message}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="muted">{t('compile.noErrors')}</p>
-          )}
-          {compile.logTail ? (
-            <>
-              <h4 className="popover-subtitle">{t('compile.log')}</h4>
-              <pre className="log-tail">{compile.logTail.slice(-2000)}</pre>
-            </>
-          ) : null}
-        </div>
-      ) : null}
+      <PopoverButton className="compile-caret" title={t('compile.details')} popClass="compile-popover" label={<IconChevronDown size={13} />}>
+        {(close) => (
+          <>
+            <h3 className="popover-title">{t('compile.errors')}</h3>
+            {compile.errors.length ? (
+              <ul className="compile-errors">
+                {compile.errors.map((e, i) => (
+                  <li key={i}>
+                    {e.line !== null ? (
+                      <button
+                        type="button"
+                        className="link-btn"
+                        onClick={() => {
+                          revealLine(e.line!, e.file);
+                          close();
+                        }}
+                      >
+                        {e.file}:{e.line}
+                      </button>
+                    ) : (
+                      <span className="mono">{e.file}</span>
+                    )}{' '}
+                    <span>{e.message}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted">{t('compile.noErrors')}</p>
+            )}
+            {compile.logTail ? (
+              <>
+                <h4 className="popover-subtitle">{t('compile.log')}</h4>
+                <pre className="log-tail">{compile.logTail.slice(-2000)}</pre>
+              </>
+            ) : null}
+            <div className="popover-actions">
+              <button
+                type="button"
+                className="btn btn-sm btn-default"
+                aria-pressed={pdfShown}
+                onClick={() => {
+                  // an explicit "show" pins the pane (it is then never hidden to make room for the editor)
+                  useShell.getState().pinPdf(!pdfShown);
+                  setRightPane(pdfShown ? 'none' : 'pdf');
+                  close();
+                }}
+              >
+                <IconPdf size={14} />
+                <span className="btn-label">{pdfShown ? t('pdf.hide') : t('pdf.show')}</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-default"
+                aria-keyshortcuts="Control+Shift+J Meta+Shift+J"
+                onClick={() => {
+                  close();
+                  void forwardSync(api);
+                }}
+              >
+                <IconLocate size={14} />
+                <span className="btn-label">{t('pdf.forward')}</span>
+              </button>
+            </div>
+          </>
+        )}
+      </PopoverButton>
     </div>
   );
 }
 
-function CostMeter({ fake }: { fake: boolean }) {
+function SyncMenu({ api }: { api: ApiClient }) {
   const t = useT();
-  const cost = useWorkspace((s) => s.cost);
-  const usd = cost?.usd ?? 0;
-  const n = cost?.requests ?? 0;
-  const text = usd < 10 ? `$${usd.toFixed(2)}` : `$${usd.toFixed(1)}`;
-  const routes = cost ? Object.entries(cost.byRoute).map(([k, v]) => `${k} $${v.toFixed(3)}`) : [];
-  const title = fake ? t('cost.simulatedTitle', { n }) : `${t('cost.title', { usd: text, n })}${routes.length ? `\n${routes.join(' · ')}` : ''}`;
+  const project = useWorkspace((s) => s.project);
+  const reports = useShell((s) => s.pullReports);
+  const [pulling, setPulling] = useState(false);
+  const syncOff = project?.config.sync.mode === 'none';
+  const sum = reports?.reduce(
+    (a, r) => ({ unchanged: a.unchanged + r.unchanged, edited: a.edited + r.edited.length, created: a.created + r.created.length, orphaned: a.orphaned + r.orphaned.length }),
+    { unchanged: 0, edited: 0, created: 0, orphaned: 0 },
+  );
   return (
-    <span className="cost-meter" title={title} aria-label={title} role="img">
-      <span className="cost-usd">{text}</span>
-    </span>
+    <PopoverButton
+      className="btn btn-default sync-btn"
+      title={t('top.syncMenu')}
+      role="menu"
+      popClass="sync-menu"
+      testId="sync-menu"
+      label={
+        <>
+          {pulling ? <Spinner size={12} /> : <IconSync size={14} />}
+          <span className="btn-label">{t('top.sync')}</span>
+          <IconChevronDown size={12} />
+        </>
+      }
+    >
+      {(close) => (
+        <>
+          {syncOff ? <p className="menu-note muted small">{t('sync.offShort')}</p> : null}
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            disabled={syncOff || pulling}
+            title={t('top.pullTitle')}
+            onClick={async () => {
+              close();
+              setPulling(true);
+              try {
+                await pullNow(api);
+              } finally {
+                setPulling(false);
+              }
+            }}
+          >
+            <IconPull size={14} />
+            <span>{t('top.syncPull')}</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            title={syncOff ? t('sync.offShort') : t('top.pushTitle')}
+            onClick={() => {
+              close();
+              openPush();
+            }}
+          >
+            <IconPush size={14} />
+            <span>{t('top.syncPush')}</span>
+          </button>
+          <div className="menu-sep" role="separator" />
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item menu-item-note"
+            onClick={() => {
+              close();
+              openStep('check', 'sync');
+            }}
+          >
+            <span className="small">{sum ? t('top.syncReport', { report: t('sync.report', sum) }) : t('top.syncNoReport')}</span>
+          </button>
+        </>
+      )}
+    </PopoverButton>
   );
 }
 
-function LangToggle() {
+/** Green "Ready" / amber "n issues" / neutral "Check": opens ④ (and runs the check the first time). */
+function SubmissionPill({ api }: { api: ApiClient }) {
   const t = useT();
-  const lang = useShell((s) => s.lang);
-  const setLang = useShell((s) => s.setLang);
+  const report = useShell((s) => s.submission);
+  const st = submissionStatus(report);
+  const label = st.tone === 'unknown' ? t('top.submitUnknown') : st.tone === 'ready' ? t('top.submitReady') : t('top.submitIssues', { n: st.issues });
   return (
-    <div className="segmented" role="group" aria-label={t('lang.label')}>
-      <button type="button" aria-pressed={lang === 'en'} onClick={() => setLang('en')} lang="en">
-        EN
-      </button>
-      <button type="button" aria-pressed={lang === 'zh'} onClick={() => setLang('zh')} lang="zh-CN">
-        中文
-      </button>
-    </div>
+    <button
+      type="button"
+      className={`submit-pill submit-${st.tone}`}
+      title={t('top.submitTitle')}
+      data-testid="submission-pill"
+      onClick={() => {
+        openStep('check', 'submission');
+        if (!report) void runSubmissionCheck(api);
+      }}
+    >
+      {st.tone === 'ready' ? <IconCheck size={13} /> : st.tone === 'unknown' ? <span className="dot dot-idle" aria-hidden="true" /> : <IconWarn size={13} />}
+      <span>{label}</span>
+    </button>
   );
-}
-
-const NEXT_THEME: Record<ThemePref, ThemePref> = { system: 'light', light: 'dark', dark: 'system' };
-
-function ThemeToggle() {
-  const t = useT();
-  const theme = useShell((s) => s.theme);
-  const setTheme = useShell((s) => s.setTheme);
-  const icon = theme === 'light' ? <IconSun /> : theme === 'dark' ? <IconMoon /> : <IconMonitor />;
-  return <IconButton label={t('theme.label', { mode: t(`theme.${theme}`) })} icon={icon} onClick={() => setTheme(NEXT_THEME[theme])} />;
 }
 
 export function TopBar({ api }: { api: ApiClient }) {
   const t = useT();
   const lang = useShell((s) => s.lang);
   const project = useWorkspace((s) => s.project);
-  const file = useWorkspace((s) => s.file);
-  const rightPane = useWorkspace((s) => s.rightPane);
-  const setRightPane = useWorkspace((s) => s.setRightPane);
-  const pdfFitHidden = useShell((s) => s.fitHidden.pdf);
-  const pdfShown = rightPane === 'pdf' && !pdfFitHidden;
   const fakeShell = useShell((s) => s.fakeLlm);
   const fake = fakeShell ?? project?.fakeLlm ?? false;
-  const mock = isMockClient(api);
-  const [pulling, setPulling] = useState(false);
-  const syncOff = project?.config.sync.mode === 'none';
+  const units = useWorkspace((s) => s.units);
+  void openTodoCount;
+  void units;
 
   return (
     <header className="topbar" lang={htmlLang(lang)}>
@@ -162,71 +322,21 @@ export function TopBar({ api }: { api: ApiClient }) {
           <BrandMark />
           <span className="brand-name">paper-copilot</span>
         </span>
-        <span className="crumbs">
-          <span className="crumb-project" title={project?.config.texRoot ?? undefined}>
-            {project?.config.name ?? '…'}
-          </span>
-          <span className="crumb-sep" aria-hidden="true">
-            /
-          </span>
-          <span className="crumb-file mono" title={t('top.file')}>
-            {file ?? '—'}
-          </span>
-        </span>
-        {fake ? (
-          <Badge tone="warn" title={t('top.fakeLlmTitle')} className="fake-badge">
-            <IconSparkle size={13} />
-            <span className="fake-long">{t('top.fakeLlm')}</span>
-            <span className="fake-short">{t('top.fakeLlmShort')}</span>
-          </Badge>
-        ) : null}
-        {mock ? (
-          <Badge tone="neutral" title={t('top.demoTitle')} className="demo-badge">
-            {t('top.demo')}
-          </Badge>
-        ) : null}
+        <FileSwitcher />
       </div>
       <div className="topbar-right" role="toolbar" aria-label={t('top.toolbar')}>
-        <CompileStatus />
-        <Button icon={<IconPlay size={14} />} onClick={() => void compileNow(api)} title={t('compile.title')} aria-label={t('compile.button')} aria-keyshortcuts="Control+S Meta+S">
-          {t('compile.button')}
-        </Button>
+        <CompilePill api={api} />
+        <SyncMenu api={api} />
+        <SubmissionPill api={api} />
+        {fake ? (
+          <Badge tone="warn" title={t('top.fakeLlmTitle')} className="fake-badge">
+            <IconSparkle size={12} />
+            <span>{t('top.fakeLlmShort')}</span>
+          </Badge>
+        ) : null}
         <span className="topbar-divider" aria-hidden="true" />
-        <Button
-          icon={<IconPull size={14} />}
-          busy={pulling}
-          disabled={syncOff}
-          title={syncOff ? t('sync.offShort') : t('top.pullTitle')}
-          aria-label={t('top.pull')}
-          onClick={async () => {
-            setPulling(true);
-            try {
-              await pullNow(api);
-            } finally {
-              setPulling(false);
-            }
-          }}
-        >
-          {t('top.pull')}
-        </Button>
-        <Button icon={<IconPush size={14} />} onClick={openPush} title={syncOff ? t('sync.offShort') : t('top.pushTitle')} aria-label={t('top.push')}>
-          {t('top.push')}
-        </Button>
-        <span className="topbar-divider" aria-hidden="true" />
-        <CostMeter fake={fake} />
-        <LangToggle />
-        <ThemeToggle />
-        <IconButton label={t('pdf.forward')} icon={<IconLocate />} onClick={() => void forwardSync(api)} aria-keyshortcuts="Control+Shift+J Meta+Shift+J" />
-        <IconButton
-          label={pdfShown ? t('pdf.hide') : t('pdf.show')}
-          icon={<IconPdf />}
-          aria-pressed={pdfShown}
-          onClick={() => {
-            // an explicit "show" pins the pane (it is then never hidden to make room for the editor)
-            useShell.getState().pinPdf(!pdfShown);
-            setRightPane(pdfShown ? 'none' : 'pdf');
-          }}
-        />
+        <IconButton label={t('top.settings')} icon={<IconGear />} onClick={() => useShell.getState().setSettingsOpen(true)} data-testid="settings-button" aria-haspopup="dialog" />
+        <IconButton label={t('top.help')} icon={<IconHelp />} onClick={() => useShell.getState().setHelpOpen(true)} aria-keyshortcuts="F1" />
       </div>
     </header>
   );

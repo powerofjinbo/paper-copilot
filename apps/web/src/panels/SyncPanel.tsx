@@ -97,7 +97,13 @@ function Blockers({ check }: { check: PushCheck }) {
   );
 }
 
-export function SyncPanel({ api }: { api: ApiClient }) {
+export type SyncPart = 'pull' | 'push' | 'disclosure';
+
+/**
+ * The Sync panel. `parts` renders only those sections without the panel frame (④ Check & submit embeds
+ * Pull + Push under "Sync with Overleaf" and the disclosure under "AI-use disclosure").
+ */
+export function SyncPanel({ api, parts }: { api: ApiClient; parts?: SyncPart[] }) {
   const t = useT();
   const project = useWorkspace((s) => s.project);
   const pushNotice = useWorkspace((s) => s.pushNotice);
@@ -154,7 +160,8 @@ export function SyncPanel({ api }: { api: ApiClient }) {
     return () => clearTimeout(timer);
   }, [logSig]);
   const frozen = edited !== null;
-  const disclosure = useLoad(() => api.disclosure(venue), [api, venue, frozen ? 'frozen' : sigNow]);
+  const wantDisclosure = !parts || parts.includes('disclosure');
+  const disclosure = useLoad(() => (wantDisclosure ? api.disclosure(venue) : Promise.resolve(null)), [api, venue, wantDisclosure, frozen ? 'frozen' : sigNow]);
   useEffect(() => {
     setEdited(null);
   }, [venue, format, disclosure.data]);
@@ -172,6 +179,164 @@ export function SyncPanel({ api }: { api: ApiClient }) {
   const syncOff = project?.config.sync.mode === 'none' || !!check?.unavailable;
   const canPush = !syncOff && !!check && check.ok && message.trim().length > 0 && !push.busy;
 
+  const syncOffBanner = syncOff ? (
+    <div className="banner sync-off" role="note" data-testid="sync-off">
+      <span>{t('sync.off')}</span>
+    </div>
+  ) : null;
+  const pullSection = (
+    <PanelSection
+      title={t('sync.pullSection')}
+      actions={
+        syncOff ? null : (
+          <Button size="sm" icon={<IconPull size={13} />} busy={pull.busy} onClick={() => void pull.run()}>
+            {t('sync.pullButton')}
+          </Button>
+        )
+      }
+    >
+      <InlineError message={pull.error} />
+      {project?.config.sync.remote && !syncOff ? (
+        <p className="muted small">
+          {t('sync.remote')}: <span className="mono">{project.config.sync.remote}</span> · {project.config.sync.branch}
+        </p>
+      ) : null}
+      {sum ? <p className="report-line">{t('sync.report', sum)}</p> : null}
+      {editedIds.length ? (
+        <>
+          <div className="sub-label">{t('sync.edited')}</div>
+          <ul className="chips">
+            {editedIds.map((id) => (
+              <li key={id}>
+                <button type="button" className="chip chip-ext" onClick={() => revealSentence(id)}>
+                  {t('common.goToSentence')} <code>{id.slice(-6)}</code>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      {orphanIds.length ? (
+        <>
+          <div className="sub-label">{t('sync.orphaned')}</div>
+          <ul className="chips">
+            {orphanIds.map((id) => (
+              <li key={id} className="chip">
+                <code>{id.slice(-6)}</code>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </PanelSection>
+  );
+  const pushSection = (
+    <PanelSection title={t('sync.pushSection')} actions={<Button size="sm" icon={<IconRefresh size={13} />} busy={runCheck.busy} onClick={() => void runCheck.run()}>{t('sync.check')}</Button>}>
+      <InlineError message={runCheck.error} />
+      {check ? (
+        <>
+          {syncOff ? null : <Blockers check={check} />}
+          {syncOff && check.blockers.length ? <Blockers check={{ ...check, ok: false }} /> : null}
+          <div className="sub-label">{t('sync.diff')}</div>
+          {check.diff ? <DiffView diff={check.diff} /> : <p className="muted small">{t('sync.noDiff')}</p>}
+          {syncOff ? null : (
+            <>
+              <Field htmlFor={ids.msg} label={t('sync.message')}>
+                <input id={ids.msg} className="input" value={message} placeholder={t('sync.messageHint')} onChange={(e) => setMessage(e.target.value)} lang="en" />
+              </Field>
+              <div className="row-end">
+                <Button variant="primary" icon={<IconPush size={14} />} disabled={!canPush} busy={push.busy} onClick={() => void push.run()} title={!check.ok ? t('sync.pushDisabled') : undefined}>
+                  {t('sync.pushButton')}
+                </Button>
+              </div>
+              {!check.ok ? (
+                <p className="muted small push-reason" role="note">
+                  {t('sync.pushDisabled')}
+                </p>
+              ) : null}
+            </>
+          )}
+          <InlineError message={push.error} />
+          {pushOutput ? <pre className={`log-tail${pushOutput.ok ? '' : ' is-error'}`}>{pushOutput.output}</pre> : null}
+        </>
+      ) : (
+        <p className="muted small">{t('sync.checkFirst')}</p>
+      )}
+    </PanelSection>
+  );
+  const disclosureSection = (
+    <PanelSection title={t('sync.disclosure')} focusId={parts ? 'disclosure' : undefined} defaultOpen={!parts}>
+      <p className="muted small">{t('sync.disclosureHint')}</p>
+      <div className="grid-2">
+        <Field htmlFor={ids.venue} label={t('sync.venue')}>
+          <select id={ids.venue} className="select" value={venue} onChange={(e) => setVenue(e.target.value as Venue)}>
+            {VENUES.map((v) => (
+              <option key={v} value={v}>
+                {t(`venue.${v}` as MsgKey)}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div className="field">
+          <div className="field-label-row">
+            <span className="field-label">&nbsp;</span>
+          </div>
+          <div className="segmented segmented-sm" role="group" aria-label={t('sync.disclosure')}>
+            <button type="button" aria-pressed={format === 'latex'} onClick={() => setFormat('latex')}>
+              {t('sync.latex')}
+            </button>
+            <button type="button" aria-pressed={format === 'plain'} onClick={() => setFormat('plain')}>
+              {t('sync.plain')}
+            </button>
+          </div>
+        </div>
+      </div>
+      <InlineError message={disclosure.error} />
+      {disclosure.data ? (
+        <>
+          <p className="small">
+            <span className="sub-label">{t('sync.placement')}:</span> {disclosure.data.placement}
+          </p>
+          {stats && typeof stats.totalSentences === 'number' ? <p className="muted small">{t('sync.stats', { total: stats.totalSentences, everAi: stats.everAi ?? 0 })}</p> : null}
+          <label className="sr-only" htmlFor={ids.text}>
+            {t('sync.disclosure')}
+          </label>
+          <textarea id={ids.text} ref={textRef} className="textarea mono disclosure-text" rows={8} value={text} onChange={(e) => setEdited(e.target.value)} lang="en" spellCheck={false} />
+          <div className="row-end">
+            <Button size="sm" icon={<IconRefresh size={13} />} busy={disclosure.loading} onClick={disclosure.reload}>
+              {t('sync.generate')}
+            </Button>
+            <Button
+              size="sm"
+              variant="primary"
+              icon={copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+              onClick={async () => {
+                const ok = await copyText(text, textRef.current);
+                setCopied(ok);
+                if (ok) setTimeout(() => setCopied(false), 1600);
+              }}
+            >
+              {copied ? t('common.copied') : t('common.copy')}
+            </Button>
+          </div>
+        </>
+      ) : disclosure.loading ? (
+        <p className="muted small">{t('common.loading')}</p>
+      ) : null}
+    </PanelSection>
+  );
+
+  if (parts) {
+    return (
+      <>
+        {parts.includes('pull') || parts.includes('push') ? syncOffBanner : null}
+        {parts.includes('pull') ? pullSection : null}
+        {parts.includes('push') ? pushSection : null}
+        {parts.includes('disclosure') ? disclosureSection : null}
+      </>
+    );
+  }
+
   return (
     <div className="panel">
       <PanelHeader
@@ -186,143 +351,10 @@ export function SyncPanel({ api }: { api: ApiClient }) {
         }
       />
       <div className="panel-body">
-        {syncOff ? (
-          <div className="banner sync-off" role="note" data-testid="sync-off">
-            <span>{t('sync.off')}</span>
-          </div>
-        ) : null}
-        <PanelSection
-          title={t('sync.pullSection')}
-          actions={
-            syncOff ? null : (
-              <Button size="sm" icon={<IconPull size={13} />} busy={pull.busy} onClick={() => void pull.run()}>
-                {t('sync.pullButton')}
-              </Button>
-            )
-          }
-        >
-          <InlineError message={pull.error} />
-          {project?.config.sync.remote && !syncOff ? (
-            <p className="muted small">
-              {t('sync.remote')}: <span className="mono">{project.config.sync.remote}</span> · {project.config.sync.branch}
-            </p>
-          ) : null}
-          {sum ? <p className="report-line">{t('sync.report', sum)}</p> : null}
-          {editedIds.length ? (
-            <>
-              <div className="sub-label">{t('sync.edited')}</div>
-              <ul className="chips">
-                {editedIds.map((id) => (
-                  <li key={id}>
-                    <button type="button" className="chip chip-ext" onClick={() => revealSentence(id)}>
-                      {t('common.goToSentence')} <code>{id.slice(-6)}</code>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : null}
-          {orphanIds.length ? (
-            <>
-              <div className="sub-label">{t('sync.orphaned')}</div>
-              <ul className="chips">
-                {orphanIds.map((id) => (
-                  <li key={id} className="chip">
-                    <code>{id.slice(-6)}</code>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : null}
-        </PanelSection>
-
-        <PanelSection title={t('sync.pushSection')} actions={<Button size="sm" icon={<IconRefresh size={13} />} busy={runCheck.busy} onClick={() => void runCheck.run()}>{t('sync.check')}</Button>}>
-          <InlineError message={runCheck.error} />
-          {check ? (
-            <>
-              {syncOff ? null : <Blockers check={check} />}
-              {syncOff && check.blockers.length ? <Blockers check={{ ...check, ok: false }} /> : null}
-              <div className="sub-label">{t('sync.diff')}</div>
-              {check.diff ? <DiffView diff={check.diff} /> : <p className="muted small">{t('sync.noDiff')}</p>}
-              {syncOff ? null : (
-                <>
-                  <Field htmlFor={ids.msg} label={t('sync.message')}>
-                    <input id={ids.msg} className="input" value={message} placeholder={t('sync.messageHint')} onChange={(e) => setMessage(e.target.value)} lang="en" />
-                  </Field>
-                  <div className="row-end">
-                    <Button variant="primary" icon={<IconPush size={14} />} disabled={!canPush} busy={push.busy} onClick={() => void push.run()} title={!check.ok ? t('sync.pushDisabled') : undefined}>
-                      {t('sync.pushButton')}
-                    </Button>
-                  </div>
-                </>
-              )}
-              <InlineError message={push.error} />
-              {pushOutput ? <pre className={`log-tail${pushOutput.ok ? '' : ' is-error'}`}>{pushOutput.output}</pre> : null}
-            </>
-          ) : (
-            <p className="muted small">{t('sync.checkFirst')}</p>
-          )}
-        </PanelSection>
-
-        <PanelSection title={t('sync.disclosure')}>
-          <p className="muted small">{t('sync.disclosureHint')}</p>
-          <div className="grid-2">
-            <Field htmlFor={ids.venue} label={t('sync.venue')}>
-              <select id={ids.venue} className="select" value={venue} onChange={(e) => setVenue(e.target.value as Venue)}>
-                {VENUES.map((v) => (
-                  <option key={v} value={v}>
-                    {t(`venue.${v}` as MsgKey)}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <div className="field">
-              <div className="field-label-row">
-                <span className="field-label">&nbsp;</span>
-              </div>
-              <div className="segmented segmented-sm" role="group" aria-label={t('sync.disclosure')}>
-                <button type="button" aria-pressed={format === 'latex'} onClick={() => setFormat('latex')}>
-                  {t('sync.latex')}
-                </button>
-                <button type="button" aria-pressed={format === 'plain'} onClick={() => setFormat('plain')}>
-                  {t('sync.plain')}
-                </button>
-              </div>
-            </div>
-          </div>
-          <InlineError message={disclosure.error} />
-          {disclosure.data ? (
-            <>
-              <p className="small">
-                <span className="sub-label">{t('sync.placement')}:</span> {disclosure.data.placement}
-              </p>
-              {stats && typeof stats.totalSentences === 'number' ? <p className="muted small">{t('sync.stats', { total: stats.totalSentences, everAi: stats.everAi ?? 0 })}</p> : null}
-              <label className="sr-only" htmlFor={ids.text}>
-                {t('sync.disclosure')}
-              </label>
-              <textarea id={ids.text} ref={textRef} className="textarea mono disclosure-text" rows={8} value={text} onChange={(e) => setEdited(e.target.value)} lang="en" spellCheck={false} />
-              <div className="row-end">
-                <Button size="sm" icon={<IconRefresh size={13} />} busy={disclosure.loading} onClick={disclosure.reload}>
-                  {t('sync.generate')}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  icon={copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
-                  onClick={async () => {
-                    const ok = await copyText(text, textRef.current);
-                    setCopied(ok);
-                    if (ok) setTimeout(() => setCopied(false), 1600);
-                  }}
-                >
-                  {copied ? t('common.copied') : t('common.copy')}
-                </Button>
-              </div>
-            </>
-          ) : disclosure.loading ? (
-            <p className="muted small">{t('common.loading')}</p>
-          ) : null}
-        </PanelSection>
+        {syncOffBanner}
+        {pullSection}
+        {pushSection}
+        {disclosureSection}
       </div>
     </div>
   );

@@ -3,8 +3,8 @@
  * always English, and AI notes follow the project's notesLanguage (set on the server).
  * Default: the user's last choice (localStorage), else the project's notesLanguage ('zh' -> 中文).
  */
-import { useCallback } from 'react';
-import type { GhostMode, JobKind, Provenance, SentenceState } from '@paper-copilot/core';
+import { useCallback, useMemo } from 'react';
+import { t as coreT, i18nEntry, type GhostMode, type JobKind, type Provenance, type SentenceState } from '@paper-copilot/core';
 import { ALT_KEY, GHOST_KEY, GHOST_KEY_ALT, MOD_KEY } from './editor/labels';
 import { useShell, type Lang } from './state/extra';
 
@@ -1215,6 +1215,38 @@ export function ghostKey(m: GhostMode): MsgKey {
 }
 export function ghostHintKey(m: GhostMode): MsgKey {
   return `ghostHint.${m}` as MsgKey;
+}
+
+/**
+ * Labels of codes the server reports (gate issue codes, lint checks, submission items, consistency flags,
+ * caption checks) from the core i18n tables, in the UI language. `has(code)` tells whether a translation
+ * exists (unknown codes render as themselves).
+ */
+export type CodeT = ((code: string, field?: 'label' | 'explain') => string) & { has: (code: string) => boolean };
+
+export function codeLabel(lang: Lang, code: string, field: 'label' | 'explain' = 'label'): string {
+  try {
+    return coreT(code, lang, field);
+  } catch {
+    return code;
+  }
+}
+
+export function useCodeT(): CodeT {
+  const lang = useShell((s) => s.lang);
+  return useMemo(
+    () =>
+      Object.assign((code: string, field: 'label' | 'explain' = 'label') => codeLabel(lang, code, field), {
+      has: (code: string) => {
+        try {
+          return i18nEntry(code) !== null;
+        } catch {
+          return false;
+        }
+      },
+      }),
+    [lang],
+  );
 }
 
 /** The HTML lang attribute for UI chrome (the paper itself stays lang="en"). */

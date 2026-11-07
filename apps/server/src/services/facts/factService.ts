@@ -689,7 +689,9 @@ export function createFactService(ctx: Ctx, opts: FactServiceOptions = {}): Fact
     const linked = [...res.linked];
     const ambiguous: Array<{ raw: string; candidates: string[] }> = [];
     // A numeral no fact holds may be a derived number ("2.5 times", "2.3 points higher"): the gate accepts
-    // it through the same relations, so it is linked to both facts (one relation) or listed as ambiguous.
+    // it through the same relations and links both facts of the FIRST relation that matches (relations
+    // come tiered, same result row first), so linkUnit does the same, unless the sentence's own facts
+    // (prefer) name another matching relation.
     let unmatched = res.unmatched.map((t) => t.raw);
     if (res.unmatched.length) {
       const rels = derived();
@@ -708,9 +710,8 @@ export function createFactService(ctx: Ctx, opts: FactServiceOptions = {}): Fact
             unmatched.push(tok.raw);
             continue;
           }
-          const pairs = new Set(hits.map((h) => [...h.factIds].sort().join('|')));
-          if (pairs.size === 1) linked.push(...hits[0]!.factIds);
-          else ambiguous.push({ raw: tok.raw, candidates: [...new Set(hits.flatMap((h) => h.factIds))] });
+          const preferred = hits.find((h) => h.factIds.length > 0 && h.factIds.every((id) => preferIds.includes(id)));
+          linked.push(...(preferred ?? hits[0]!).factIds);
         }
       }
     }
