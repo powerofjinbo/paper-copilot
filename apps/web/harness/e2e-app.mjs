@@ -731,11 +731,32 @@ async function main() {
       const ws = window.__paper.workspace.getState();
       return ws.file === t.file && ws.activeSentenceId === t.id;
     }, target, 8000, 'cross-file reveal');
+    // drafting a section that lives in another file: the editor opens that file, then inserts the draft
+    await page.locator('[data-testid="file-switcher"]').click();
+    await page.locator('.file-menu [data-file="main.tex"]').click();
+    await waitFor(() => window.__paper.workspace.getState().file === 'main.tex' && window.__paper.workspace.getState().units.length > 0, null, 6000, 'main.tex open');
+    await openTab('Outline');
+    const story = page.locator('.five-items textarea').first();
+    await story.scrollIntoViewIfNeeded();
+    await story.fill('A tracker trained without the signal finds more displaced particles than the baseline.');
+    await page.locator('.attest input[type="checkbox"]').first().check();
+    const sec = page.locator('.section-card').filter({ hasText: /Results/ }).first();
+    await sec.scrollIntoViewIfNeeded();
+    await sec.locator('button').first().click();
+    const draftBtn = sec.getByRole('button', { name: /Draft from outline/ }).first();
+    await draftBtn.scrollIntoViewIfNeeded();
+    await draftBtn.click();
+    await waitFor(() => {
+      const ws = window.__paper.workspace.getState();
+      return ws.file === 'sections/results.tex' && ws.units.some((u) => u.state === 'proposed' || u.state === 'unsupported');
+    }, null, 10000, 'draft inserted into results.tex');
+    const drafted = await pc(() => window.__paper.workspace.getState().units.filter((u) => u.state === 'proposed' || u.state === 'unsupported').length);
+    await shot('files-draft');
     // the submission check spans every file
     await page.locator('[data-testid="submission-pill"]').click();
     await page.waitForSelector('[data-testid="submission-check"] .sub-list', { timeout: 8000 });
     await shot('files-check');
-    return `${items.length} files; revealed ${target.id.slice(-6)} in ${target.file}`;
+    return `${items.length} files; revealed ${target.id.slice(-6)} in ${target.file}; ${drafted} drafted sentence(s) landed in results.tex`;
   });
 
   await check('no page errors', async () => {

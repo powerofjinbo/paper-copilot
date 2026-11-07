@@ -238,6 +238,25 @@ function usePendingReveal(): void {
   }, [pending, file, units, editor]);
 }
 
+/**
+ * Drafts that arrived while no editor had their file open (a section in another \input file, or before
+ * the editor existed): insert them once that file's editor is ready and its text has loaded (its units
+ * arrived), so the insertion point is computed on the real text.
+ */
+function useQueuedDrafts(): void {
+  const pending = useShell((s) => s.pendingDrafts);
+  const file = useWorkspace((s) => s.file);
+  const editor = useWorkspace((s) => s.editor);
+  const loaded = useWorkspace((s) => s.units.length > 0);
+  useEffect(() => {
+    if (!pending.length || !editor || !file || !loaded) return;
+    const mine = pending.filter((d) => !d.file || d.file === file);
+    if (!mine.length) return;
+    useShell.setState({ pendingDrafts: pending.filter((d) => !mine.includes(d)) });
+    for (const d of mine) editor.insertDraft(d);
+  }, [pending, file, editor, loaded]);
+}
+
 function useDevHandle(api: ApiClient): void {
   useEffect(() => {
     // Dev server, or a build made for the full-stack E2E (`VITE_PAPER_E2E=1 vite build`, e2e/fullstack.mjs).
@@ -253,6 +272,7 @@ function Workspace({ api }: { api: ApiClient }) {
   useShortcuts(api);
   useDevHandle(api);
   usePendingReveal();
+  useQueuedDrafts();
   const lang = useShell((s) => s.lang);
   const file = useWorkspace((s) => s.file);
   const connected = useWorkspace((s) => s.connected);
@@ -274,7 +294,6 @@ function Workspace({ api }: { api: ApiClient }) {
 
   const onEditorReady = useCallback((h: EditorHandle) => {
     useWorkspace.getState().setEditor(h);
-    for (const d of useShell.getState().takeDrafts()) h.insertDraft(d);
   }, []);
   const onPdfReady = useCallback((h: PdfHandle) => useShell.getState().setPdf(h), []);
   const onInverse = useCallback((target: { file: string; line: number }) => {
