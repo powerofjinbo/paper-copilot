@@ -28,6 +28,7 @@ import {
   emptyOutline,
   extractTitle,
   figurePlan,
+  hashString,
   orderUnits,
   projectFileOrder,
   segment,
@@ -119,6 +120,8 @@ export interface ProjectSnapshot {
   derived: DerivedRelation[];
   outline: Outline;
   title: string | null;
+  /** Sentences that still state an old value of a changed or missing fact (facts.staleStatements). */
+  staleStatements: Array<{ factId: string; sentenceIds: string[] }>;
 }
 
 /**
@@ -166,11 +169,14 @@ export async function projectSnapshot(ctx: Ctx): Promise<ProjectSnapshot> {
   }
   const facts = soft(ctx, 'facts.all', () => ctx.facts.all(), [] as Fact[]);
   const typeset = included.map((e) => e.file);
+  const ordered = orderUnits(unitsWithText(units, mirror), order);
+  const staleFn = ctx.facts.staleStatements;
   return {
     mainFile,
     order: order.filter((e) => typeset.includes(e.file)),
     files,
-    units: orderUnits(unitsWithText(units, mirror), order),
+    units: ordered,
+    staleStatements: typeof staleFn === 'function' ? soft(ctx, 'facts.staleStatements', () => staleFn.call(ctx.facts, ordered), []) : [],
     facts,
     derived: derivedOf(ctx, facts),
     outline: soft(ctx, 'outline', () => ctx.files.readJson(ctx.paths.outline, Outline, emptyOutline()), emptyOutline()),
@@ -179,7 +185,64 @@ export async function projectSnapshot(ctx: Ctx): Promise<ProjectSnapshot> {
 }
 
 export function consistencyReport(snap: ProjectSnapshot): EchoReport {
-  return echoCheck(snap.units, snap.facts, snap.outline, { title: snap.title, derived: snap.derived });
+  const echo = echoCheck(snap.units, snap.facts, snap.outline, { title: snap.title, derived: snap.derived });
+  return withStaleStatements(echo, snap);
+}
+
+const shortText = (t: string, n = 200): string => {
+  const s = String(t ?? '').replace(/\s+/g, ' ').trim();
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+};
+
+/**
+ * The echo check finds stale-fact sentences through the stored links and the CURRENT facts (excluded
+ * ones left out), so a re-link, an ambiguous numeral, a confirmed new value or a fact gone from its
+ * artifact hides a sentence that still states the old number. Add every sentence the fact service finds
+ * stating an old value (snap.staleStatements) to echo.stale and to its stale_fact flag, so the
+ * submission check blocks it (R2-I-2, R2-I-10).
+ */
+export function withStaleStatements(echo: EchoReport, snap: Pick<ProjectSnapshot, 'units' | 'facts' | 'staleStatements'>): EchoReport {
+  if (!snap.staleStatements?.length) return echo;
+  const byId = new Map(snap.units.map((u) => [u.id, u]));
+  const stale = echo.stale.map((s) => ({ ...s, sentences: [...s.sentences] }));
+  const flags = [...echo.flags];
+  for (const { factId, sentenceIds } of snap.staleStatements) {
+    const units = sentenceIds.map((id) => byId.get(id)).filter((u): u is ConsistencyUnit => !!u);
+    if (units.length === 0) continue;
+    const f = snap.facts.find((x) => x.id === factId);
+    let entry = stale.find((s) => s.factId === factId);
+    if (!entry) {
+      entry = { factId, definition: f?.definition ?? '', sentences: [] };
+      stale.push(entry);
+    }
+    const added: string[] = [];
+    for (const u of units) {
+      if (entry.sentences.some((r) => r.sentenceId === u.id)) continue;
+      entry.sentences.push({ sentenceId: u.id, file: u.file, line: u.line, part: u.part, text: shortText(u.text) });
+      added.push(u.id);
+    }
+    if (added.length === 0) continue;
+    const gone = f?.tags.includes('missing') ? `is no longer in ${f.artifact}` : `changed in ${f?.artifact ?? 'its artifact'}`;
+    const flagIdx = flags.findIndex((x) => x.kind === 'stale_fact' && x.factIds.includes(factId));
+    if (flagIdx >= 0) {
+      const prev = flags[flagIdx]!;
+      flags[flagIdx] = { ...prev, sentenceIds: [...new Set([...prev.sentenceIds, ...added])] };
+    } else {
+      const sids = entry.sentences.map((r) => r.sentenceId).filter((x): x is string => !!x);
+      flags.push({
+        id: hashString(`stale_fact|${factId}|old-value|${sids.join(',')}`),
+        kind: 'stale_fact',
+        severity: 'warn',
+        heuristic: false,
+        message: `${factId} ${gone}; ${sids.length} sentence${sids.length === 1 ? '' : 's'} still state${sids.length === 1 ? 's' : ''} its old value.`,
+        factIds: [factId],
+        sentenceIds: sids,
+        term: null,
+        label: null,
+      });
+    }
+  }
+  return { ...echo, stale, flags };
 }
 
 export function terminologyOf(ctx: Ctx, snap: ProjectSnapshot): TerminologyReport {
@@ -195,10 +258,20 @@ export function figurePlanOf(ctx: Ctx, snap: ProjectSnapshot): FigurePlanReport 
 }
 
 /** The last compile as submissionCheck reads it (null: never compiled in this launch). */
-function compileState(ctx: Ctx): { state: 'idle' | 'running' | 'ok' | 'error'; errors: CompileError[] } | null {
+function compileState(ctx: Ctx, files: ReadonlyArray<{ file: string; text: string }> = []): { state: 'idle' | 'running' | 'ok' | 'error'; errors: CompileError[] } | null {
   const st = soft(ctx, 'build.status', () => ctx.build.status(), null);
   if (!st) return null;
   if (st.state === 'idle' && st.pdfVersion === null) return null;
+  if (st.state === 'ok' || st.state === 'error') {
+    // The last compile must have typeset the CURRENT text (R2-I-8): a co-author's edit on disk in a file
+    // nobody had open, or typing not compiled yet, makes its result say nothing about the paper as it is.
+    const fn = ctx.build.changedSinceCompile;
+    const changed = typeof fn === 'function' ? soft(ctx, 'build.changedSinceCompile', () => fn.call(ctx.build, new Map(files.map((f) => [f.file, f.text]))), null) : null;
+    if (changed && changed.length > 0) {
+      const errors: CompileError[] = changed.slice(0, 20).map((file) => ({ file, line: null, message: `Compiled before the current text of ${file}: compile again.` }));
+      return { state: 'error', errors: [...errors, ...st.errors] };
+    }
+  }
   return { state: st.state, errors: st.errors };
 }
 
@@ -215,7 +288,7 @@ export async function submissionReport(ctx: Ctx, venue: Venue): Promise<Submissi
     venue,
     bibKeys: soft(ctx, 'lit.bibKeys', () => ctx.lit.bibKeys(), []),
     lit: soft(ctx, 'lit.records', () => ctx.lit.records(), []),
-    compile: compileState(ctx),
+    compile: compileState(ctx, snap.files),
     lintFlags,
     outline: snap.outline,
     terms: soft(ctx, 'facts.terminology', () => ctx.facts.terminology(), []),

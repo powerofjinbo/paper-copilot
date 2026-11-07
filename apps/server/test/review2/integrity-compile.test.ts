@@ -53,3 +53,28 @@ it('a compile error introduced on disk in an unopened \\input file is not report
   // today: { reportedOk: true, compileNow: 'error' }
   expect({ reportedOk: reported.ok, compileNow: now.state }).toEqual({ reportedOk: false, compileNow: 'error' });
 }, 120_000);
+
+it('without a watcher-scheduled compile, the check still says the last compile predates the current text', async () => {
+  await app?.close();
+  await ctx?.close();
+  if (root) rmSync(root, { recursive: true, force: true });
+  root = mkdtempSync(join(tmpdir(), 'paper-review2-compile-'));
+  cpSync(join(REPO_ROOT, 'fixtures', 'large-multifile', 'tex'), join(root, 'tex'), { recursive: true });
+  cpSync(join(REPO_ROOT, 'fixtures', 'large-multifile', 'repo'), join(root, 'repo'), { recursive: true });
+  await initProject(root, { repo: join(root, 'repo'), skill: SKILL_DIR });
+  ctx = await createCtx({ root, fake: true, logLevel: 'error', watch: false, lintSidecar: false, docs: { segmentDebounceMs: 20, writeDebounceMs: 50 } });
+  await ctx.start();
+  app = Fastify();
+  registerReportsRoutes(app, ctx);
+  await app.ready();
+  expect((await ctx.build.compile('manual')).state).toBe('ok');
+  const check = async () => SubmissionReport.parse((await app!.inject({ method: 'GET', url: `${FEATURE_ROUTES.submissionCheck}?venue=arxiv` })).json()).items.find((i) => i.id === 'compile_errors')!;
+  expect(ctx.docs.get('sections/method.tex')).toBeFalsy();
+  appendFileSync(join(root, 'tex', 'sections', 'method.tex'), '\nA sentence a co-author added.\n');
+  const stale = await check();
+  expect(stale.ok).toBe(false);
+  expect(stale.items.map((e) => e.text).join(' ')).toContain('sections/method.tex');
+  // compiling the current text clears it
+  expect((await ctx.build.compile('manual')).state).toBe('ok');
+  expect((await check()).ok).toBe(true);
+}, 120_000);

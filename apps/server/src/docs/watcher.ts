@@ -67,7 +67,16 @@ export function createTexWatcher(ctx: Ctx, docs: DocServiceExt, opts: WatcherOpt
       return;
     }
     if (!isTexName(rel)) return;
-    if (!docs.openFiles().includes(rel)) return; // the next open re-anchors against the snapshot
+    if (!docs.openFiles().includes(rel)) {
+      // The next open re-anchors against the snapshot; the PDF must still follow the file (a co-author's
+      // edit in an \input file nobody has open, R2-I-8).
+      try {
+        ctx.build.scheduleCompile();
+      } catch {
+        /* build service optional */
+      }
+      return;
+    }
     let raw: string;
     try {
       raw = await readFile(abs, 'utf8');

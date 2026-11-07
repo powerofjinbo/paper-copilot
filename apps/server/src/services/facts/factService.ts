@@ -765,6 +765,65 @@ export function createFactService(ctx: Ctx, opts: FactServiceOptions = {}): Fact
   /* Service                                                                              */
   /* ---------------------------------------------------------------------------------- */
 
+  /**
+   * Old values the text must not state any more: the previous value of every numeric fact that changed
+   * on a rescan (kept after the author confirms the new one), and the value of every fact now missing
+   * from its artifact. Pseudo-facts with id OLD_PREFIX + fact id, never excluded, for core linking.
+   */
+  const OLD_PREFIX = '\u0000old:';
+  function oldValueFacts(): Fact[] {
+    const out: Fact[] = [];
+    for (const f of views) {
+      const st = data!.status[f.id];
+      if (!st) continue;
+      if (st.missing && typeof f.value === 'number') {
+        out.push({ ...f, id: OLD_PREFIX + f.id, stale: false, excluded: false, confirmed: false });
+      } else if (st.changedAt !== null && typeof st.previousValue === 'number' && Number.isFinite(st.previousValue) && !valuesEqual(st.previousValue, f.value)) {
+        out.push({ ...f, id: OLD_PREFIX + f.id, value: st.previousValue, uncertainties: {}, stale: false, excluded: false, confirmed: false });
+      }
+    }
+    return out;
+  }
+
+  function staleStatements(units: ReadonlyArray<{ id: string; text: string }>): Array<{ factId: string; sentenceIds: string[] }> {
+    load();
+    const olds = oldValueFacts();
+    if (olds.length === 0) return [];
+    const byFact = new Map<string, Set<string>>();
+    const isOld = (id: string) => id.startsWith(OLD_PREFIX);
+    for (const u of units) {
+      if (!u || typeof u.text !== 'string' || !/\d/.test(u.text)) continue;
+      let quick;
+      try {
+        quick = linkSentenceFacts(u.text, olds, []);
+      } catch {
+        continue;
+      }
+      const near = new Set([...quick.linked, ...quick.ambiguous.flatMap((a) => a.candidates)]);
+      if (near.size === 0) continue;
+      // The same numeral may be held by a current fact the author CONFIRMED (the value did not change at
+      // the precision written and the author re-read it, or a renamed field confirmed under its new id):
+      // then it is not a stale statement. An unconfirmed current fact does not clear it: that would hand
+      // the sentence's provenance to a fact nobody checked.
+      const pool = [...candidateFacts(u.text).filter((f) => f.confirmed), ...olds.filter((o) => near.has(o.id))];
+      let r;
+      try {
+        r = linkSentenceFacts(u.text, pool, []);
+      } catch {
+        continue;
+      }
+      const hits = new Set(r.linked.filter(isOld));
+      for (const a of r.ambiguous) if (a.candidates.length > 0 && a.candidates.every(isOld)) for (const c of a.candidates) hits.add(c);
+      for (const h of hits) {
+        const id = h.slice(OLD_PREFIX.length);
+        let set = byFact.get(id);
+        if (!set) byFact.set(id, (set = new Set()));
+        set.add(u.id);
+      }
+    }
+    return [...byFact].sort((a, b) => a[0].localeCompare(b[0])).map(([factId, ids]) => ({ factId, sentenceIds: [...ids] }));
+  }
+
   const service: FactServiceImpl = {
     all() {
       load();
@@ -1096,6 +1155,8 @@ export function createFactService(ctx: Ctx, opts: FactServiceOptions = {}): Fact
     },
 
     derived,
+
+    staleStatements,
 
     watchRepo(wopts) {
       if (repoWatcher) return repoWatcher;

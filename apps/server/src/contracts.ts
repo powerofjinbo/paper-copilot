@@ -266,6 +266,15 @@ export interface FactService {
    * core derivedRelations(all()).
    */
   derived?(): DerivedRelation[];
+  /**
+   * Sentences that still state a value the analysis no longer gives (R2-I-2, R2-I-10): a numeral that
+   * matches the PREVIOUS value of a fact that changed on a rescan (confirmed since or not), or the value of
+   * a fact whose artifact field disappeared, and that no current CONFIRMED fact holds. Read from the text, not from
+   * the stored links, so a re-link (restart, an edit elsewhere in the sentence), an ambiguous numeral or
+   * an excluded/missing fact cannot hide it; it ends when the sentence no longer states that number.
+   * Optional (additive).
+   */
+  staleStatements?(units: ReadonlyArray<{ id: string; text: string }>): Array<{ factId: string; sentenceIds: string[] }>;
 }
 
 export interface LitService {
@@ -404,6 +413,11 @@ export interface BuildService {
   /** Debounced (2 s) compile after saves. */
   scheduleCompile(): void;
   status(): CompileStatus;
+  /**
+   * The files of `texts` (texRoot-relative path -> current text) whose text differs from what the last
+   * finished compile typeset; null when nothing was compiled in this launch. Optional (additive).
+   */
+  changedSinceCompile?(texts: ReadonlyMap<string, string>): string[] | null;
   pdfPath(): string | null;
   forward(file: string, line: number): Promise<{ page: number; x: number; y: number; w: number; h: number } | null>;
   inverse(page: number, x: number, y: number): Promise<{ file: string; line: number } | null>;

@@ -23,7 +23,7 @@ import type { BuildService, CompileStatus, Ctx } from '../../contracts';
 import { safeJoin } from '../../infra';
 import { missingFileHint, parseLatexLog, tailBytes } from './latexLog';
 import { probeExecutable, runProcess } from './proc';
-import { ShadowTree } from './shadow';
+import { ShadowTree, sha, shadowText } from './shadow';
 import { boxFromRecords, parseSynctexEditAll, parseSynctexView, type PdfBox } from './synctex';
 
 export interface BuildServiceOptions {
@@ -93,6 +93,8 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
   }
 
   let status: CompileStatus = { state: 'idle', pdfVersion, errors: [], logTail: '', durationMs: null };
+  /** Shadow-text sha256 of every .tex file the last finished compile (ok or error) typeset; null before one. */
+  let compiledShas: Map<string, string> | null = null;
   const emit = () =>
     ctx.bus.emit({ type: 'compile.status', state: status.state, pdfVersion: status.pdfVersion, errors: status.errors, logTail: status.logTail });
 
@@ -164,6 +166,7 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
       if (!existsSync(mainAbs)) return done('error', fail(`main file "${mainRel()}" does not exist in ${texRoot()}`), '');
       await flushDocs();
       const sync = await shadow().sync();
+      const shas = shadow().textShas();
       // \include{dir/file} writes dir/file.aux into the output directory, which must exist.
       await mkdir(outDir, { recursive: true });
       for (const d of sync.dirs) await mkdir(join(outDir, d), { recursive: true });
@@ -213,6 +216,7 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
         const hint = missingFileHint(e.message, log);
         return hint ? { ...e, message: `${e.message} ${hint}` } : e;
       });
+      compiledShas = shas;
       if (r.code === 0) {
         if (!(await publish())) return done('error', fail('latexmk finished but produced no PDF'), tail);
         // A clean exit is authoritative (the final log may still quote recovered "! ..." lines).
@@ -276,6 +280,22 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
     timer.unref?.();
   };
 
+  /**
+   * Files whose current text differs from what the last compile typeset (R2-I-8): a co-author's edit on
+   * disk, typing not compiled yet. `texts` maps texRoot-relative paths to their current text (the open
+   * mirror, else disk). [] when every file matches; null before any compile finished in this launch.
+   */
+  const changedSinceCompile = (texts: ReadonlyMap<string, string>): string[] | null => {
+    if (!compiledShas) return null;
+    const out: string[] = [];
+    for (const [rel, text] of texts) {
+      const r = relative(texRoot(), resolve(ctx.paths.tex, rel)).split(sep).join('/');
+      const h = compiledShas.get(r);
+      if (h === undefined || h !== sha(shadowText(text))) out.push(rel);
+    }
+    return out;
+  };
+
   const pdfPath = (): string | null => (existsSync(lastPdf()) ? lastPdf() : null);
 
   const forward = async (file: string, line: number): Promise<PdfBox | null> => {
@@ -329,6 +349,7 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
     scheduleCompile,
     close,
     status: () => status,
+    changedSinceCompile,
     pdfPath,
     forward,
     inverse,

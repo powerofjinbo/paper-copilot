@@ -98,7 +98,7 @@ interface ManifestEntry {
 const MAX_FILES = 20_000;
 const MAX_DEPTH = 24;
 
-function sha(text: string): string {
+export function sha(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
@@ -279,6 +279,14 @@ export class ShadowTree {
     }
     if (written.length || removed.length) await this.saveManifest();
     return { written, removed, files: files.length, dirs };
+  }
+
+  /** sha256 of the shadow text of every shadowed (.tex-like) file as last synced, by relative path. */
+  textShas(): Map<string, string> {
+    this.loadManifest();
+    const out = new Map<string, string>();
+    for (const [rel, e] of this.manifest) if (e.sha) out.set(rel, e.sha);
+    return out;
   }
 
   /** Does the shadow hold this relative path as a regular file? */

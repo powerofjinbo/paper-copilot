@@ -14,7 +14,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { FEATURE_ROUTES, SubmissionReport } from '@paper-copilot/core';
+import { ChangeSet } from '@codemirror/state';
+import { ClientMessage, FEATURE_ROUTES, SubmissionReport } from '@paper-copilot/core';
 import { createCtx, type AppCtx } from '../../src/ctx';
 import { initProject } from '../../src/project/init';
 import { registerReportsRoutes } from '../../src/routes/reports';
@@ -64,4 +65,19 @@ it('confirming the new value of a stale fact does not clear the blocker of a sen
   expect(ctx.docs.unitText(id)).toContain('0.55\\%');
   // today: [] (the sentence is only listed under unmatched_numbers, severity warn)
   expect(blocks(r)).not.toEqual([]);
+});
+
+it('the blocker ends when the sentence states the new value (0.55% -> 0.61%)', async () => {
+  const sentence = () => ctx.docs.get('main.tex')!.units.find((u) => (ctx.docs.unitText(u.id) ?? '').startsWith('The fake-track rate is 0.'))!;
+  const u = sentence();
+  const st = ctx.docs.get('main.tex')!;
+  const at = u.start + (ctx.docs.unitText(u.id) ?? '').indexOf('0.55');
+  const msg = ClientMessage.parse(JSON.parse(JSON.stringify({ type: 'doc.change', file: 'main.tex', baseVersion: st.version, changes: ChangeSet.of([{ from: at, to: at + 4, insert: '0.61' }], st.text.length).toJSON(), annotation: null })));
+  expect(await ctx.docs.applyClientChange(msg as Extract<ClientMessage, { type: 'doc.change' }>)).toBe(true);
+  await ctx.docs.flush('main.tex');
+  const id = sentence().id;
+  expect(ctx.docs.unitText(id)).toContain('0.61\\%');
+  const r = await report();
+  const blocks = r.items.filter((i) => i.severity === 'block' && !i.ok && i.items.some((e) => e.sentenceId === id && /stale|fake_rate_A/.test(i.id + e.text))).map((i) => i.id);
+  expect(blocks).not.toContain('stale_facts');
 });
