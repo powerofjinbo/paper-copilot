@@ -408,6 +408,14 @@
   justify-content: space-between;
   gap: 8px;
 }
+/* the file of a row that lives in another \input file (pushes the line number to the right with it) */
+.list-row-top .row-file {
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .list-row-text {
   line-height: 1.45;
   color: var(--ink);

@@ -468,7 +468,7 @@ describe.skipIf(!linkReady)('FactService.linkUnit / unresolved (core linkSentenc
     const { facts } = setup({ docs });
     await facts.rescan();
     const un = facts.unresolved();
-    expect(un).toContainEqual({ sentenceId: 'u3', raw: '3.1415', candidates: [] });
+    expect(un).toContainEqual({ sentenceId: 'u3', raw: '3.1415', candidates: [], file: units[1]!.file, line: units[1]!.line, text: S3 });
     const amb = un.find((x) => x.sentenceId === 'u4');
     expect(amb?.candidates.length).toBeGreaterThan(1);
     expect(amb?.candidates).toContain('f.g1.n_targets');

@@ -1027,8 +1027,9 @@ export function createFactService(ctx: Ctx, opts: FactServiceOptions = {}): Fact
         if (!text) continue;
         const res = computeLinks(u, text, []);
         if (!res) return [];
-        for (const raw of res.unmatched) out.push({ sentenceId: u.id, raw, candidates: [] });
-        for (const a of res.ambiguous) out.push({ sentenceId: u.id, raw: a.raw, candidates: a.candidates });
+        const where = { file: u.file, line: u.line, text: text.length > 400 ? `${text.slice(0, 399)}…` : text };
+        for (const raw of res.unmatched) out.push({ sentenceId: u.id, raw, candidates: [], ...where });
+        for (const a of res.ambiguous) out.push({ sentenceId: u.id, raw: a.raw, candidates: a.candidates, ...where });
       }
       return out;
     },

@@ -1030,6 +1030,7 @@ async function main() {
       url = await startServer(P.large);
       await page.goto(url);
       await waitApp();
+      const un0 = (await pc(() => window.__paper.api.facts())).unresolved;
       const files = await pc(() => window.__paper.api.files());
       const names = files.map((f) => f.file);
       assert(names[0] === 'main.tex' && names.length === 5 && ['sections/intro.tex', 'sections/method.tex', 'sections/results.tex', 'sections/appendix.tex'].every((f) => names.includes(f)), `files ${names.join(', ')}`);
@@ -1057,7 +1058,20 @@ async function main() {
           await shot('30-files-results');
         }
       }
-      return `${names.length} files, ${sentences} sentences in all; opened ${opened.join(', ')}`;
+      // the unresolved numerals (rail ② count) are the whole paper's, before and after visiting every file
+      const un1 = (await pc(() => window.__paper.api.facts())).unresolved;
+      assert(un0.length === un1.length && un0.length > 0, `unresolved ${un0.length} before, ${un1.length} after visiting the files`);
+      const elsewhere = un1.find((u) => u.file && u.file !== 'main.tex');
+      assert(elsewhere && typeof elsewhere.line === 'number' && elsewhere.text, `no located entry in a section file: ${JSON.stringify(un1[0])}`);
+      await openTab('Facts');
+      await waitFor((n) => window.__paper.workspace.getState().unresolved.length === n, un1.length, 6000, 'the panel list');
+      const row = page.locator('.shell-panel .list-row').filter({ has: page.locator('.row-file') }).first();
+      await row.scrollIntoViewIfNeeded();
+      await shot('30b-unresolved-elsewhere');
+      const target = await row.locator('.row-file').innerText();
+      await row.click();
+      await waitFor((f) => window.__paper.workspace.getState().file === f && window.__paper.workspace.getState().units.some((u) => u.id === window.__paper.workspace.getState().activeSentenceId), target, 10000, `cross-file reveal in ${target}`);
+      return `${names.length} files, ${sentences} sentences in all; opened ${opened.join(', ')}; ${un1.length} unresolved numerals across the files (unchanged), a row in ${target} opens it`;
     });
 
     await check('the 4-step layout on the real server: 中文, light and dark (rail, each step, Settings) without overflow', async () => {
@@ -1073,8 +1087,10 @@ async function main() {
         await pc((t) => window.__paper.shell.getState().setTheme?.(t), scheme);
         for (const step of ['plan', 'sources', 'todo', 'check']) {
           const tab = page.locator(`.rail [role="tab"][data-step="${step}"]`);
-          if ((await tab.getAttribute('aria-selected')) !== 'true' || (await pc(() => window.__paper.shell.getState().leftCollapsed))) await tab.click();
+          // a selected step with its panel hidden (collapsed, or hidden to keep the editor readable) opens on a click
+          if ((await tab.getAttribute('aria-selected')) !== 'true' || !(await page.locator('.shell-panel').count())) await tab.click();
           await sleep(350);
+          if (!(await page.locator('.shell-panel').count())) problems.push(`${scheme}/${step}: the panel did not open`);
           const m = await pc(() => {
             const se = document.scrollingElement;
             const panel = document.querySelector('.shell-panel');

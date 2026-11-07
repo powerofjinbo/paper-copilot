@@ -14,6 +14,7 @@ import type { FastifyInstance } from 'fastify';
 import { FactPatch, ManualFact, ROUTES, type Fact, type FactsResponse } from '@paper-copilot/core';
 import { z } from 'zod';
 import { HttpError, type Ctx } from '../contracts';
+import { openTypesetFiles } from './reports';
 
 /** Validate a request body; a ZodError becomes HTTP 400 with the issues. */
 export function parseBody<T>(schema: z.ZodType<T>, body: unknown, what = 'body'): T {
@@ -67,11 +68,13 @@ export function registerFactsRoutes(app: FastifyInstance, ctx: Ctx): void {
     const offset = q.offset ?? 0;
     const facts = q.limit !== undefined ? all.slice(offset, offset + q.limit) : all.slice(offset);
     if (!falsy(q.unresolved)) {
-      // retro-grounding covers the paper even before the editor opened it (a fresh page load races doc.open)
+      // retro-grounding covers the whole paper (every typeset file), even before the editor opened it (a
+      // fresh page load races doc.open) and whichever files the author has visited: the list and the
+      // rail's ② count must not change because another file was opened
       try {
-        if (!ctx.docs.get(ctx.config.mainFile)) await ctx.docs.open(ctx.config.mainFile);
+        await openTypesetFiles(ctx);
       } catch {
-        /* no document service or an unreadable main file: list what is open */
+        /* no document service or an unreadable tree: list what is open */
       }
     }
     const unresolved = falsy(q.unresolved) ? [] : ctx.facts.unresolved();

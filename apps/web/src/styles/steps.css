@@ -1034,3 +1034,22 @@ button.chip {
   box-sizing: border-box;
   max-width: 100%;
 }
+
+/* Flag rows: dot and label on the left, the "×n" count on the right (not a centred label). */
+.flag-list .list-row-top {
+  justify-content: flex-start;
+}
+.flag-list .list-row-top > .tabular {
+  margin-left: auto;
+}
+
+/* Small-caps style headings: uppercase only for Latin UI text; in the Chinese UI it would only shout the
+   few Latin words ("与 OVERLEAF 同步", "AI") and the letter spacing loosens the Chinese characters. */
+:lang(zh) .psec-toggle,
+:lang(zh) .list-group-label,
+:lang(zh) .menu-title,
+:lang(zh) .settings-h,
+:lang(zh) .help-group h3 {
+  text-transform: none;
+  letter-spacing: 0.02em;
+}

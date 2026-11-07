@@ -88,6 +88,26 @@ async function currentTexts(ctx: Ctx): Promise<Map<string, string>> {
   return texts;
 }
 
+/**
+ * Open every typeset file (the main file's \\input tree; every .tex file when the tree is empty) that is
+ * not open yet: an import on the first open, every sentence the author's. Lists that cover "the paper"
+ * (the unresolved numerals of GET /api/facts) then do not depend on which files happen to be open.
+ */
+export async function openTypesetFiles(ctx: Ctx): Promise<void> {
+  const texts = await currentTexts(ctx);
+  const order = projectFileOrder(ctx.config.mainFile, Object.fromEntries(texts));
+  let files = order.filter((e) => e.included).map((e) => e.file);
+  if (files.length === 0) files = order.map((e) => e.file);
+  for (const file of files) {
+    if (ctx.docs.get(file)) continue;
+    try {
+      await ctx.docs.open(file);
+    } catch (err) {
+      ctx.log.warn(`cannot open ${file}; its sentences are left out`, err instanceof Error ? err.message : String(err));
+    }
+  }
+}
+
 export interface ProjectSnapshot {
   mainFile: string;
   order: ProjectOrderEntry[];

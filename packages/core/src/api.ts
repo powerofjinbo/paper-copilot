@@ -363,7 +363,17 @@ export const ROUTES = {
 export const HistoryResponse = z.object({ unit: SentenceUnit, versions: z.array(SentenceVersion) });
 export type HistoryResponse = z.infer<typeof HistoryResponse>;
 
-export const FactsResponse = z.object({ facts: z.array(Fact), unresolved: z.array(z.object({ sentenceId: z.string(), raw: z.string(), candidates: z.array(z.string()) })) });
+/**
+ * `unresolved`: numerals of the paper's text that match no fact (or several). `file`, `line` and `text`
+ * (optional, added for multi-file papers) say where: the list covers every typeset file, not only the
+ * file open in the editor.
+ */
+export const FactsResponse = z.object({
+  facts: z.array(Fact),
+  unresolved: z.array(
+    z.object({ sentenceId: z.string(), raw: z.string(), candidates: z.array(z.string()), file: z.string().optional(), line: z.number().int().optional(), text: z.string().optional() }),
+  ),
+});
 export type FactsResponse = z.infer<typeof FactsResponse>;
 
 export const PanelsResponse = z.object({ claims: z.array(Claim), figures: z.array(FigureEntry), terminology: z.array(TermEntry), lit: z.array(LitRecord) });

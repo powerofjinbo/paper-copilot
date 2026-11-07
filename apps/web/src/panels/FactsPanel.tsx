@@ -7,6 +7,7 @@ import { isJobActive, useAction, useJob, useUnitText } from '../components/hooks
 import { IconFacts, IconRefresh, IconSearch, Spinner } from '../components/Icons';
 import { Badge, Button, EmptyState, Highlight, PanelHeader, PanelSection, displayLatex } from '../components/ui';
 import { useT, type MsgKey } from '../i18n';
+import { useShell } from '../state/extra';
 import { useWorkspace } from '../state/store';
 
 type Filter = 'all' | 'stale' | 'unconfirmed' | 'excluded' | 'used';
@@ -54,6 +55,20 @@ export function FactsPanel({ api }: { api: ApiClient }) {
     return m;
   }, [units]);
   const unitById = useMemo(() => new Map(units.map((u) => [u.id, u])), [units]);
+  const file = useWorkspace((s) => s.file);
+  const projectFiles = useShell((s) => s.files);
+  // the open file's numerals first (they can be fixed right here), then the other files' in document
+  // order (the \input tree of GET /api/files), each file's in line order
+  const unresolvedRows = useMemo(() => {
+    const here = (u: (typeof unresolved)[number]) => unitById.has(u.sentenceId) || !u.file || u.file === file;
+    const rank = new Map(projectFiles.map((f, i) => [f.file, i]));
+    const others = unresolved
+      .map((u, i) => ({ u, i }))
+      .filter((x) => !here(x.u))
+      .sort((a, b) => (rank.get(a.u.file!) ?? 1e9) - (rank.get(b.u.file!) ?? 1e9) || (a.u.line ?? 0) - (b.u.line ?? 0) || a.i - b.i)
+      .map((x) => x.u);
+    return [...unresolved.filter(here), ...others];
+  }, [unresolved, unitById, file, projectFiles]);
 
   const shown = useMemo(
     () =>
@@ -146,18 +161,23 @@ export function FactsPanel({ api }: { api: ApiClient }) {
           <PanelSection className="psec-warn" title={t('facts.unresolved')} count={unresolved.length}>
             <p className="muted small">{t('facts.unresolvedHint')}</p>
             <ul className="plain-list">
-              {unresolved.map((u, i) => {
+              {unresolvedRows.map((u, i) => {
+                // a sentence of the open file: live text and line; of another file: where the server says
                 const unit = unitById.get(u.sentenceId);
+                const elsewhere = !unit && !!u.file && u.file !== file;
+                const line = unit ? unit.line : u.line;
+                const text = unit ? textOf(unit) : (u.text ?? null);
                 return (
                   <li key={`${u.sentenceId}:${u.raw}:${i}`}>
-                    <button type="button" className="list-row" onClick={() => revealSentence(u.sentenceId)} disabled={!unit}>
+                    <button type="button" className="list-row" onClick={() => revealSentence(u.sentenceId, false, elsewhere ? u.file : null)} disabled={!unit && !elsewhere}>
                       <span className="list-row-top">
                         <code className="num-chip">{u.raw}</code>
-                        {unit ? <span className="muted tabular">{t('common.line', { n: unit.line })}</span> : null}
+                        {elsewhere ? <span className="muted small mono row-file">{u.file}</span> : null}
+                        {line !== undefined ? <span className="muted tabular">{t('common.line', { n: line })}</span> : null}
                       </span>
-                      {unit ? (
+                      {text ? (
                         <span className="list-row-text">
-                          <Highlight text={displayLatex(textOf(unit))} needle={displayLatex(u.raw)} />
+                          <Highlight text={displayLatex(text)} needle={displayLatex(u.raw)} />
                         </span>
                       ) : null}
                       <span className="list-row-meta muted small">{u.candidates.length ? t('facts.candidates', { ids: u.candidates.join(', ') }) : t('facts.noMatch')}</span>
