@@ -11,7 +11,6 @@
  * Tests marked "BUG:" fail on the current code and demonstrate a finding.
  */
 import { request as httpRequest } from 'node:http';
-import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -33,15 +32,23 @@ function get(port: number, path: string, token: string): Promise<{ status: numbe
   });
 }
 
-/** Longest single stall of the event loop (ms) while `fn` runs. */
+/** Longest single stall of the event loop (ms) while `fn` runs: the largest gap between 10 ms ticks. */
 async function maxStall(fn: () => Promise<unknown>): Promise<{ stallMs: number; ms: number }> {
-  const h = monitorEventLoopDelay({ resolution: 10 });
-  h.enable();
+  let last = performance.now();
+  let worst = 0;
+  const tick = setInterval(() => {
+    const now = performance.now();
+    worst = Math.max(worst, now - last);
+    last = now;
+  }, 10);
   const t0 = performance.now();
-  await fn();
-  const ms = performance.now() - t0;
-  h.disable();
-  return { stallMs: Math.round(h.max / 1e6), ms: Math.round(ms) };
+  try {
+    await fn();
+  } finally {
+    clearInterval(tick);
+  }
+  worst = Math.max(worst, performance.now() - last);
+  return { stallMs: Math.round(worst), ms: Math.round(performance.now() - t0) };
 }
 
 /** A server stall the author notices (typing stops echoing); generous for a slow CI box. */
