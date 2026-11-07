@@ -458,7 +458,8 @@ interface Expect {
 }
 
 function expected(state: SentenceState, everAi: boolean, source: 'local' | 'external', a: AnnCase): Expect {
-  if (source === 'external') return { state: 'external', origin: 'external_edit', everAi: 'kept', editPair: false };
+  // An external edit is never a review: an unread AI draft keeps its review state (review 2, R2-I-1).
+  if (source === 'external') return { state: state === 'proposed' || state === 'unsupported' ? state : 'external', origin: 'external_edit', everAi: 'kept', editPair: false };
   switch (a) {
     case 'ai_rewrite':
       return { state: 'ai-drafted', origin: 'ai_rewrite', everAi: true, editPair: false };

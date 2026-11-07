@@ -145,7 +145,7 @@ describe.skipIf(!TEX)('BuildService with latexmk + synctex (fixture)', () => {
     expect(hit).toEqual({ file: 'main.tex', line });
   }, 180_000);
 
-  it('reports an undefined control sequence at its real file and line, keeping the last good PDF', async () => {
+  it('reports an undefined control sequence at its real file and line and still shows the PDF pdflatex wrote (UX2-1)', async () => {
     const lines = original.split('\n');
     const at = lineOfText(original, 'The test set holds') - 1;
     lines[at] = 'The test set holds \\undefinedfixturemacro{} 8,710 targets.';
@@ -155,7 +155,8 @@ describe.skipIf(!TEX)('BuildService with latexmk + synctex (fixture)', () => {
     const before = build.status().pdfVersion;
     const st = await build.compile('manual');
     expect(st.state).toBe('error');
-    expect(st.pdfVersion).toBe(before);
+    // pdflatex recovered and wrote a complete PDF: it is published, as Overleaf shows it (UX2-1).
+    expect(st.pdfVersion).toBe((before ?? 0) + 1);
     const err = st.errors.find((e) => /Undefined control sequence/.test(e.message));
     expect(err).toBeDefined();
     expect(err!.file).toBe('main.tex');
@@ -165,6 +166,19 @@ describe.skipIf(!TEX)('BuildService with latexmk + synctex (fixture)', () => {
     const last = ctx.events.filter((e) => e.type === 'compile.status').at(-1) as Extract<ServerMessage, { type: 'compile.status' }>;
     expect(last.state).toBe('error');
     expect(last.errors.length).toBeGreaterThan(0);
+  }, 180_000);
+
+  it('a run that writes no PDF (error before \\begin{document}) keeps the last PDF and its version', async () => {
+    const lines = original.split('\n');
+    const at = lines.findIndex((l) => l.startsWith('\\begin{document}'));
+    lines.splice(at, 0, '\\usepackage{nosuchpackage-paper-copilot}');
+    writeFileSync(mainPath, lines.join('\n'));
+    const before = build.status().pdfVersion;
+    const pdfBefore = readFileSync(build.pdfPath()!);
+    const st = await build.compile('manual');
+    expect(st.state).toBe('error');
+    expect(st.pdfVersion).toBe(before);
+    expect(readFileSync(build.pdfPath()!).equals(pdfBefore)).toBe(true);
   }, 180_000);
 
   it('coalesces concurrent compiles into at most one follow-up run', async () => {

@@ -6,8 +6,9 @@
  *                         so relative \input, \includegraphics and \bibliography paths resolve exactly as
  *                         they do in texRoot
  *   out/                  latexmk -outdir (aux, log, bbl, the fresh PDF and .synctex.gz)
- *   last/<job>.pdf        the last successful PDF and its <job>.synctex.gz (served, used by SyncTeX), so
- *                         a failed run never replaces a good PDF with a broken one
+ *   last/<job>.pdf        the last PDF pdflatex finished and its <job>.synctex.gz (served, used by SyncTeX):
+ *                         a run with recoverable errors that still wrote a complete PDF publishes it (state
+ *                         'error'), a run that wrote no PDF never replaces the one shown
  *   state.json            { pdfVersion } (survives restarts so ?v= stays monotonic)
  *
  * SyncTeX records the shadow paths (build/src/./main.tex); forward() hands synctex the shadow path of a
@@ -217,6 +218,18 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
         // A clean exit is authoritative (the final log may still quote recovered "! ..." lines).
         return done('ok', [], tail);
       }
+      // pdflatex recovers from most errors in nonstopmode (an undefined macro, a missing figure) and still
+      // writes a complete PDF, as Overleaf shows it: publish that PDF (state stays 'error' with the parsed
+      // errors). Only a PDF written by THIS run and closed by pdflatex ("Output written on") counts; a run
+      // that produced no PDF keeps the last good one.
+      let freshPdf = false;
+      try {
+        const outPdf = join(outDir, `${jobName()}.pdf`);
+        freshPdf = (await stat(outPdf)).mtimeMs >= t0 && /Output written on /.test(log);
+      } catch {
+        freshPdf = false;
+      }
+      if (freshPdf) await publish();
       if (errors.length === 0) {
         const lm = output.split(/\r?\n/).filter((l) => /^Latexmk: .*(error|Error|failed|not found|could not)/.test(l));
         const bib = output.split(/\r?\n/).filter((l) => /^I couldn't open|^I found no|database file/.test(l));

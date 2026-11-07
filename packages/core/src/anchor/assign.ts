@@ -285,7 +285,10 @@ export function assignUnitsImpl(input: AssignInput): AssignResult {
     let origin: VersionOrigin;
     let aiMeta = false;
     if (external || (applies && kind === 'external')) {
-      next.state = 'external';
+      // An edit made outside the app is never a review: an unread AI draft ('proposed', 'unsupported')
+      // keeps its review state (and so keeps blocking push and the submission check); the edit is
+      // still recorded as an external_edit version.
+      next.state = REVIEW_STATES.has(u.state) ? u.state : 'external';
       origin = 'external_edit';
     } else if (applies && ann && kind === 'ai') {
       next.state = ann.state ?? defaultAiState(ann.origin);
