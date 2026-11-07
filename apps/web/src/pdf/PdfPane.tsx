@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { PdfHandle, PdfPaneProps } from '../contracts';
 import { isMockClient } from '../api/extras';
+import { isNoTex, TexInstallHint, withCode } from '../components/TexInstall';
 import { useWorkspace } from '../state/store';
 import { zoomPercent } from './layout';
 import { usePdfT } from './strings';
@@ -32,6 +33,8 @@ export function PdfPane({ api, pdfVersion, onInverse, onReady }: PdfPaneProps) {
   const logTail = useWorkspace((s) => s.compile.logTail);
   const logLast = logTail.trim().split('\n').slice(-2).join(' ').slice(0, 300);
   const mock = isMockClient(api);
+  const compileErrors = useWorkspace((s) => s.compile.errors);
+  const noTex = isNoTex({ state: compileState, errors: compileErrors, logTail });
 
   // Latest props for callbacks created once.
   const latest = useRef({ api, onInverse, t });
@@ -177,6 +180,12 @@ export function PdfPane({ api, pdfVersion, onInverse, onReady }: PdfPaneProps) {
         </div>
       </div>
 
+      {mock && pdfVersion !== null ? (
+        // the demo's PDF is an example compiled from the fixture: say so, calmly, while it is on screen
+        <p className="pdfp-demo-note" role="note" data-testid="pdf-demo-note">
+          {withCode(t('demoNote'))}
+        </p>
+      ) : null}
       <div className="pdfp-body">
         <div ref={scrollRef} className="pdfp-scroll" tabIndex={0} role="region" aria-label={t('pages')} aria-busy={vs.loading} />
         <div className="pdfp-status" aria-live="polite">
@@ -206,7 +215,15 @@ export function PdfPane({ api, pdfVersion, onInverse, onReady }: PdfPaneProps) {
                     <path d="M7 2.5h18l8.5 8.5v32a2.5 2.5 0 0 1-2.5 2.5H7A2.5 2.5 0 0 1 4.5 43V5A2.5 2.5 0 0 1 7 2.5Z" />
                     <path d="M25 2.5V11h8.5M11 20h18M11 26h18M11 32h12" />
                   </svg>
-                  {compileState === 'error' ? (
+                  {compileState === 'error' && noTex ? (
+                    <>
+                      <p className="pdfp-title">{t('noTexTitle')}</p>
+                      <TexInstallHint className="pdfp-hint pdfp-tex" title={false} />
+                      <button type="button" className="pdfp-action" onClick={compile}>
+                        {t('compileAgain')}
+                      </button>
+                    </>
+                  ) : compileState === 'error' ? (
                     <>
                       <p className="pdfp-title">{t('failedTitle')}</p>
                       <p className="pdfp-hint">{t('emptyFailed')}</p>

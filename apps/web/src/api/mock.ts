@@ -9,7 +9,8 @@
  *   `doc.snapshot` instead, exactly like the server.
  * - facts from the fixture claim JSON, an outline with the fixture's sections, deterministic
  *   "simulated" AI (ghost, rewrites, drafts, framings, referee questions; every note says so), the
- *   push guard, disclosure stats, style distance. `fakeLlm` is always true. No PDF (no TeX here).
+ *   push guard, disclosure stats, style distance. `fakeLlm` is always true. No TeX here: a compile shows the
+ *   example PDF compiled from the fixture (mockPdf.ts), which does not follow edits.
  */
 import { ChangeSet, Text } from '@codemirror/state';
 import {
@@ -121,6 +122,7 @@ import {
   simulatedRewrite,
   type Rewrite,
 } from './mockAi';
+import { DEMO_PDF_URL, demoForward, demoInverse, demoSynctexAvailable } from './mockPdf';
 
 export const MOCK_ARTIFACT = 'results/addendum_g_g1_v1_claim.json';
 export const MOCK_FILE = 'main.tex';
@@ -148,7 +150,25 @@ export interface MockOptions {
   jobStepMs?: number;
   notesLanguage?: NotesLanguage;
   log?: (msg: string, data?: unknown) => void;
+  /** The example PDF a compile shows (default: the canto-demo one when the fixture text is the default). */
+  demoPdf?: DemoPdf | null;
 }
+
+/** An example PDF for the demo's "compile", with approximate SyncTeX over the current text. */
+export interface DemoPdf {
+  url: string;
+  forward(text: string, line: number): { page: number; x: number; y: number; w: number; h: number } | null;
+  inverse(text: string, page: number, x: number, y: number): number | null;
+}
+
+export const CANTO_DEMO_PDF: DemoPdf = {
+  url: DEMO_PDF_URL,
+  forward: (text, line) => (demoSynctexAvailable() ? demoForward(text, line) : null),
+  inverse: (text, page, x, y) => (demoSynctexAvailable() ? demoInverse(text, page, x, y) : null),
+};
+
+/** The log line of a demo compile (the PDF pane and the compile pill say the same in the UI language). */
+export const DEMO_PDF_NOTE = 'Example PDF: the browser demo has no LaTeX, so this PDF does not follow your edits. `pnpm paper open` compiles for real.';
 
 type Range = { from: number; to: number };
 
@@ -261,6 +281,9 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   private editPairs: EditPair[] = [];
   private costTotals: CostTotals = zeroCost();
   private lastCompile: { state: 'idle' | 'running' | 'ok' | 'error'; errors: CompileError[] } | null = null;
+  /** The example PDF (null: this fixture has none) and the version of the last "compile" that showed it. */
+  private readonly demoPdf: DemoPdf | null;
+  private pdfVersion: number | null = null;
   private jobSeq = 0;
 
   constructor(opts: MockOptions = {}) {
@@ -280,6 +303,8 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
     this.notesLanguage = opts.notesLanguage ?? 'zh';
     this.extraFacts = opts.extraFacts;
     this.claimArtifact = opts.claimArtifact ?? MOCK_ARTIFACT;
+    // the example PDF belongs to the canto-demo fixture text only
+    this.demoPdf = opts.demoPdf !== undefined ? opts.demoPdf : opts.files || opts.tex !== undefined ? null : CANTO_DEMO_PDF;
     this.log = opts.log ?? ((msg, data) => console.warn(`[mock] ${msg}`, data ?? ''));
   }
 
@@ -1248,33 +1273,48 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
     return this.questionsState.filter((q) => !sectionId || q.sectionId === sectionId);
   }
 
+  /**
+   * The demo has no LaTeX: a compile "succeeds" and shows the example PDF compiled from the fixture
+   * (fixtures/canto-demo/demo, see mockPdf.ts). It does not follow the author's edits, and the log and the
+   * PDF pane say so. A demo on another fixture (no example PDF) compiles without a PDF.
+   */
   async compile(): Promise<void> {
     await this.rest();
     this.lastCompile = { state: 'ok', errors: [] };
-    this.emit({ type: 'compile.status', state: 'running', pdfVersion: null, errors: [], logTail: '' });
+    const prev = this.pdfVersion;
+    this.emit({ type: 'compile.status', state: 'running', pdfVersion: prev, errors: [], logTail: '' });
     setTimeout(() => {
+      if (this.demoPdf) this.pdfVersion = (this.pdfVersion ?? 0) + 1;
       this.emit({
         type: 'compile.status',
         state: 'ok',
-        pdfVersion: null,
+        pdfVersion: this.pdfVersion,
         errors: [],
-        logTail: 'Simulated compile: the browser demo has no LaTeX, so there is no PDF. Run `paper open` on your laptop for latexmk and SyncTeX.',
+        logTail: this.demoPdf
+          ? `${DEMO_PDF_NOTE}\nExample PDF: fixtures/canto-demo/demo/main.pdf (latexmk -pdf -synctex=1 on fixtures/canto-demo/tex/main.tex).`
+          : 'Simulated compile: the browser demo has no LaTeX, so there is no PDF. Run `paper open` on your laptop for latexmk and SyncTeX.',
       });
     }, this.jobStep);
   }
 
   pdfUrl(_pdfVersion: number): string {
-    return 'about:blank';
+    return this.demoPdf ? this.demoPdf.url : 'about:blank';
   }
 
-  async synctexForward(_file: string, _line: number): Promise<{ page: number; x: number; y: number; w: number; h: number } | null> {
+  /** Approximate: the example PDF is the fixture's, the line is matched by its text (mockPdf.ts). */
+  async synctexForward(file: string, line: number): Promise<{ page: number; x: number; y: number; w: number; h: number } | null> {
     await this.rest();
-    return null;
+    const d = this.docs.get(file);
+    if (!this.demoPdf || this.pdfVersion === null || !d || file !== this.mainFile) return null;
+    return this.demoPdf.forward(d.text, line);
   }
 
-  async synctexInverse(_page: number, _x: number, _y: number): Promise<{ file: string; line: number } | null> {
+  async synctexInverse(page: number, x: number, y: number): Promise<{ file: string; line: number } | null> {
     await this.rest();
-    return null;
+    const d = this.docs.get(this.mainFile);
+    if (!this.demoPdf || this.pdfVersion === null || !d) return null;
+    const line = this.demoPdf.inverse(d.text, page, x, y);
+    return line === null ? null : { file: this.mainFile, line };
   }
 
   async pull(): Promise<ReanchorReport[]> {

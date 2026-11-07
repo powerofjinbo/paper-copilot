@@ -8,9 +8,9 @@ import { useState } from 'react';
 import { useT } from '../i18n';
 import { useWorkspace } from '../state/store';
 import { revealLine } from './actions';
+import { isNoTex, TexInstallHint } from './TexInstall';
 
 const MAX_SHOWN = 3;
-const NO_TEX = /latexmk[^\n]*not found|not found on PATH|command not found: (latexmk|pdflatex)|ENOENT[^\n]*(latexmk|pdflatex)|install TeX Live/i;
 
 export function CompileBar() {
   const t = useT();
@@ -21,13 +21,13 @@ export function CompileBar() {
   if (compile.state === 'running') return null;
   const key = JSON.stringify([compile.state, compile.errors, compile.logTail.length]);
   if (dismissed === key) return null;
-  const noTex = compile.errors.some((e) => NO_TEX.test(e.message)) || NO_TEX.test(compile.logTail);
+  const noTex = isNoTex(compile);
   const shown = compile.errors.slice(0, MAX_SHOWN);
   const more = compile.errors.length - shown.length;
   return (
     <section className={`compile-bar${compile.state === 'error' ? '' : ' is-warn'}`} role="alert" data-testid="compile-bar">
       <div className="compile-bar-head">
-        <span className="compile-bar-title">{compile.state === 'error' ? t('compileBar.failed') : t('compileBar.withPdf')}</span>
+        <span className="compile-bar-title">{noTex ? t('tex.missingTitle') : compile.state === 'error' ? t('compileBar.failed') : t('compileBar.withPdf')}</span>
         <span className="compile-bar-spacer" />
         {compile.logTail ? (
           <button type="button" className="link-btn small" aria-expanded={showLog} onClick={() => setShowLog(!showLog)}>
@@ -38,7 +38,7 @@ export function CompileBar() {
           {t('compileBar.dismiss')}
         </button>
       </div>
-      {shown.length ? (
+      {shown.length && !noTex ? (
         <ul className="compile-bar-list">
           {shown.map((e, i) => (
             <li key={i}>
@@ -55,7 +55,7 @@ export function CompileBar() {
           {more > 0 ? <li className="muted small">{t('compileBar.more', { n: more })}</li> : null}
         </ul>
       ) : null}
-      {noTex ? <p className="compile-bar-hint">{t('compileBar.noTex')}</p> : null}
+      {noTex ? <TexInstallHint className="compile-bar-hint" title={false} /> : null}
       {showLog && compile.logTail ? <pre className="compile-bar-log">{compile.logTail.slice(-4000)}</pre> : null}
     </section>
   );

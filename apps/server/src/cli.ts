@@ -31,6 +31,7 @@ import { runProc, createGit } from './services/sync/proc';
 import { resolveApiKey } from './services/llm/apiKey';
 import { SERVER_VERSION } from './version';
 import { loadSqlite } from './store/db';
+import { installTexHint } from './services/build/buildService';
 
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s: string) => process.stderr.write(s + '\n');
@@ -344,9 +345,9 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   const py = await version('python3', ['--version']);
   line(py ? 'ok' : 'warn', 'python3', py ?? 'not found (style_check lint disabled)');
   const lm = await version('latexmk', ['--version']);
-  line(lm ? 'ok' : 'warn', 'latexmk', lm ?? 'not found (no PDF preview)');
+  line(lm ? 'ok' : 'warn', 'latexmk', lm ?? `not found, so no PDF preview. ${installTexHint()}`);
   const pl = await version('pdflatex', ['--version']);
-  line(pl ? 'ok' : 'warn', 'pdflatex', pl ?? 'not found');
+  line(pl ? 'ok' : 'warn', 'pdflatex', pl ?? (lm ? 'not found (latexmk needs it)' : 'not found (installed with TeX, see latexmk)'));
   const st = await runProc('synctex', ['help', 'view'], { timeoutMs: 10_000 });
   line(!st.notFound ? 'ok' : 'warn', 'synctex', !st.notFound ? 'found' : 'not found (no PDF<->source jumps)');
   const gv = await version('git', ['--version']);

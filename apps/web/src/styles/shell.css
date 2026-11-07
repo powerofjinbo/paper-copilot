@@ -1168,3 +1168,33 @@ body.is-resizing canvas {
 .compile-pill[data-offline='true'] {
   opacity: 0.6;
 }
+
+/* LaTeX not installed: the install lines (compile bar, compile popover) */
+.tex-install-title {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+.tex-install-list {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.5;
+}
+.tex-install-list li + li {
+  margin-top: 2px;
+}
+.tex-install .tex-cmd {
+  font-size: 0.92em;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--bg-sunken);
+  overflow-wrap: anywhere;
+}
+.compile-pop-tex {
+  margin-bottom: 8px;
+  max-width: 360px;
+}
+.compile-demo-note {
+  margin: 0 0 8px;
+  max-width: 360px;
+  line-height: 1.45;
+}

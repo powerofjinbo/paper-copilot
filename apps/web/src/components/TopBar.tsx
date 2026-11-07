@@ -13,6 +13,8 @@ import { compileNow, forwardSync, notify, openPush, openStep, pullNow, revealLin
 import { IconCheck, IconChevronDown, IconFile, IconGear, IconHelp, IconLocate, IconPdf, IconPlay, IconPull, IconPush, IconSparkle, IconSync, IconWarn, Spinner } from './Icons';
 import { PopoverButton } from './Popover';
 import { submissionStatus } from './steps';
+import { isNoTex, TexInstallHint, withCode } from './TexInstall';
+import { isMockClient } from '../api/extras';
 import { Badge, IconButton } from './ui';
 
 function BrandMark() {
@@ -93,7 +95,10 @@ function FileSwitcher() {
   );
 }
 
-function compileLabel(t: ReturnType<typeof useT>, compile: ReturnType<typeof useWorkspace.getState>['compile']): string {
+function compileLabel(t: ReturnType<typeof useT>, compile: ReturnType<typeof useWorkspace.getState>['compile'], demo: boolean): string {
+  // the browser demo shows an example PDF (it has no LaTeX): say so instead of "Compiled"
+  if (demo && compile.state !== 'running' && compile.pdfVersion !== null) return t('compile.demoPdf');
+  if (isNoTex(compile)) return t('compile.noTex');
   return compile.state === 'running'
     ? t('compile.running')
     : compile.state === 'error'
@@ -117,7 +122,10 @@ function CompilePill({ api }: { api: ApiClient }) {
   const pdfFitHidden = useShell((s) => s.fitHidden.pdf);
   const pdfShown = rightPane === 'pdf' && !pdfFitHidden;
   const statusId = useId();
-  const label = compileLabel(t, compile);
+  const demo = isMockClient(api);
+  const noTex = isNoTex(compile);
+  const label = compileLabel(t, compile, demo);
+  const why = demo && compile.pdfVersion !== null ? t('compile.demoTitle') : noTex ? t('compile.noTexTitle') : null;
   const icon = compile.state === 'running' ? <Spinner size={12} /> : compile.state === 'error' ? <IconWarn size={14} /> : compile.state === 'ok' ? <IconCheck size={14} /> : <IconPlay size={12} />;
   return (
     <div className={`compile-split compile-${compile.state}`}>
@@ -131,7 +139,7 @@ function CompilePill({ api }: { api: ApiClient }) {
         // the server is gone (terminal closed, laptop slept): the pill looks off, and a click says why and how
         // to restart it instead of a raw "Failed to fetch"
         data-offline={connected ? undefined : 'true'}
-        title={connected ? `${label} — ${t('compile.clickToCompile')}` : t('compile.offline')}
+        title={connected ? `${label} — ${t('compile.clickToCompile')}${why ? `\n${why}` : ''}` : t('compile.offline')}
       >
         {icon}
         <span className="compile-pill-label" id={statusId}>
@@ -146,8 +154,10 @@ function CompilePill({ api }: { api: ApiClient }) {
       >
         {(close) => (
           <>
-            <h3 className="popover-title">{t('compile.errors')}</h3>
-            {compile.errors.length ? (
+            {demo && compile.pdfVersion !== null ? <p className="compile-demo-note small" data-testid="compile-demo-note">{withCode(t('compile.demoTitle'))}</p> : null}
+            {noTex ? <TexInstallHint className="compile-pop-tex" /> : null}
+            {!noTex ? <h3 className="popover-title">{t('compile.errors')}</h3> : null}
+            {compile.errors.length && !noTex ? (
               <ul className="compile-errors">
                 {compile.errors.map((e, i) => (
                   <li key={i}>
@@ -169,7 +179,7 @@ function CompilePill({ api }: { api: ApiClient }) {
                   </li>
                 ))}
               </ul>
-            ) : (
+            ) : noTex ? null : (
               <p className="muted">{t('compile.noErrors')}</p>
             )}
             {compile.logTail ? (

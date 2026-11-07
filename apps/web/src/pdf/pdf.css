@@ -387,3 +387,31 @@
 :root[data-theme='dark'] .pdfp-page {
   filter: brightness(0.9);
 }
+
+/* the browser demo's example PDF: a calm note above the pages, while it is on screen */
+.pdfp-demo-note {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--accent-bg);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.pdfp-demo-note code,
+.pdfp-tex code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.pdfp-tex {
+  text-align: left;
+  max-width: 340px;
+}
+.pdfp-tex .tex-install-list {
+  margin: 0;
+  padding-left: 18px;
+}
+.pdfp-tex .tex-install-list li + li {
+  margin-top: 4px;
+}

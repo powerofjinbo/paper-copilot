@@ -26,6 +26,19 @@ import { probeExecutable, runProcess } from './proc';
 import { ShadowTree, sha, shadowText } from './shadow';
 import { boxFromRecords, parseSynctexEditAll, parseSynctexView, type PdfBox } from './synctex';
 
+/**
+ * How to install what compiling needs, for this OS (the compile error, the web client's hint and
+ * `paper doctor` say it). The web client shows its own translated version (apps/web CompileBar), keyed on
+ * "not found on PATH".
+ */
+export function installTexHint(platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'darwin') {
+    return 'Install TeX: `brew install --cask mactex-no-gui` (or BasicTeX, then `sudo tlmgr install latexmk revtex`), open a new terminal so /Library/TeX/texbin is on PATH, and restart `pnpm paper open`.';
+  }
+  if (platform === 'win32') return 'Install TeX Live or MiKTeX with latexmk and revtex, then restart `pnpm paper open`.';
+  return 'Install TeX: `sudo apt install latexmk texlive-latex-extra texlive-publishers` (Fedora: `sudo dnf install latexmk texlive-revtex`), then restart `pnpm paper open`.';
+}
+
 export interface BuildServiceOptions {
   latexmk?: string;
   synctex?: string;
@@ -155,7 +168,7 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
     };
     try {
       if (!available().latexmk) {
-        return done('error', fail('latexmk was not found on PATH; install TeX Live (latexmk, pdflatex) to compile.'), '');
+        return done('error', fail(`latexmk was not found on PATH. ${installTexHint()}`), '');
       }
       let mainAbs: string;
       try {
@@ -200,7 +213,7 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
       const tail = tailBytes(output, LOG_TAIL_BYTES);
       if (r.missing) {
         avail = { ...(avail ?? { synctex: false }), latexmk: false };
-        return done('error', fail('latexmk was not found on PATH'), tail);
+        return done('error', fail(`latexmk was not found on PATH. ${installTexHint()}`), tail);
       }
       if (r.timedOut) return done('error', fail(`compile timed out after ${Math.round(timeoutMs / 1000)} s (latexmk was stopped)`), tail);
       // Trust the .log only if this run wrote it (latexmk can fail before pdflatex runs).
