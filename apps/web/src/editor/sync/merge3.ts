@@ -105,6 +105,12 @@ export interface Merge3Result {
 export interface Merge3Options {
   /** Which side a conflicting region keeps (default 'ours'; 'theirs' reports no conflicts). */
   prefer?: 'ours' | 'theirs';
+  /**
+   * Was this line (without its newline) once OUR text? Then a conflicting region whose lines on their side
+   * all were is an older copy of ours (the server wrote an earlier state of the editor's own text to disk
+   * before it died), not someone else's edit: ours is kept alone and nothing is reported.
+   */
+  wasOurs?: (line: string) => boolean;
 }
 
 export function merge3(base: string, ours: string, theirs: string, opts: Merge3Options = {}): Merge3Result {
@@ -165,6 +171,7 @@ export function merge3(base: string, ours: string, theirs: string, opts: Merge3O
       if (insT && !insO) out.push(...(startsWith(o.lines, insT) ? o.lines : [...insT, ...o.lines]));
       else if (insO && !insT) out.push(...(startsWith(t.lines, insO) ? t.lines : [...insO, ...t.lines]));
       else if (preferTheirs) out.push(...t.lines);
+      else if (opts.wasOurs && t.lines.every((l) => !l.trim() || opts.wasOurs!(l.replace(/\n$/, '')))) out.push(...o.lines);
       else {
         // differing edits of the same lines (or two different insertions at one point): BOTH are kept, ours
         // first, so neither the author's text nor the disk's is lost (the restore that follows writes this

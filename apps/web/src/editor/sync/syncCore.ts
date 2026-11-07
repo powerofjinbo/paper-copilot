@@ -15,7 +15,8 @@
  *  - restart: a snapshot older than the acknowledged version comes from a new server process that lost
  *    its unsaved text. The acknowledged text is three-way merged (merge3.ts) with the snapshot, on the last
  *    text known to come from disk: edits made on disk meanwhile are kept, the server's lost edits are
- *    re-sent as one change (`diff`), conflicting lines keep the editor's version and are reported; unless
+ *    re-sent as one change (`diff`), conflicting lines keep both versions (the editor's first) and are
+ *    reported, unless the disk's lines are an older copy of the editor's own text (`seenLines`); unless
  *    the snapshot is past version 0 (another tab already restored and edited it): then its lines win.
  * One change in flight (DocSync uses `takeNext`): the server applies a doc.change whenever its baseVersion
  * and length match its own, so a second change sent before a rejection could be applied to the REPLACED
@@ -123,6 +124,33 @@ export class SyncCore {
    * merge is based on, so a newer snapshot can recompute the restore (see LogEntry.restore).
    */
   private restartInfo: { ours: string; diskBase: string } | null = null;
+  /**
+   * Lines the server held at some acknowledged version (the lines each acknowledged change touched): after a
+   * restart, a disk line that is one of them is an older copy of the editor's own text written before the
+   * crash, not a co-author's edit (merge3 `wasOurs`). Bounded; insertion order = age.
+   */
+  private seenLines = new Set<string>();
+
+  /** Remember the lines of `after` that `cs` touched (see `seenLines`). */
+  private noteLines(cs: ChangeSet, after: Text): void {
+    cs.iterChanges((_fA, _tA, fB, tB) => {
+      const first = after.lineAt(Math.min(fB, after.length)).number;
+      const last = after.lineAt(Math.min(tB, after.length)).number;
+      for (let n = first; n <= last && n - first < 200; n++) {
+        const t = after.line(n).text;
+        if (!t.trim()) continue;
+        this.seenLines.delete(t);
+        this.seenLines.add(t);
+      }
+    });
+    if (this.seenLines.size > SEEN_LINES_MAX) {
+      let drop = this.seenLines.size - SEEN_LINES_MAX / 2;
+      for (const k of this.seenLines) {
+        if (drop-- <= 0) break;
+        this.seenLines.delete(k);
+      }
+    }
+  }
 
   constructor(readonly file: string) {}
 
@@ -154,7 +182,10 @@ export class SyncCore {
     this.log.push({ baseVersion: this.localVersion, changes, annotation: null, sent: true });
     this.localVersion++;
     this.ackedVersion = this.localVersion;
-    if (this.ackedText) this.ackedText = changes.apply(this.ackedText);
+    if (this.ackedText) {
+      this.ackedText = changes.apply(this.ackedText);
+      this.noteLines(changes, this.ackedText);
+    }
     this.trim();
     return true;
   }
@@ -217,6 +248,7 @@ export class SyncCore {
     }
     this.log = out;
     this.ackedText = changes.apply(acked);
+    this.noteLines(changes, this.ackedText);
     this.ackedVersion = base + 1;
     this.localVersion = v;
     this.trim();
@@ -261,6 +293,7 @@ export class SyncCore {
             break;
           }
           t = e.changes.apply(t);
+          this.noteLines(e.changes, t);
         }
         this.ackedText = t;
       }
@@ -502,7 +535,7 @@ export class SyncCore {
     // changed a line, the server's line descends from ours (same old server state + newer typing), so ours
     // must not overwrite it (an idle tab would otherwise "restore" an older copy of the line and delete the
     // other tab's latest characters). Lines only we changed are still restored.
-    const merged = merge3(diskBase, ours, snapshot.text, { prefer: snapshot.version > 0 ? 'theirs' : 'ours' });
+    const merged = merge3(diskBase, ours, snapshot.text, { prefer: snapshot.version > 0 ? 'theirs' : 'ours', wasOurs: (l) => this.seenLines.has(l) });
     const restore = merged.text === snapshot.text ? null : opts.diff(snapshot.text, merged.text);
     const serverSide = opts.diff(entriesBase.toString(), merged.text);
     const res = this.rebase(snapshot.version, snapshot.text, entriesBase, entries, serverSide, restore, opts);
@@ -555,6 +588,8 @@ export class SyncCore {
     return { resync: true };
   }
 }
+
+const SEEN_LINES_MAX = 20000;
 
 /** Characters deleted + inserted by a change set (to compare candidate explanations of a snapshot). */
 function changeSize(cs: ChangeSet): number {

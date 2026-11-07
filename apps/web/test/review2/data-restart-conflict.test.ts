@@ -48,3 +48,33 @@ describe('review2 data: restart merge conflict', () => {
     expect(where, `conflict lines ${JSON.stringify(res.conflicts)}; the disk text of the line is kept nowhere`).not.toEqual({ server: false, editor: false, result: false });
   });
 });
+
+describe('review2 data: restart when the disk holds an OLDER copy of the editor text (soak seed 11)', () => {
+  it('keeps the editor line alone (no duplicate line, no split word) when the server wrote an earlier state of it', () => {
+    const disk0 = 'Intro line.\nWe find the result.\nClosing line.\n';
+    const core = new SyncCore('main.tex');
+    core.reset(0, [], disk0);
+    let text = textOf(disk0);
+    const type = (s: string, sent: boolean) => {
+      const at = text.toString().indexOf('\nClosing');
+      const cs = ChangeSet.of([{ from: at, insert: s }], text.length);
+      core.local(cs, null, sent);
+      text = cs.apply(text);
+      return text.toString();
+    };
+    type(' tracke', true);
+    core.ack(1);
+    const written = text.toString(); // the debounced disk write of the old process saw this state
+    type('r displaced', true);
+    core.ack(2);
+    // kill -9 with one change unsent; the new process reads `written` from disk
+    const local = type(' we kb8', false);
+    const res = core.reconcile({ version: 0, text: written }, local, { reconnect: true, connected: true, diff: diffChanges, oneInFlight: true });
+    let server = textOf(written);
+    for (const e of core.log) server = e.changes.apply(server);
+    const editor = res.remote ? res.remote.apply(textOf(local)).toString() : local;
+    expect(editor).toBe(server.toString());
+    expect(editor).toBe(local);
+    expect(res.conflicts).toEqual([]);
+  });
+});
