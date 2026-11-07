@@ -101,14 +101,24 @@ export function revealLine(line: number, file?: string | null): void {
   ed.revealLine(line);
 }
 
+/** A compile the author started (Compile, Cmd/Ctrl+S) is under way: its PDF is shown when it arrives. */
+let compileRequested = false;
+export function takeCompileRequest(): boolean {
+  const r = compileRequested;
+  compileRequested = false;
+  return r;
+}
+
 export async function compileNow(api: ApiClient): Promise<void> {
-  // Compiling opens the PDF pane if there is room, but does not PIN it: on a narrow window it waits behind
-  // the "PDF" strip at the right edge instead of taking the step panel the author is working in.
+  compileRequested = true;
+  // The PDF pane opens when the PDF arrives (App: compile.status), not now: a compile that produces no PDF
+  // (an error, the browser demo) must not take the step panel for an empty pane.
   const ws = useWorkspace.getState();
   if (ws.rightPane === 'none') ws.setRightPane('pdf');
   try {
     await api.compile();
   } catch (e) {
+    compileRequested = false;
     notify('error', errorText(e));
   }
 }
@@ -134,7 +144,7 @@ export async function forwardSync(api: ApiClient): Promise<void> {
   }
   const line = ed.currentLine();
   // the author asked to see this line in the PDF: show (and pin) the pane even on a narrow window
-  useShell.getState().pinPdf(true);
+  useShell.getState().pinPdf(true, true);
   if (ws.rightPane === 'none') ws.setRightPane('pdf');
   try {
     const box = await api.synctexForward(ws.file, line);

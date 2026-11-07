@@ -10,7 +10,8 @@ import { Editor } from './editor/Editor';
 import { PdfPane } from './pdf/PdfPane';
 import { getApiClient } from './api';
 import { errorText, setNetworkErrorText } from './api/errors';
-import { compileNow, flushPendingReveal, forwardSync, loadWorkspace, notify, openStep, refetchFacts, refetchOutline, refetchQuestions, refreshFiles, revealIn, revealLine, revealSentence, runSubmissionCheck, switchFile } from './components/actions';
+import { isMockClient } from './api/extras';
+import { compileNow, takeCompileRequest, flushPendingReveal, forwardSync, loadWorkspace, notify, openStep, refetchFacts, refetchOutline, refetchQuestions, refreshFiles, revealIn, revealLine, revealSentence, runSubmissionCheck, switchFile } from './components/actions';
 import { CompileBar } from './components/CompileBar';
 import { LeftRail, STEP_META } from './components/LeftRail';
 import { stepOf } from './components/steps';
@@ -91,8 +92,13 @@ function useBus(api: ApiClient): void {
         if ((m.state === 'ok' || m.state === 'error') && useShell.getState().submission) void runSubmissionCheck(api, undefined, { quiet: true });
         // Keep showing the last PDF while a new compile runs or fails.
         ws().setCompile({ state: m.state, pdfVersion: m.pdfVersion ?? prev.pdfVersion, errors: m.errors, logTail: m.logTail });
-        // a new PDF while the pane is hidden to make room: say where it is (once per PDF)
-        if (m.pdfVersion !== null && m.pdfVersion !== prev.pdfVersion && useShell.getState().fitHidden.pdf) notify('info', tr('fit.pdfReady'));
+        if (m.state === 'ok' || m.state === 'error') {
+          // the author pressed Compile (or Cmd/Ctrl+S): a new PDF is put beside the editor (the step panel makes
+          // room, behind a strip); a compile without a PDF (the browser demo) says why, in the UI language
+          const asked = takeCompileRequest();
+          if (asked && m.pdfVersion !== null && m.pdfVersion !== prev.pdfVersion) useShell.getState().pinPdf(true);
+          else if (asked && m.state === 'ok' && m.pdfVersion === null && prev.pdfVersion === null) notify('info', isMockClient(api) ? tr('compile.noPdfDemo') : tr('compile.noPdf'));
+        }
       }),
       api.on('job.progress', (m) => {
         ws().upsertJob(m.jobId, { kind: m.kind, state: m.state, message: m.message });
@@ -265,7 +271,7 @@ function PaneStrip({ side }: { side: 'left' | 'pdf' }) {
       aria-label={`PDF: ${t('fit.pdfHidden')}`}
       onClick={() => {
         if (useWorkspace.getState().rightPane === 'none') useWorkspace.getState().setRightPane('pdf');
-        useShell.getState().pinPdf(true);
+        useShell.getState().pinPdf(true, true);
       }}
     >
       <span className="pane-strip-arrow" aria-hidden="true">‹</span>
@@ -336,12 +342,12 @@ function Workspace({ api }: { api: ApiClient }) {
   const leftWidth = useShell((s) => s.leftWidth);
   const rightWidth = useShell((s) => s.rightWidth);
   const fitHidden = useShell((s) => s.fitHidden);
-  const pdfPinned = useShell((s) => s.pinned.pdf);
-  const compileState = useWorkspace((s) => s.compile.state);
+  const pdfAsked = useShell((s) => s.pdfAsked);
   const mainRef = useRef<HTMLDivElement>(null);
-  // No empty "compile to see the PDF" pane: the PDF pane opens once a PDF exists, a compile ran, or the
-  // author asked for it (top-bar PDF button, forward search).
-  const wantPdf = rightPane === 'pdf' && (pdfVersion !== null || compileState !== 'idle' || pdfPinned);
+  // No empty "compile to see the PDF" pane: the PDF pane opens once a PDF exists, or when the author asked
+  // for it in this session ("Show PDF", forward search). A compile without a PDF (failed: the reason is in the
+  // compile bar above the editor; the browser demo: a notice) does not open an empty pane.
+  const wantPdf = rightPane === 'pdf' && (pdfVersion !== null || pdfAsked);
   useAutoFit(mainRef, !userCollapsed, wantPdf);
   const leftCollapsed = userCollapsed || fitHidden.left;
   const showPdf = wantPdf && !fitHidden.pdf;

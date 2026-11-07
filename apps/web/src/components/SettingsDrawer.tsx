@@ -46,9 +46,9 @@ export function SettingsDrawer({ api }: { api: ApiClient }) {
   const rightPane = useWorkspace((s) => s.rightPane);
   // what is on screen, computed as App does: the pane opens after a compile (or when asked for) and the
   // auto-fit may hide it to keep the editor readable
-  const pdfCompiled = useWorkspace((s) => s.compile.pdfVersion !== null || s.compile.state !== 'idle');
-  const pdfPinned = useShell((s) => s.pinned.pdf);
-  const pdfWanted = pdfCompiled || pdfPinned;
+  const pdfExists = useWorkspace((s) => s.compile.pdfVersion !== null);
+  const pdfAsked = useShell((s) => s.pdfAsked);
+  const pdfWanted = pdfExists || pdfAsked;
   const pdfFitHidden = useShell((s) => s.fitHidden.pdf);
   const pdfShown = rightPane === 'pdf' && pdfWanted && !pdfFitHidden;
   const pdfHint = rightPane !== 'pdf' || pdfShown ? null : pdfWanted ? t('settings.pdfHintHidden') : t('settings.pdfHintIdle');
@@ -133,7 +133,7 @@ export function SettingsDrawer({ api }: { api: ApiClient }) {
                 checked={pdfShown}
                 onChange={(e) => {
                   // an explicit choice: shown now (pinned), or kept closed even after a compile
-                  useShell.getState().pinPdf(e.target.checked);
+                  useShell.getState().pinPdf(e.target.checked, e.target.checked);
                   setRightPane(e.target.checked ? 'pdf' : 'none');
                 }}
               />

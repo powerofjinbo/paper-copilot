@@ -185,7 +185,7 @@ function CompilePill({ api }: { api: ApiClient }) {
                 aria-pressed={pdfShown}
                 onClick={() => {
                   // an explicit "show" pins the pane (it is then never hidden to make room for the editor)
-                  useShell.getState().pinPdf(!pdfShown);
+                  useShell.getState().pinPdf(!pdfShown, !pdfShown);
                   setRightPane(pdfShown ? 'none' : 'pdf');
                   close();
                 }}

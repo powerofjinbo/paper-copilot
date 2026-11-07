@@ -20,9 +20,11 @@ interface Persisted {
   rightWidth: number;
   leftCollapsed: boolean;
   /**
-   * The author asked for the PDF pane explicitly ("Show PDF", the PDF strip, Settings, forward search): it is
-   * not hidden to make room. A compile alone does not pin it. (Stored under a new name: earlier versions also
-   * pinned it on every compile, and that stale pin must not keep hiding the step panel on every load.)
+   * The author wants the PDF beside the editor (a compile they started produced a PDF, or "Show PDF", the PDF
+   * strip, Settings, forward search): when there is no room for both, the step panel yields to it (until the
+   * author opens the panel again). It only matters once a PDF exists, so an empty PDF pane never takes the
+   * step panel on load. (Stored under a new name: earlier versions pinned it on every compile, including the
+   * browser demo's PDF-less ones, and that stale pin opened an empty pane over the panel on every load.)
    */
   pdfPinnedByUser: boolean;
 }
@@ -92,6 +94,8 @@ export interface ShellState {
   pinned: { left: boolean; pdf: boolean };
   /** The pane pinned last: when both are pinned and the editor would get too narrow, the other one yields. */
   lastPinned: 'left' | 'pdf' | null;
+  /** "Show PDF" was chosen in this session: the pane opens even before there is a PDF (with "Compile"). */
+  pdfAsked: boolean;
   /** The keyboard-shortcut overlay ("?"). */
   helpOpen: boolean;
   /** The Settings drawer (⚙): voice, language, theme, ownership heatmap, cost. */
@@ -125,7 +129,8 @@ export interface ShellState {
   markJobFinished(id: string, at: number): void;
   requestPushCheck(): void;
   setFitHidden(f: { left: boolean; pdf: boolean }): void;
-  pinPdf(on: boolean): void;
+  /** Pin / unpin the PDF pane; `asked` also records an explicit show / hide (see `pdfAsked`). */
+  pinPdf(on: boolean, asked?: boolean): void;
   /** Let the left panel be hidden for space again (it stays open if there is room). */
   unpinLeft(): void;
   /** Show the left panel (an explicit user action: it is pinned). */
@@ -173,6 +178,7 @@ export const useShell = create<ShellState>((set, get) => {
     fitHidden: { left: false, pdf: false },
     pinned: { left: false, pdf: initial.pdfPinnedByUser },
     lastPinned: initial.pdfPinnedByUser ? 'pdf' : null,
+    pdfAsked: false,
     helpOpen: false,
     settingsOpen: false,
     firstRunDone: firstRunSeen(),
@@ -210,8 +216,9 @@ export const useShell = create<ShellState>((set, get) => {
       const cur = get().fitHidden;
       if (cur.left !== f.left || cur.pdf !== f.pdf) set({ fitHidden: f });
     },
-    pinPdf: (on) => {
-      if (get().pinned.pdf === on) return;
+    pinPdf: (on, asked) => {
+      if (asked !== undefined && get().pdfAsked !== asked) set({ pdfAsked: asked });
+      if (get().pinned.pdf === on && !(on && get().lastPinned !== 'pdf')) return;
       set((s) => ({ pinned: { ...s.pinned, pdf: on }, lastPinned: on ? 'pdf' : s.lastPinned }));
       persist();
     },
