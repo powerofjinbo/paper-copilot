@@ -9,7 +9,7 @@
  * for properties that hold today.
  */
 import { request as httpRequest } from 'node:http';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -72,8 +72,12 @@ describe('security round 2: routes added since the first review', () => {
     await initProject(project.root, { repo: project.repoDir, skill: SKILL_DIR });
     ctx = await createCtx({ root: project.root, fake: true, logLevel: 'error', watch: false, lintSidecar: false, docs: { segmentDebounceMs: 20, writeDebounceMs: 50 } });
     dist = mkdtempSync(join(tmpdir(), 'paper-dist2-'));
-    writeFileSync(join(dist, 'index.html'), '<!doctype html><html><head><title>x</title></head><body></body></html>');
-    server = await createServer({ ctx, port: 0, webDist: dist, pingIntervalMs: 60_000 });
+    // the served build (as PAPER_WEB_DIST would name it) is dist/web; dist/secret.txt is outside it
+    mkdirSync(join(dist, 'web'));
+    writeFileSync(join(dist, 'web', 'index.html'), '<!doctype html><html><head><title>x</title></head><body></body></html>');
+    writeFileSync(join(dist, 'web', '.env'), 'DOTFILE-SECRET');
+    writeFileSync(join(dist, 'secret.txt'), 'OUTSIDE-DIST-SECRET');
+    server = await createServer({ ctx, port: 0, webDist: join(dist, 'web'), pingIntervalMs: 60_000 });
     port = server.port;
   });
 
@@ -156,6 +160,14 @@ describe('security round 2: routes added since the first review', () => {
     const r = await req(port, 'POST', '/api/sentences/x/restore', { headers: { ...auth(), 'content-type': 'application/json' }, body }).catch(() => ({ status: 413, headers: {}, body: '' }));
     expect(r.status).toBe(413);
     expect((await req(port, 'GET', '/api/project', { headers: auth() })).status).toBe(200);
+  });
+
+  it('BUG (low): the static web build (PAPER_WEB_DIST) serves its dotfiles without the token: serveDotFiles:false only affects the glob, @fastify/static 10 defaults dotfiles to "allow" (no path escape)', async () => {
+    for (const p of ['/../secret.txt', '/..%2fsecret.txt', '/%2e%2e/secret.txt', '/%2e%2e%2fsecret.txt', '/.env', '/%2eenv', '//../secret.txt']) {
+      const r = await req(port, 'GET', p);
+      expect.soft(r.body, p).not.toContain('OUTSIDE-DIST-SECRET');
+      expect.soft(r.body, p).not.toContain('DOTFILE-SECRET');
+    }
   });
 
   it('BUG: a .bib key named like an Object.prototype member (constructor, toString, ...) is "user_confirmed" although nobody confirmed it, so the AI may cite it and the submission check does not list it as unresolved', async () => {
