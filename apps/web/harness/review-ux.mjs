@@ -70,6 +70,8 @@ async function freshPage({ width = 1440, height = 900, colorScheme = 'light', mo
   const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, colorScheme });
   // macOS as CodeMirror and the app detect it (navigator.platform), before any module loads
   if (mac) await ctx.addInitScript(() => Object.defineProperty(Navigator.prototype, 'platform', { get: () => 'MacIntel' }));
+  // the guided tour's first-launch offer is answered ("Not now"): these checks look at the app itself
+  await ctx.addInitScript(() => localStorage.getItem('paper-copilot.tour.v1') ?? localStorage.setItem('paper-copilot.tour.v1', JSON.stringify({ status: 'declined', index: 0, done: [] })));
   page = await ctx.newPage();
   await page.goto(`${BASE}/${mock ? '?mock=1' : ''}`);
   if (mock) {

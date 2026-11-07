@@ -41,6 +41,20 @@ accepts; typing edits it; Ctrl/Cmd+I gives an instruction (Chinese is fine) and 
 checklist; Ctrl/Cmd+G fixes grammar only; `l` shows alternatives; `r` lets you rewrite it yourself; `x` rejects it
 into a `[claim: ...?]` placeholder so no claim is silently lost.
 
+## First steps
+
+1. **Try it in the browser, nothing else installed:** `pnpm install`, then `pnpm --filter @paper-copilot/web dev`
+   and open `http://127.0.0.1:5173/?mock=1`. On the first visit the app offers an 8-step guided tour of an
+   example paper (later: **?** → *Take the tour*). Each step asks you to do one thing: open a sentence's card,
+   instruct the AI in Chinese and accept, turn a Chinese note into an English sentence, accept ghost text, change a
+   number and see it flagged as having no source, draft a paragraph and review it in ③ To do, run the submission
+   check. **?** → *Reset the example paper* starts again. The demo has no LaTeX: Compile shows an example PDF
+   that does not follow your edits.
+2. **Install TeX for the real PDF.** Mac: `brew install --cask mactex-no-gui` (or BasicTeX, then
+   `sudo tlmgr install latexmk revtex`), then open a new terminal. Linux:
+   `sudo apt install latexmk texlive-latex-extra texlive-publishers`. `pnpm paper doctor` checks it.
+3. **Your own paper:** follow the quick start below.
+
 ## Quick start
 
 Requirements: Node ≥ 22.13 with pnpm, Python ≥ 3.11, TeX Live with `latexmk` and `synctex`, git. For real AI
@@ -85,10 +99,10 @@ and is tested here (simulated AI, local git remote, TeX Live 2023):
 | `packages/core` (segmenter, anchoring with a seeded fuzz test, gate, prompts, meta) | 642 tests pass |
 | `packages/client-core` (ghost machine, review queue) | 102 tests pass |
 | `apps/server` (services, routes, security, SDK request shapes, end-to-end in process) | 530 tests pass |
-| `apps/web` (sync core, decorations, ghost, panels, API client) | 213 tests pass |
+| `apps/web` (sync core, decorations, ghost, panels, API client, guided tour, demo PDF) | 242 tests pass |
 | `sidecar` (your `style_check.py` behind a JSON-lines process) | 25 tests pass |
 | `node e2e/fullstack.mjs` (real server + built app in Chromium: the Phase 1a acceptance walk, compile, SyncTeX both ways, draft and review, push refused then allowed, a co-author pull keeping 29/29 sentence ids, kill -9 and restart; the submission check, a planted abstract/body number drift, restoring a version, a derived "2.5 times" through the gate, a re-run result JSON marking its fact stale, the file switcher on the multi-file fixture, the 4-step layout in 中文/light/dark) | 28/28 |
-| Browser harnesses (`apps/web/harness/*.mjs`: app in demo mode, editor, PDF, UX review) | 29/29, 14/14, 17/17, 18/18 |
+| Browser harnesses (`apps/web/harness/*.mjs`: app in demo mode, editor, PDF, UX review; the demo walk includes the guided tour in 中文/light and EN/dark) | 32/32, 14/14, 17/17, 18/18 |
 
 The segmenter agrees with the skill's `style_check.py` on 100% of the fixture's sentences. An adversarial review from
 five angles (integrity, anchoring, security, SDK correctness, UX) found 36 problems; each was reproduced by a failing

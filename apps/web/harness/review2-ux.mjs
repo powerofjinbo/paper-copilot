@@ -101,6 +101,8 @@ async function ensureVite() {
 async function newMacContext({ width, height, colorScheme = 'light' }) {
   const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, colorScheme });
   await ctx.addInitScript(() => Object.defineProperty(Navigator.prototype, 'platform', { get: () => 'MacIntel' }));
+  // the guided tour's first-launch offer is answered ("Not now"): these checks look at the app itself
+  await ctx.addInitScript(() => localStorage.getItem('paper-copilot.tour.v1') ?? localStorage.setItem('paper-copilot.tour.v1', JSON.stringify({ status: 'declined', index: 0, done: [] })));
   return ctx;
 }
 
@@ -224,10 +226,16 @@ async function demoChecks() {
       await compileAndSettle();
       const after = await layout();
       await shot(`autohide-${w}`);
+      // the demo now shows its example PDF: like a real compile, the panel may yield to it, but only behind a
+      // strip that says it is there, and only for a PDF (never for an empty pane)
+      await waitFor(() => document.querySelector('.pdfp')?.getAttribute('data-state') === 'ready' || !document.querySelector('.pdfp'), null, 8000, 'the PDF to load');
+      const strip = await pc(() => !!document.querySelector('[data-testid="panel-strip"]'));
+      const pdfReady = await pc(() => document.querySelector('.pdfp')?.getAttribute('data-state') === 'ready');
       assert(
-        after.panel > 0,
-        `step panel ${before.panel}px -> ${after.panel}px after Compile (fitHidden.left=${after.fitHidden.left}, user collapsed=${after.userCollapsed}); the rail still marks "${after.selectedStep}" as selected; the space went to a PDF pane that shows "${after.pdfMessage}"`,
+        after.panel > 0 || (strip && pdfReady),
+        `step panel ${before.panel}px -> ${after.panel}px after Compile (fitHidden.left=${after.fitHidden.left}, user collapsed=${after.userCollapsed}, strip=${strip}, PDF ready=${pdfReady}); the rail still marks "${after.selectedStep}" as selected; the space went to a PDF pane that shows "${after.pdfMessage}"`,
       );
+      return after.panel > 0 ? `panel ${after.panel}px` : 'panel behind its strip, example PDF shown';
     });
   }
 
@@ -479,7 +487,10 @@ async function realChecks() {
       await compileAndSettle();
       const c = await pc(() => window.__paper.workspace.getState().compile);
       const first = c.errors[0]?.message ?? '';
-      const visible = await onScreen(first.slice(0, 30));
+      // the server's English reason is shown as the translated install lines, this OS first (a Mac here)
+      const visible = await onScreen('brew install --cask mactex-no-gui');
+      const macFirst = await pc(() => /^Mac/.test(document.querySelector('[data-testid="compile-bar"] [data-testid="tex-install"] li')?.textContent ?? ''));
+      assert(macFirst, 'on a Mac the MacTeX line is not the first install line');
       const m = await layout();
       await shot('real-no-latexmk-1440');
       assert(visible, `the server says "${first}" but the screen shows the pill "${m.pill}" and the PDF pane "${m.pdfMessage}" (log tail is empty, the status bar has no log)`);
