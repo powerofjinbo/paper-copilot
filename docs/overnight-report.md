@@ -162,7 +162,7 @@
 | `node e2e/fullstack.mjs`（真服务器 + Chromium 走完整流程） | 28/28 |
 | `node e2e/perf.mjs` | 全部预算达标 |
 | soak 种子 11 / 23（各 5 分钟） | 328 / 342 个动作，全部通过 |
-| 浏览器脚本 e2e-app / e2e-editor / e2e-pdf / review-ux / review2-ux | HARNESS_COUNTS |
+| 浏览器脚本 e2e-app / e2e-editor / e2e-pdf / review-ux / review2-ux | 33/33、14/14、17/17、18/18、17/17 |
 
 以上每项都连续跑了两遍，两遍都通过。
 
