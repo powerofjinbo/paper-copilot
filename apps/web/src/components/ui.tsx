@@ -1,8 +1,10 @@
 /** Small presentational building blocks shared by the shell and the panels. */
-import { useId, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import type { Provenance, SentenceState } from '@paper-copilot/core';
 import { provKey, provTitleKey, stateKey, stateTitleKey, useT } from '../i18n';
+import { useShell } from '../state/extra';
 import { IconChevronDown, Spinner } from './Icons';
+import type { StepSection } from './steps';
 
 type BtnProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: 'default' | 'primary' | 'ghost' | 'danger' | 'quiet';
@@ -88,6 +90,8 @@ export function PanelSection({
   children,
   defaultOpen = true,
   className,
+  focusId,
+  onOpenChange,
 }: {
   title: ReactNode;
   count?: ReactNode;
@@ -95,11 +99,34 @@ export function PanelSection({
   children: ReactNode;
   defaultOpen?: boolean;
   className?: string;
+  /** The section a focusSection(...) request opens and scrolls to (data-section). */
+  focusId?: StepSection;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpenState] = useState(defaultOpen);
+  const setOpen = (fn: (o: boolean) => boolean) => {
+    const n = fn(open);
+    if (n === open) return;
+    setOpenState(n);
+    onOpenChange?.(n);
+  };
   const id = useId();
+  const ref = useRef<HTMLElement>(null);
+  const focus = useShell((s) => (focusId && s.focus?.section === focusId ? s.focus.seq : 0));
+  useEffect(() => {
+    if (!focus) return;
+    setOpen(() => true);
+    // after the section opened and laid out
+    const timer = setTimeout(() => {
+      ref.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      // consumed: remounting the step later must not jump here again
+      if (useShell.getState().focus?.seq === focus) useShell.setState({ focus: null });
+    }, 60);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus]);
   return (
-    <section className={`psec${open ? ' psec-open' : ''}${className ? ` ${className}` : ''}`}>
+    <section ref={ref} data-section={focusId} className={`psec${open ? ' psec-open' : ''}${className ? ` ${className}` : ''}`}>
       <div className="psec-head">
         <button type="button" className="psec-toggle" aria-expanded={open} aria-controls={id} onClick={() => setOpen((o) => !o)}>
           <IconChevronDown className="psec-chevron" />

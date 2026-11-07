@@ -1,51 +1,53 @@
 /**
- * Left rail: a vertical tab list of the panels (icons + labels). Arrow keys move between tabs
- * (roving tabindex, automatic activation); clicking the active tab collapses or expands the panel.
+ * Left rail: the four steps of writing a paper, in order (① Plan, ② Sources, ③ To do, ④ Check &
+ * submit), each with its number, icon, label and a count badge where useful. Arrow keys move between
+ * steps (roving tabindex, automatic activation); clicking the active step collapses or expands the panel.
+ * Voice, language, theme, the ownership heatmap and the cost meter live in the Settings drawer (top bar ⚙).
  */
 import { useMemo, useRef, type KeyboardEvent, type ReactNode } from 'react';
-import type { LeftTab } from '../contracts';
+import type { LeftStep } from '../contracts';
 import { htmlLang, useT, type MsgKey } from '../i18n';
 import { useShell } from '../state/extra';
 import { useWorkspace } from '../state/store';
-import { IconChevronLeft, IconChevronRight, IconFacts, IconOutline, IconPlaceholder, IconQuestion, IconReview, IconSync, IconVoice } from './Icons';
+import { IconChevronLeft, IconChevronRight, IconPlan, IconShieldCheck, IconSources, IconTodo } from './Icons';
+import { STEPS, openTodoCount, stepOf, submissionStatus } from './steps';
 
-export const TABS: Array<{ id: LeftTab; label: MsgKey; icon: ReactNode }> = [
-  { id: 'outline', label: 'tab.outline', icon: <IconOutline size={18} /> },
-  { id: 'facts', label: 'tab.facts', icon: <IconFacts size={18} /> },
-  { id: 'review', label: 'tab.review', icon: <IconReview size={18} /> },
-  { id: 'placeholders', label: 'tab.placeholders', icon: <IconPlaceholder size={18} /> },
-  { id: 'questions', label: 'tab.questions', icon: <IconQuestion size={18} /> },
-  { id: 'voice', label: 'tab.voice', icon: <IconVoice size={18} /> },
-  { id: 'sync', label: 'tab.sync', icon: <IconSync size={18} /> },
-];
+export const STEP_META: Record<LeftStep, { n: number; label: MsgKey; title: MsgKey; hint: MsgKey; icon: ReactNode }> = {
+  plan: { n: 1, label: 'step.plan', title: 'step.planTitle', hint: 'step.planHint', icon: <IconPlan size={18} /> },
+  sources: { n: 2, label: 'step.sources', title: 'step.sourcesTitle', hint: 'step.sourcesHint', icon: <IconSources size={18} /> },
+  todo: { n: 3, label: 'step.todo', title: 'step.todoTitle', hint: 'step.todoHint', icon: <IconTodo size={18} /> },
+  check: { n: 4, label: 'step.check', title: 'step.checkTitle', hint: 'step.checkHint', icon: <IconShieldCheck size={18} /> },
+};
 
-export function tabId(t: LeftTab): string {
+/** Kept for older imports: the rail's entries. */
+export const TABS = STEPS.map((id) => ({ id, label: STEP_META[id].label, icon: STEP_META[id].icon }));
+
+export function tabId(t: LeftStep): string {
   return `rail-tab-${t}`;
 }
-export function panelId(t: LeftTab): string {
+export function panelId(t: LeftStep): string {
   return `rail-panel-${t}`;
 }
 
-/** Counts shown as badges: what still needs the author. */
-function useBadges(): Partial<Record<LeftTab, number>> {
+/** Counts shown as badges: what still needs the author (② unresolved numerals, ③ open items, ④ failing checks). */
+function useBadges(): Partial<Record<LeftStep, { n: number; tone: 'accent' | 'warn' | 'danger' }>> {
   const units = useWorkspace((s) => s.units);
   const unresolved = useWorkspace((s) => s.unresolved);
-  const questions = useWorkspace((s) => s.questions);
+  const submission = useShell((s) => s.submission);
   return useMemo(() => {
-    let review = 0;
-    let ph = 0;
-    for (const u of units) {
-      if (u.state === 'proposed' || u.state === 'unsupported') review++;
-      ph += u.placeholders.length;
-    }
-    return { review, placeholders: ph, facts: unresolved.length, questions: questions.length };
-  }, [units, unresolved, questions]);
+    const st = submissionStatus(submission);
+    return {
+      sources: { n: unresolved.length, tone: 'warn' },
+      todo: { n: openTodoCount(units), tone: 'accent' },
+      check: { n: st.issues, tone: st.blockers ? 'danger' : 'warn' },
+    };
+  }, [units, unresolved, submission]);
 }
 
 export function LeftRail() {
   const t = useT();
   const lang = useShell((s) => s.lang);
-  const active = useWorkspace((s) => s.leftTab);
+  const active = stepOf(useWorkspace((s) => s.leftTab)) ?? 'plan';
   const setLeftTab = useWorkspace((s) => s.setLeftTab);
   // collapsed by the user, or hidden for now to leave the editor a readable column
   const collapsed = useShell((s) => s.leftCollapsed || s.fitHidden.left);
@@ -53,62 +55,71 @@ export function LeftRail() {
   const badges = useBadges();
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
 
-  const select = (id: LeftTab, focus = false) => {
+  const select = (id: LeftStep, focus = false) => {
     setLeftTab(id);
     if (collapsed) setCollapsed(false);
-    if (focus) refs.current[TABS.findIndex((x) => x.id === id)]?.focus();
+    if (focus) refs.current[STEPS.indexOf(id)]?.focus();
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    const i = TABS.findIndex((x) => x.id === active);
+    const i = STEPS.indexOf(active);
     let next = -1;
-    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') next = (i + 1) % TABS.length;
-    else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') next = (i - 1 + TABS.length) % TABS.length;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') next = (i + 1) % STEPS.length;
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') next = (i - 1 + STEPS.length) % STEPS.length;
     else if (e.key === 'Home') next = 0;
-    else if (e.key === 'End') next = TABS.length - 1;
+    else if (e.key === 'End') next = STEPS.length - 1;
     if (next >= 0) {
       e.preventDefault();
-      select(TABS[next]!.id, true);
+      select(STEPS[next]!, true);
     }
   };
 
   return (
-    <nav className="rail" lang={htmlLang(lang)} aria-label={t('tab.list')}>
-      <div role="tablist" aria-orientation="vertical" aria-label={t('tab.list')} className="rail-tabs" onKeyDown={onKeyDown}>
-        {TABS.map((tab, i) => {
-          const selected = tab.id === active;
-          const n = badges[tab.id] ?? 0;
-          const label = t(tab.label);
+    <nav className="rail" lang={htmlLang(lang)} aria-label={t('rail.label')}>
+      <div role="tablist" aria-orientation="vertical" aria-label={t('rail.label')} className="rail-tabs" onKeyDown={onKeyDown}>
+        {STEPS.map((id, i) => {
+          const meta = STEP_META[id];
+          const selected = id === active;
+          const badge = badges[id];
+          const n = badge?.n ?? 0;
+          const label = t(meta.label);
+          const aria = n > 0 ? t('step.ariaBadge', { n: meta.n, label: t(meta.title), count: n }) : t('step.aria', { n: meta.n, label: t(meta.title) });
           return (
             <button
-              key={tab.id}
+              key={id}
               ref={(el) => {
                 refs.current[i] = el;
               }}
-              id={tabId(tab.id)}
+              id={tabId(id)}
               role="tab"
               type="button"
+              data-step={id}
               aria-selected={selected}
-              aria-controls={panelId(tab.id)}
+              aria-controls={panelId(id)}
               aria-expanded={selected ? !collapsed : undefined}
-              aria-label={n > 0 ? t('tab.badge', { label, n }) : label}
-              title={label}
+              aria-label={aria}
+              title={`${t(meta.title)} — ${t(meta.hint)}`}
               tabIndex={selected ? 0 : -1}
               className={`rail-tab${selected ? ' is-active' : ''}${selected && collapsed ? ' is-collapsed' : ''}`}
               onClick={() => {
                 if (selected) setCollapsed(!collapsed);
-                else select(tab.id);
+                else select(id);
               }}
             >
               <span className="rail-icon">
-                {tab.icon}
+                {meta.icon}
                 {n > 0 ? (
-                  <span className="rail-badge" aria-hidden="true">
+                  <span className={`rail-badge rail-badge-${badge!.tone}`} aria-hidden="true">
                     {n > 99 ? '99+' : n}
                   </span>
                 ) : null}
               </span>
-              <span className="rail-label">{label}</span>
+              <span className="rail-label">
+                <span className="rail-num" aria-hidden="true">
+                  {meta.n}
+                </span>
+                {label}
+              </span>
             </button>
           );
         })}

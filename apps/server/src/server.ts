@@ -38,6 +38,8 @@ import { registerLlmRoutes } from './routes/llm';
 import { registerPanelsRoutes } from './routes/panels';
 import { registerVoiceRoutes } from './routes/voice';
 import { registerLintRoutes } from './routes/lint';
+import { registerReportsRoutes } from './routes/reports';
+import { registerRestoreRoutes } from './routes/restore';
 
 export const DEFAULT_PORT = 4317;
 export const VITE_DEV_PORT = 5173;
@@ -59,6 +61,8 @@ export const ROUTE_MODULES: Array<[string, RegisterRoutes]> = [
   ['build', registerBuildRoutes],
   ['voice', registerVoiceRoutes],
   ['lint', registerLintRoutes],
+  ['reports', registerReportsRoutes],
+  ['restore', registerRestoreRoutes],
 ];
 
 export interface ServerOptions {

@@ -210,3 +210,47 @@ export function Spinner({ size = 14, label }: { size?: number; label?: string })
     <span className="spinner" style={{ width: size, height: size }} role={label ? 'img' : undefined} aria-label={label} aria-hidden={label ? undefined : true} />
   );
 }
+
+/* Four-step rail and top bar (batch B) */
+export const IconPlan = (p: P) => (
+  <Svg {...p}>
+    <path d="M8 1.8a4.2 4.2 0 0 0-2.6 7.5c.5.4.8 1 .8 1.6v.6h3.6v-.6c0-.6.3-1.2.8-1.6A4.2 4.2 0 0 0 8 1.8Z" />
+    <path d="M6.3 13.2h3.4M6.8 14.7h2.4" />
+  </Svg>
+);
+export const IconSources = (p: P) => (
+  <Svg {...p}>
+    <path d="M2.5 3.2c1.8-.6 3.6-.4 5.5.8v9.5c-1.9-1.2-3.7-1.4-5.5-.8V3.2ZM13.5 3.2c-1.8-.6-3.6-.4-5.5.8v9.5c1.9-1.2 3.7-1.4 5.5-.8V3.2Z" />
+  </Svg>
+);
+export const IconTodo = (p: P) => (
+  <Svg {...p}>
+    <rect x="2" y="2.5" width="12" height="11" rx="2" />
+    <path d="m4.6 6.2 1.1 1.1 2-2M9.6 6.3h2M4.6 10.2l1.1 1.1 2-2M9.6 10.3h2" />
+  </Svg>
+);
+export const IconShieldCheck = (p: P) => (
+  <Svg {...p}>
+    <path d="M8 1.8 3 3.6v4c0 3 2.1 5.4 5 6.6 2.9-1.2 5-3.6 5-6.6v-4L8 1.8Z" />
+    <path d="m5.8 8 1.5 1.5 3-3" />
+  </Svg>
+);
+export const IconGear = (p: P) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="2.1" />
+    <path d="M8 1.6v1.6M8 12.8v1.6M14.4 8h-1.6M3.2 8H1.6M12.5 3.5l-1.1 1.1M4.6 11.4l-1.1 1.1M12.5 12.5l-1.1-1.1M4.6 4.6 3.5 3.5" />
+  </Svg>
+);
+export const IconFile = (p: P) => (
+  <Svg {...p}>
+    <path d="M4 1.8h5.2L12.5 5v9.2H4V1.8Z" />
+    <path d="M9 1.8V5.2h3.5" />
+  </Svg>
+);
+export const IconHelp = (p: P) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="6.2" />
+    <path d="M6.3 6.3a1.8 1.8 0 1 1 2.6 1.6c-.6.3-.9.7-.9 1.3v.3" />
+    <circle cx="8" cy="11.6" r=".5" fill="currentColor" />
+  </Svg>
+);
