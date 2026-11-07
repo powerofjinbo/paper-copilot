@@ -67,7 +67,7 @@ import { compareLatexInvariance, findPlaceholders, latexTokensOf, scanLatex } fr
 import { extractNumeralDetails, normalizeUnit as normUnit, relaxedOnlyMatches, resolveLinks, type NumeralDetail, type TokenLink } from '../facts/numbers';
 import { claimStrengthIssues, confidenceLevelOf } from './claims';
 import { directionWords, grammarOnlyReasons, meaningChange, type Direction } from './meaning';
-import { cleanWords, countWords, findCjk, findReasoningLeak, placeholderSafe } from './text';
+import { cleanWordSpans, cleanWords, countWords, findCjk, findReasoningLeak, placeholderSafe } from './text';
 
 export type GateMode = 'ghost' | 'draft' | 'rewrite' | 'grammar' | 'intent';
 
@@ -427,13 +427,33 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
     forms.get(key)!.add(f);
   };
   const usedDescriptions = new Set<string>();
+  const descNext = new Map<string, number>();
+  let wordSpans: ReturnType<typeof cleanWordSpans> | null = null;
   const placeholderFor = (tok: NumeralDetail): string => {
-    const before = cleanWords(t.slice(0, tok.replStart)).slice(-5);
-    const after = cleanWords(t.slice(tok.replEnd)).slice(0, 3);
+    wordSpans ??= cleanWordSpans(t);
+    const ws = wordSpans;
+    const firstAt = (pred: (w: { start: number; end: number }) => boolean): number => {
+      let lo = 0;
+      let hi = ws.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (pred(ws[mid]!)) hi = mid;
+        else lo = mid + 1;
+      }
+      return lo;
+    };
+    const b = firstAt((w) => w.end > tok.replStart);
+    const before = ws.slice(Math.max(0, b - 5), b).map((w) => w.word);
+    const a = firstAt((w) => w.start >= tok.replEnd);
+    const after = ws.slice(a, a + 3).map((w) => w.word);
     let desc = placeholderSafe([...before, '...', ...after].join(' ').replace(/^\.\.\.\s*|\s*\.\.\.$/g, ''), 120);
     if (!desc || desc === '...') desc = 'value';
     let d = desc;
-    for (let k = 2; usedDescriptions.has(d); k++) d = `${desc} (${k})`;
+    // the next free suffix per description (a linear probe from 2 was quadratic in the numeral count)
+    for (let k = descNext.get(desc) ?? 2; usedDescriptions.has(d); k++) {
+      d = `${desc} (${k})`;
+      descNext.set(desc, k + 1);
+    }
     usedDescriptions.add(d);
     return `[fact?: ${d}]`;
   };

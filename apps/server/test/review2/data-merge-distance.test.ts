@@ -71,3 +71,18 @@ it('keeps a 600-character unsaved paragraph AND a co-author edit 23 lines (1.4 K
     conflictCopies: 0,
   });
 }, 30_000);
+
+it('mergeDisjoint: merges far-apart edits exactly, refuses edits that touch or overlap', async () => {
+  const { mergeDisjoint } = await import('../../src/docs/docService');
+  const base = 'alpha beta gamma\n' + 'x'.repeat(2000) + '\ndelta epsilon\n';
+  const ours = base.replace('alpha beta', 'alpha ' + 'new text '.repeat(100) + 'beta');
+  const theirs = base.replace('delta epsilon', 'delta zeta epsilon');
+  expect(mergeDisjoint(base, ours, theirs)).toBe(ours.replace('delta epsilon', 'delta zeta epsilon'));
+  // the same word changed on both sides: no exact merge
+  expect(mergeDisjoint(base, base.replace('gamma', 'GAMMA'), base.replace('gamma', 'Gamma'))).toBeNull();
+  // insertions at the same point: no exact merge (order unknown)
+  expect(mergeDisjoint(base, base.replace('beta', 'beta one'), base.replace('beta', 'beta two'))).toBeNull();
+  // CRLF text keeps its \r
+  const crlf = 'a\r\nb\r\n' + 'y'.repeat(1500) + '\r\nc\r\n';
+  expect(mergeDisjoint(crlf, crlf.replace('a\r\n', 'A\r\n'), crlf.replace('c\r\n', 'C\r\n'))).toBe('A\r\nb\r\n' + 'y'.repeat(1500) + '\r\nC\r\n');
+});

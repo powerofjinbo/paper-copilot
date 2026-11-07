@@ -40,7 +40,8 @@ ARXIV MB GB TB PB HZ MHZ GHZ KHZ PDFS NNS`
 );
 
 const ACR_TOKEN_RE = /(?<![A-Za-z0-9Ͱ-Ͽ\\])([A-Z][A-Za-z0-9@&]*(?:-[A-Z0-9][A-Za-z0-9@&]*)*)(?![A-Za-z0-9Ͱ-Ͽ])/g;
-const DEF_PAREN_RE = /((?:[A-Za-z][\w'’-]*\s+){0,8}[A-Za-z][\w'’-]*)\s*\(\s*([A-Z][A-Za-z0-9@&-]*[A-Z0-9][a-z0-9]?s?)\s*-?\s*(?:[;,][^)]*)?\)/g;
+// Each word starts at a word start and is bounded, so a long letter run costs linear time, not quadratic.
+const DEF_PAREN_RE = /(?<![\w'’-])((?:[A-Za-z][\w'’-]{0,40}\s+){0,8}[A-Za-z][\w'’-]{0,40})\s*\(\s*([A-Z][A-Za-z0-9@&-]*[A-Z0-9][a-z0-9]?s?)\s*-?\s*(?:[;,][^)]*)?\)/g;
 const DEF_REV_RE = /\b([A-Z][A-Za-z0-9@&-]*[A-Z0-9])s?\s*\(\s*([A-Za-z][^()]{4,80})\)/g;
 const DEF_PHRASE_RE = /(?:[Rr]eferred to as|[Hh]ereafter|[Hh]enceforth|called|denoted(?: as| by)?|abbreviated(?: as)?|or simply)\s+(?:the\s+)?[“"]?([A-Z][A-Za-z0-9-]*[A-Z0-9])|\b([A-Z][A-Za-z0-9-]*[A-Z0-9])s?\s+(?:stands for|is short for)\b/g;
 

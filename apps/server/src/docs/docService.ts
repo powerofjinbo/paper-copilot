@@ -194,6 +194,23 @@ function touches(r: Range, start: number, end: number): boolean {
   return start <= r.to && r.from <= end;
 }
 
+/**
+ * Exact 3-way merge of two edits of `base`: the disk change (`theirs`) is applied to the mirror (`ours`)
+ * when no changed range of one touches a changed range of the other (R2-DATA-7). Positions are mapped
+ * through the local edit, so a long paragraph typed above the co-author's edit does not matter. Returns
+ * null when the edits touch (the caller falls back to a fuzzy patch or a conflict copy).
+ */
+export function mergeDisjoint(base: string, ours: string, theirs: string): string | null {
+  const a = diffChanges(base, theirs);
+  const b = diffChanges(base, ours);
+  const ra: Array<[number, number]> = [];
+  const rb: Array<[number, number]> = [];
+  a.iterChangedRanges((f, t) => ra.push([f, t]));
+  b.iterChangedRanges((f, t) => rb.push([f, t]));
+  for (const [af, at] of ra) for (const [bf, bt] of rb) if (!(at < bf || bt < af)) return null;
+  return a.map(b).apply(Text.of(ours.split('\n'))).toString();
+}
+
 function uniq<T>(xs: T[]): T[] {
   return [...new Set(xs)];
 }
@@ -762,8 +779,17 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
     }, writeMs);
   };
 
+  /** The file on disk no longer holds the text the mirror last read or wrote (a missing file does not count). */
+  const diskChangedUnderUs = async (st: FileState): Promise<boolean> => {
+    try {
+      return fromDisk(await readFile(st.abs, 'utf8')).text !== st.diskText;
+    } catch {
+      return false;
+    }
+  };
+
   /** Save units + snapshot, then write the file atomically (serialized per file). */
-  const writeNow = async (st: FileState): Promise<void> => {
+  const writeNow = async (st: FileState, attempt = 0): Promise<void> => {
     if (st.writeTimer) clearTimeout(st.writeTimer);
     st.writeTimer = null;
     // an external reload owns the mirror until it has replaced it (its conflict copy is in flight)
@@ -776,6 +802,25 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
       // a sync operation owns the files right now; try again after it
       scheduleWrite(st);
       return;
+    }
+    // Never overwrite a change that landed on disk since the mirror last read or wrote it (a co-author's
+    // edit synced in, a git pull in a terminal) before the watcher has reloaded it: merge it in first
+    // (reloadNow merges or saves a conflict copy), then write the merged text (R2-DATA-1).
+    if (await diskChangedUnderUs(st)) {
+      if (attempt < 3) {
+        await reloadFromDisk(st.file, 'external').catch((e) => log.warn(`docs: reload before write of ${st.file} failed`, String(e)));
+        return writeNow(st, attempt + 1);
+      }
+      // The disk keeps changing (or cannot be merged in): keep its text as a conflict copy, then write.
+      try {
+        const raw = await readFile(st.abs, 'utf8');
+        const copy = await saveConflictCopy(st, fromDisk(raw).text);
+        ctx.bus.emit({ type: 'notice', level: 'warn', message: `${st.file} kept changing on disk while saving; the disk version was saved to ${copy}.` });
+      } catch (e) {
+        log.warn(`docs: cannot keep the disk version of ${st.file}`, String(e));
+        scheduleWrite(st);
+        return;
+      }
     }
     if (needsSegment(st)) runSegment(st);
     const text = textOf(st);
@@ -1063,14 +1108,22 @@ export function createDocService(ctx: Ctx, opts: DocServiceOptions = {}): DocSer
       if (disk.text === st.diskText && !st.unsaved) return 'unchanged';
       if (st.unsaved && mirror !== st.diskText && disk.text !== st.diskText) {
         // Local edits not yet written AND a change on disk: merge the disk change into the mirror.
-        const dmp = new DiffMatchPatch();
-        dmp.Diff_Timeout = 0;
-        const patches = dmp.patch_make(st.diskText, disk.text);
-        const [merged, applied] = dmp.patch_apply(patches, mirror);
-        if (applied.every(Boolean)) {
-          target = merged;
-          keepUnsaved = merged !== disk.text;
-        } else conflict = true;
+        // First an exact merge of disjoint edits (positions mapped through the local edit), then the
+        // fuzzy patch for edits that touch.
+        const exact = soft('mergeDisjoint', () => mergeDisjoint(st.diskText, mirror, disk.text), null);
+        if (exact !== null) {
+          target = exact;
+          keepUnsaved = exact !== disk.text;
+        } else {
+          const dmp = new DiffMatchPatch();
+          dmp.Diff_Timeout = 0;
+          const patches = dmp.patch_make(st.diskText, disk.text);
+          const [merged, applied] = dmp.patch_apply(patches, mirror);
+          if (applied.every(Boolean)) {
+            target = merged;
+            keepUnsaved = merged !== disk.text;
+          } else conflict = true;
+        }
       } else if (st.unsaved && disk.text === st.diskText) {
         // Disk did not really change (e.g. a touch); keep the local edits.
         return 'touch';

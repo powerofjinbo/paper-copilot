@@ -116,6 +116,36 @@ export function cleanWords(text: string): string[] {
     .filter((w) => w.length > 0);
 }
 
+/**
+ * The words of cleanWords with their offsets in `text`, computed in one pass (the gate asks for the
+ * words around every numeral of a sentence; calling cleanWords on each prefix was quadratic).
+ */
+export function cleanWordSpans(text: string): Array<{ word: string; start: number; end: number }> {
+  const scan = scanLatex(text);
+  const chars = text.split('');
+  const blank = (s: number, e: number): void => {
+    for (let i = Math.max(0, s); i < Math.min(e, chars.length); i++) chars[i] = ' ';
+  };
+  for (const c of scan.comments) blank(c.start, c.end);
+  for (const k of scan.keyCommands) blank(k.start, k.end);
+  for (const m of scan.math) blank(m.start, m.end);
+  const sp = (m: string): string => ' '.repeat(m.length);
+  const out = chars
+    .join('')
+    .replace(/\[[^\]\n]*\]/g, sp)
+    .replace(/\\[A-Za-z@]+\*?/g, sp)
+    .replace(/\\./g, sp)
+    .replace(/[0-9]+(?:[.,][0-9]+)*/g, sp)
+    .replace(/[^A-Za-z\s'-]/g, ' ');
+  const words: Array<{ word: string; start: number; end: number }> = [];
+  for (const m of out.matchAll(/\S+/g)) {
+    const lead = /^['-]*/.exec(m[0])![0].length;
+    const w = m[0].replace(/^['-]+|['-]+$/g, '');
+    if (w) words.push({ word: w, start: m.index + lead, end: m.index + lead + w.length });
+  }
+  return words;
+}
+
 /** Sanitize a free string for use inside a placeholder (ASCII-safe for pdflatex, no brackets). */
 export function placeholderSafe(s: string, max = 60): string {
   const t = s

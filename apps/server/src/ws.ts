@@ -9,7 +9,8 @@
  *   doc.change      -> doc.ack (to the sender) and doc.remoteChange (to every other socket) or, on a version
  *                      mismatch / unreadable change / stale epoch, a fresh doc.snapshot; sentences.patch
  *                      follows on the bus after re-segmentation
- *   doc.flush       -> pending segmentation and disk write now; then doc.ack with the current version
+ *   doc.flush       -> pending segmentation and disk write now; then doc.ack repeating the version of this
+ *                      socket's last accepted change (never the current version: see the doc.flush case)
  *   ghost.request   -> ctx.llm.handleGhostRequest (not awaited: never blocks the document queue)
  *   ghost.cancel    -> ctx.llm.cancelGhost;  ghost.feedback -> ctx.llm.ghostFeedback
  *
@@ -57,6 +58,8 @@ interface Client {
   readonly sockId: string;
   /** Per file: version of the last doc.snapshot / doc.replace queued to this socket. */
   epochs: Map<string, number>;
+  /** Per file: version of the last doc.ack that answered a doc.change of this socket. */
+  acked: Map<string, number>;
 }
 
 const MAX_FRAME = 32 * 1024 * 1024;
@@ -193,6 +196,7 @@ export function createWsHub(ctx: Ctx, opts: WsHubOptions = {}): WsHub {
         if (ok) {
           // ack before the re-segmentation pass of an annotated change (it runs on the next macrotask)
           send(c, { type: 'doc.ack', file: msg.file, version: msg.baseVersion + 1 });
+          c.acked.set(relName(msg.file), msg.baseVersion + 1);
         } else {
           if (!ctx.docs.get(msg.file)) await ctx.docs.open(msg.file);
           snapshotOrNotice(c, msg.file);
@@ -202,7 +206,12 @@ export function createWsHub(ctx: Ctx, opts: WsHubOptions = {}): WsHub {
       case 'doc.flush': {
         await ctx.docs.flush(msg.file);
         const st = ctx.docs.get(msg.file);
-        if (st) send(c, { type: 'doc.ack', file: st.file, version: st.version });
+        // The flush answers with the version of this socket's last ACCEPTED change (an ack it already got),
+        // never the server's current version: the flush waits for a disk reload, whose version bump is not
+        // this client's change, and SyncCore.ack(v) would mark the keystrokes typed after Cmd+S (rejected
+        // as stale) acknowledged and lose them to the doc.replace (R2-DATA-3). Re-sending a known ack is a
+        // no-op for the client; tests use the answer to know the flush finished.
+        if (st) send(c, { type: 'doc.ack', file: st.file, version: c.acked.get(st.file) ?? 0 });
         return;
       }
       case 'ghost.request':
@@ -268,7 +277,7 @@ export function createWsHub(ctx: Ctx, opts: WsHubOptions = {}): WsHub {
 
   return {
     attach(socket) {
-      const c: Client = { socket, queue: [], waiting: false, alive: true, inbox: Promise.resolve(), closed: false, id: '', sockId: `socket-${++socketSeq}`, epochs: new Map() };
+      const c: Client = { socket, queue: [], waiting: false, alive: true, inbox: Promise.resolve(), closed: false, id: '', sockId: `socket-${++socketSeq}`, epochs: new Map(), acked: new Map() };
       c.id = c.sockId;
       clients.add(c);
       socket.on('pong', () => (c.alive = true));
