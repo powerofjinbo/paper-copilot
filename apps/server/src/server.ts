@@ -317,7 +317,7 @@ export async function createServer(opts: ServerOptions): Promise<PaperServer> {
   app.get('/', async (_req, reply) => sendIndex(reply));
   app.get('/index.html', async (_req, reply) => sendIndex(reply));
   if (hasDist) {
-    await app.register(fastifyStatic, { root: dist, prefix: '/', index: false, wildcard: true, serveDotFiles: false, cacheControl: true, maxAge: 0 });
+    await app.register(fastifyStatic, { root: dist, prefix: '/', index: false, wildcard: true, serveDotFiles: false, dotfiles: 'deny', cacheControl: true, maxAge: 0 });
   }
 
   await app.listen({ host, port: opts.port ?? DEFAULT_PORT });

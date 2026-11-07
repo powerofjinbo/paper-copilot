@@ -541,13 +541,18 @@ export function echoCheck(units: readonly ConsistencyUnit[], facts: readonly Fac
 
   // ---------------------------------------------------------------- conditions dropped
   {
+    // per unit, computed once: a numeral-dense unit has many occurrences (re-parsing it per occurrence was quadratic)
+    const phrasesOf = new Map<number, Array<{ phrase: string; stems: string[] }>>();
+    const haveOf = new Map<number, Set<string>>();
     for (const [key, list] of byKey) {
       const heads = list.filter((o) => o.part === 'abstract' || o.part === 'concl');
       const bodies = list.filter((o) => o.part === 'body' || o.part === 'intro' || o.part === 'app' || o.part === 'caption');
       if (!heads.length || !bodies.length) continue;
       const bodyPhrases = new Map<string, { phrase: string; stems: string[]; sentenceId: string }>();
       for (const b of bodies) {
-        for (const c of conditionPhrases(us[b.unitIndex]!.text)) if (!bodyPhrases.has(c.phrase.toLowerCase())) bodyPhrases.set(c.phrase.toLowerCase(), { ...c, sentenceId: b.sentenceId! });
+        let phrases = phrasesOf.get(b.unitIndex);
+        if (!phrases) phrasesOf.set(b.unitIndex, (phrases = conditionPhrases(us[b.unitIndex]!.text)));
+        for (const c of phrases) if (!bodyPhrases.has(c.phrase.toLowerCase())) bodyPhrases.set(c.phrase.toLowerCase(), { ...c, sentenceId: b.sentenceId! });
       }
       const doneHead = new Set<number>();
       for (const h of heads) {
@@ -556,7 +561,8 @@ export function echoCheck(units: readonly ConsistencyUnit[], facts: readonly Fac
         const here = us[h.unitIndex]!;
         const prev = us[h.unitIndex - 1];
         const ctx = here.text + (prev && prev.part === here.part ? ' ' + prev.text : '');
-        const have = new Set(plainTokens(plainText(ctx)).map(stemWord));
+        let have = haveOf.get(h.unitIndex);
+        if (!have) haveOf.set(h.unitIndex, (have = new Set(plainTokens(plainText(ctx)).map(stemWord))));
         const dropped = [...bodyPhrases.values()].filter((c) => c.stems.every((s) => !have.has(s)));
         if (!dropped.length) continue;
         const what = key.startsWith('derived:') ? (h.derived ?? key) : key.slice(0, key.lastIndexOf('#'));

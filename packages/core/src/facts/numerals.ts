@@ -713,7 +713,7 @@ export function extractNumeralDetails(input: string): NumeralDetail[] {
     } else if ((m = /^(?:%|‰)/.exec(rest))) {
       tok.percent = m[0] === '%';
       consumedEnd = k + m[0].length;
-      const r2 = s.slice(consumedEnd).replace(/^[\s\u2009\u0005\u0006-]+/, '');
+      const r2 = s.slice(consumedEnd, consumedEnd + 64).replace(/^[\s\u2009\u0005\u0006-]+/, '');
       if (/^points?(?![A-Za-z])/i.test(r2)) {
         tok.percent = false;
         tok.points = true;
@@ -895,8 +895,8 @@ export function extractNumeralDetails(input: string): NumeralDetail[] {
         tok.structural = true;
         continue;
       }
-      const lead = s.slice(0, tok.pStart).replace(/[\s\u0005\u0006]/g, '');
-      if (lead === '' && (nc === ')' || nc === '.') && s[tok.pEnd + 1] === ' ') {
+      // only blanks before the numeral (stops at the first non-blank; the old replace copied the whole prefix per numeral)
+      if (/^[\s\u0005\u0006]*$/.test(s.slice(0, tok.pStart)) && (nc === ')' || nc === '.') && s[tok.pEnd + 1] === ' ') {
         tok.structural = true;
         continue;
       }

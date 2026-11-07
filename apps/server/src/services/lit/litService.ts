@@ -223,7 +223,12 @@ export function createLitService(ctx: Ctx, opts: LitServiceOptions = {}): LitSer
   function loadIndex(): IndexFile {
     if (index) return index;
     const fallback: IndexFile = { schemaVersion: 1, confirmed: {}, lastResolveAt: null };
-    index = ctx.files.readJson(ctx.paths.litIndex, IndexFile, fallback);
+    const read = ctx.files.readJson(ctx.paths.litIndex, IndexFile, fallback);
+    // .bib keys are user data: a key named "constructor" or "toString" must not find Object.prototype's
+    // member and pass as confirmed, and "__proto__" must stay a plain key (SEC2-3).
+    const confirmed: IndexFile['confirmed'] = Object.create(null);
+    for (const [k, v] of Object.entries(read.confirmed ?? {})) Object.defineProperty(confirmed, k, { value: v, enumerable: true, writable: true, configurable: true });
+    index = { ...read, confirmed };
     return index;
   }
 
@@ -270,7 +275,7 @@ export function createLitService(ctx: Ctx, opts: LitServiceOptions = {}): LitSer
     const c = cache.get(e.key);
     const applies = !!c && sameIds(c, e);
     const r = applies && c.outcome === 'one' ? c.record : null;
-    const confirmed = !!loadIndex().confirmed[e.key];
+    const confirmed = Object.hasOwn(loadIndex().confirmed, e.key);
     return {
       key: e.key,
       status: r ? 'resolved' : confirmed ? 'user_confirmed' : 'unresolved',
