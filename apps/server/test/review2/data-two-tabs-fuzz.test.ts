@@ -245,7 +245,10 @@ async function openTab(name: string): Promise<Tab> {
         log: (core.log as Array<{ baseVersion: number; changes: { toJSON(): unknown }; sent: boolean }>).map((e) => ({ baseVersion: e.baseVersion, changes: e.changes.toJSON(), sent: e.sent })),
         reconnect: (opts as { reconnect: boolean }).reconnect,
       };
-      const res = orig(snap, local, opts);
+      // R2_FIXK=1 (diagnostics): what the reconnect heuristic would do if it only considered sent entries
+      const pend0 = (core.log as Array<{ baseVersion: number; sent: boolean }>).find((e) => e.baseVersion >= (core.ackedVersion as number));
+      const o2 = process.env.R2_FIXK && pend0 && !pend0.sent ? { ...(opts as object), reconnect: false } : opts;
+      const res = orig(snap, local, o2);
       ed.vanished.push({ gone: [], stack: `reconcile mode=${res.mode} snapV=${(snap as { version: number }).version} acked=${before.ackedVersion} ackedText=${before.ackedText === 'null' ? 'null' : 'set'} pending=${before.log.filter((e) => e.baseVersion >= (before.ackedVersion as number)).length} send=${JSON.stringify((res as unknown as { send: unknown[] }).send).slice(0, 200)} diff=${JSON.stringify((res as unknown as { diff: { toJSON(): unknown } | null }).diff?.toJSON() ?? null).slice(0, 300)}` });
       const after = res.remote ? res.remote.apply(ed.state.doc).toString() : String(local);
       const toks = (String(local).match(/zq[ab]\d+x\d+q/g) ?? []).filter((t) => !after.includes(t));
