@@ -157,6 +157,8 @@ describe.skipIf(!TEX)('BuildService with latexmk + synctex (fixture)', () => {
     expect(st.state).toBe('error');
     // pdflatex recovered and wrote a complete PDF: it is published, as Overleaf shows it (UX2-1).
     expect(st.pdfVersion).toBe((before ?? 0) + 1);
+    // latexmk -f kept going: bibtex and the reruns ran, so the PDF has no unresolved "??" references
+    if (POPPLER) expect(execFileSync('pdftotext', [build.pdfPath()!, '-'], { encoding: 'utf8' })).not.toContain('??');
     const err = st.errors.find((e) => /Undefined control sequence/.test(e.message));
     expect(err).toBeDefined();
     expect(err!.file).toBe('main.tex');

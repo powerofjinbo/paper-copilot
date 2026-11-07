@@ -684,9 +684,11 @@ async function main() {
     await check('submission check after the review: the unreviewed blocker is gone; once the author adds the APS AI-use statement it is clean', async () => {
       const failingBlocks = (r) => r.items.filter((i) => !i.ok && i.severity === 'block');
       let rep = null;
-      for (let i = 0; i < 20; i++) {
+      // compile_errors is ok only once a compile has typeset the CURRENT text (R2-I-8): the save (1 s) and
+      // the compile debounce (2 s) plus latexmk follow the review's edits, so wait for that too
+      for (let i = 0; i < 60; i++) {
         rep = await pc(() => window.__paper.api.submissionCheck());
-        if (rep.items.find((x) => x.id === 'unreviewed')?.ok) break;
+        if (rep.items.find((x) => x.id === 'unreviewed')?.ok && rep.items.find((x) => x.id === 'compile_errors')?.ok) break;
         await sleep(300);
       }
       for (const id of ['unreviewed', 'unsupported', 'placeholders', 'intent_lines', 'cjk']) {
@@ -708,7 +710,7 @@ async function main() {
       await page.keyboard.press('Enter');
       await page.keyboard.insertText(`\\begin{acknowledgments}\n${d.latex.trim()}\n\\end{acknowledgments}`);
       await waitFor(() => /\\end\{acknowledgments\}/.test(window.__paper.workspace.getState().editor.getText()), null, 3000, 'the statement in the text');
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < 60; i++) {
         rep = await pc(() => window.__paper.api.submissionCheck());
         if (rep.ok) break;
         await sleep(300);

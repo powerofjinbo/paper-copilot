@@ -181,7 +181,9 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
       // A file name starting with "-" would be parsed by latexmk as an option (-pdflatex=<cmd> runs a
       // command): such a name is passed as "./<name>", which no option parser takes for an option.
       const mainArg = mainRel().startsWith('-') ? `./${mainRel()}` : mainRel();
-      const args = ['-pdf', '-synctex=1', '-interaction=nonstopmode', '-file-line-error', `-outdir=${outDir}`, mainArg];
+      // -f: like Overleaf, keep going past recoverable errors (bibtex and the reruns still run), so the PDF
+      // shown with the errors has its references and citations resolved instead of "??".
+      const args = ['-pdf', '-f', '-synctex=1', '-interaction=nonstopmode', '-file-line-error', `-outdir=${outDir}`, mainArg];
       // latexmk remembers a failed pdflatex run in its .fdb_latexmk: while the sources are unchanged it
       // refuses to run again ("Nothing to do ... gave an error in previous invocation", exit 12), so an
       // error caused by the environment (TeX installed after the first try, a missing package now
