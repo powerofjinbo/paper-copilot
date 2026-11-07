@@ -82,3 +82,34 @@ export function tailBytes(text: string, n = 4096): string {
   const nl = s.indexOf('\n');
   return nl >= 0 && nl < 200 ? s.slice(nl + 1) : s;
 }
+
+/**
+ * A missing class or package ("LaTeX Error: File `textcase.sty' not found.") gets an install hint, so
+ * the author is told what to run instead of decoding the TeX log. The TeX package usually has the
+ * file's name; a few well-known files live in a differently named package. `tinytex` is true when the
+ * log shows a TinyTeX tree, a minimal distribution that misses many publisher classes.
+ */
+const PACKAGE_OF_FILE: Record<string, string> = {
+  'revtex4-2.cls': 'revtex',
+  'revtex4-1.cls': 'revtex4-1',
+  'JHEP.cls': 'jhep',
+  'elsarticle.cls': 'elsarticle',
+  'graphicx.sty': 'graphics',
+  'amsmath.sty': 'amsmath',
+  'amssymb.sty': 'amsfonts',
+  'siunitx.sty': 'siunitx',
+  'hyperref.sty': 'hyperref',
+  'natbib.sty': 'natbib',
+};
+
+export function missingFileHint(message: string, log: string): string | null {
+  const m = /File [`'"]([^'"`]+\.(?:sty|cls|bst|tex))' not found/.exec(message);
+  if (!m) return null;
+  const file = m[1]!;
+  const pkg = PACKAGE_OF_FILE[file] ?? file.replace(/\.(sty|cls|bst|tex)$/, '');
+  const tinytex = /TinyTeX/i.test(log);
+  const base = `Install the missing TeX package: tlmgr install ${pkg}${tinytex ? '' : ' (with sudo for MacTeX / TeX Live)'}`;
+  return tinytex
+    ? `${base}. You are compiling with TinyTeX, a minimal distribution; for a paper, a full MacTeX / TeX Live avoids missing packages (put /Library/TeX/texbin first on PATH).`
+    : `${base}.`;
+}

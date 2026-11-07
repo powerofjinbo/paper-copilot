@@ -201,3 +201,19 @@ describe('scrubbedEnv', () => {
     expect(env).toEqual({ PATH: '/usr/bin', HOME: '/h', TEXINPUTS: '.:' });
   });
 });
+
+describe('missingFileHint', () => {
+  it('names the TeX package to install for a missing class or package', async () => {
+    const { missingFileHint } = await import('../src/services/build/latexLog');
+    expect(missingFileHint("LaTeX Error: File `revtex4-2.cls' not found.", '')).toMatch(/tlmgr install revtex\b/);
+    expect(missingFileHint("LaTeX Error: File `textcase.sty' not found.", '')).toMatch(/tlmgr install textcase/);
+    expect(missingFileHint('Undefined control sequence.', '')).toBeNull();
+  });
+  it('says when the compile used TinyTeX', async () => {
+    const { missingFileHint } = await import('../src/services/build/latexLog');
+    const log = '(/Users/me/Library/TinyTeX/texmf-dist/tex/latex/revtex/revtex4-2.cls';
+    const h = missingFileHint("LaTeX Error: File `textcase.sty' not found.", log)!;
+    expect(h).toMatch(/TinyTeX/);
+    expect(h).toMatch(/\/Library\/TeX\/texbin/);
+  });
+});
