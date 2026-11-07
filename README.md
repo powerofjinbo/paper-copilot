@@ -43,7 +43,7 @@ into a `[claim: ...?]` placeholder so no claim is silently lost.
 
 ## The screen
 
-- **Left rail, four steps in writing order.** Click a step to open its panel; click it again to close it.
+- **Left rail, four steps in writing order.** Click a step to open its panel; the « button at the foot of the rail folds the panel away.
   - **① Plan** — the five Step-0 items you write yourself (story, gap and enabler, ladder of cases, figure behind
     each claim, headline number with its baseline), alternative framings, the section and paragraph plan, Draft.
   - **② Sources** — *Facts* (every number from your analysis repo, with its file and SHA, stale badges, the list
