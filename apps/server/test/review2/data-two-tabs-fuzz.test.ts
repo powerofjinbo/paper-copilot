@@ -161,6 +161,27 @@ async function openTab(name: string): Promise<Tab> {
   ed.sync.start();
   for (let i = 0; i < 300 && !ed.loaded; i++) await sleep(10);
   expect(ed.loaded).toBe(true);
+  if (process.env.R2_LOGDIR) {
+    // capture the inputs of a reconcile that removes a typed token from the editor (diagnostics only)
+    const core = ed.sync.core as unknown as Record<string, unknown> & { reconcile: (...a: unknown[]) => { remote: { apply: (t: unknown) => { toString(): string } } | null; mode: string } };
+    const orig = core.reconcile.bind(core);
+    core.reconcile = (snap: unknown, local: unknown, opts: unknown) => {
+      const before = {
+        snapshot: snap,
+        localText: local,
+        ackedText: String(core.ackedText),
+        diskText: String(core.diskText),
+        ackedVersion: core.ackedVersion,
+        log: (core.log as Array<{ baseVersion: number; changes: { toJSON(): unknown }; sent: boolean }>).map((e) => ({ baseVersion: e.baseVersion, changes: e.changes.toJSON(), sent: e.sent })),
+        reconnect: (opts as { reconnect: boolean }).reconnect,
+      };
+      const res = orig(snap, local, opts);
+      const after = res.remote ? res.remote.apply(ed.state.doc).toString() : String(local);
+      const toks = (String(local).match(/zq[ab]\d+x\d+q/g) ?? []).filter((t) => !after.includes(t));
+      if (toks.length) writeFileSync(join(process.env.R2_LOGDIR!, `reconcile-${name}-${Date.now()}.json`), JSON.stringify({ toks, mode: res.mode, before }));
+      return res;
+    };
+  }
   return { name, api, ed, notices, down: false };
 }
 
