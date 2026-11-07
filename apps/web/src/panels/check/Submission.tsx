@@ -99,7 +99,7 @@ export function SubmissionCheck({ api }: { api: ApiClient }) {
     <section className={`submission submission-${st.tone}`} data-section="submission" aria-labelledby="submission-title" data-testid="submission-check">
       <div className="submission-head">
         <h3 id="submission-title" className="submission-title">
-          {report ? (st.tone === 'ready' ? t('check.ready') : st.blockers ? t('check.blockers', { n: st.blockers }) : t('check.warnings', { n: st.issues })) : t('check.title')}
+          {report ? (st.tone === 'ready' ? t('check.ready') : st.blockers ? t('check.blockers', { n: st.blockers }) : t('check.warnings', { n: st.issues })) : t('check.subTitle')}
         </h3>
         <div className="submission-actions">
           <label className="sr-only" htmlFor={venueId}>
