@@ -41,6 +41,42 @@ accepts; typing edits it; Ctrl/Cmd+I gives an instruction (Chinese is fine) and 
 checklist; Ctrl/Cmd+G fixes grammar only; `l` shows alternatives; `r` lets you rewrite it yourself; `x` rejects it
 into a `[claim: ...?]` placeholder so no claim is silently lost.
 
+## The screen
+
+- **Left rail, four steps in writing order.** Click a step to open its panel; click it again to close it.
+  - **① Plan** — the five Step-0 items you write yourself (story, gap and enabler, ladder of cases, figure behind
+    each claim, headline number with its baseline), alternative framings, the section and paragraph plan, Draft.
+  - **② Sources** — *Facts* (every number from your analysis repo, with its file and SHA, stale badges, the list
+    of numerals in the text that match no fact) and *Literature* (cite keys, INSPIRE resolution).
+  - **③ To do** — one list, in document order: AI sentences waiting for review, placeholders, referee questions.
+  - **④ Check** — the submission check, Consistency, Terminology, Figure plan, the AI disclosure text, and Sync
+    with Overleaf.
+- **Top bar.** The compile pill (Compile, Show/Hide PDF, errors), Sync (Pull / Push), Check (the submission
+  check's verdict), a badge that says "Simulated AI" when no API key is set, ⚙ Settings and **?** (shortcuts,
+  the tour, reset the demo). With several `.tex` files, the file name in the breadcrumb is a file switcher.
+- **⚙ Settings drawer.** Your voice (memo and style meter), interface language (中文 / English), theme, the
+  ownership heatmap, the PDF beside the editor, and the API cost of this session.
+- **When the window is narrow** the editor keeps a readable width: the PDF or the step panel steps aside behind a
+  thin strip at the edge. Click the strip to bring it back.
+
+## What else it checks
+
+- **Submission check** (④, and the Check button): one list of blockers before you send the paper out — unreviewed
+  AI sentences, placeholders, Chinese notes, numbers that match no fact, stale facts still stated in the text,
+  citation keys missing from the .bib, LaTeX errors, a missing AI disclosure statement. Each row jumps to the
+  sentence.
+- **Consistency**: each headline number across abstract, body, conclusions and captions; flags a drifted value,
+  a factor written as a percent, a dropped condition, and sentences that state a stale fact.
+- **Terminology**: each defined term with its first use and the variant spellings to unify.
+- **Figure plan**: each figure's job, the claim it supports, a caption checklist, and citation order.
+- **Derived numbers**: "2.5 times fewer fake tracks" is accepted when it is the ratio (or difference) of two facts
+  the sentence actually talks about, in the right direction. A coincidence with unrelated facts is not.
+- **Repo watcher**: when you re-run the analysis and a result file changes, its facts are re-read and the
+  sentences that state the old value are marked stale.
+- **Restore**: every version of a sentence is kept; the sentence card's history can put an earlier one back.
+- **Multi-file papers**: `\input`/`\include` trees open file by file through the file switcher; checks cover
+  every file.
+
 ## First steps
 
 1. **Try it in the browser, nothing else installed:** `pnpm install`, then `pnpm --filter @paper-copilot/web dev`
@@ -49,10 +85,13 @@ into a `[claim: ...?]` placeholder so no claim is silently lost.
    instruct the AI in Chinese and accept, turn a Chinese note into an English sentence, accept ghost text, change a
    number and see it flagged as having no source, draft a paragraph and review it in ③ To do, run the submission
    check. **?** → *Reset the example paper* starts again. The demo has no LaTeX: Compile shows an example PDF
-   that does not follow your edits.
+   (compiled once from the fixture) that does not follow your edits, and the PDF ↔ text jumps are approximate.
+   The full app (`pnpm paper open`) compiles for real.
 2. **Install TeX for the real PDF.** Mac: `brew install --cask mactex-no-gui` (or BasicTeX, then
    `sudo tlmgr install latexmk revtex`), then open a new terminal. Linux:
-   `sudo apt install latexmk texlive-latex-extra texlive-publishers`. `pnpm paper doctor` checks it.
+   `sudo apt install latexmk texlive-latex-extra texlive-publishers`. Then restart `pnpm paper open`;
+   `pnpm paper doctor` checks it. Without TeX the compile pill says *No LaTeX* and shows these same lines for
+   your system.
 3. **Your own paper:** follow the quick start below.
 
 ## Quick start
@@ -88,25 +127,40 @@ pnpm paper open ~/papers/canto
 
 `paper doctor ~/papers/canto` checks Node, Python, TeX, the skill, the key and the git remote.
 
+## Updating
+
+```bash
+cd paper-copilot && git pull && pnpm install && pnpm build
+```
+
+Then restart `pnpm paper open`. Your papers are not touched: the `.tex` files and the `.paper/` folder stay where
+they are.
+
 ## Status
 
 Phase 0 tooling and Phases 1a and 1b of [the plan](docs/plan.md) are implemented, and Phase 2 is partly done: the
-re-planner, the drafter, literature resolution, memo learning, the style meter and the Sync panel all exist. What runs
+re-planner, the drafter, literature resolution, memo learning, the style meter, the Sync panel, Consistency,
+Terminology, the Figure plan, the submission check, multi-file projects, derived numbers, restore and the repo
+watcher all exist. What runs
 and is tested here (simulated AI, local git remote, TeX Live 2023):
 
 | Suite | Result |
 |---|---|
-| `packages/core` (segmenter, anchoring with a seeded fuzz test, gate, prompts, meta) | 642 tests pass |
+| `packages/core` (segmenter, anchoring with a seeded fuzz test, gate, prompts, meta) | 670 tests pass |
 | `packages/client-core` (ghost machine, review queue) | 102 tests pass |
-| `apps/server` (services, routes, security, SDK request shapes, end-to-end in process) | 530 tests pass |
+| `apps/server` (services, routes, security, SDK request shapes, end-to-end in process) | 580 tests pass |
 | `apps/web` (sync core, decorations, ghost, panels, API client, guided tour, demo PDF) | 242 tests pass |
 | `sidecar` (your `style_check.py` behind a JSON-lines process) | 25 tests pass |
 | `node e2e/fullstack.mjs` (real server + built app in Chromium: the Phase 1a acceptance walk, compile, SyncTeX both ways, draft and review, push refused then allowed, a co-author pull keeping 29/29 sentence ids, kill -9 and restart; the submission check, a planted abstract/body number drift, restoring a version, a derived "2.5 times" through the gate, a re-run result JSON marking its fact stale, the file switcher on the multi-file fixture, the 4-step layout in 中文/light/dark) | 28/28 |
-| Browser harnesses (`apps/web/harness/*.mjs`: app in demo mode, editor, PDF, UX review; the demo walk includes the guided tour in 中文/light and EN/dark) | 33/33, 14/14, 17/17, 18/18 |
+| Browser harnesses (`apps/web/harness/*.mjs`: app in demo mode, editor, PDF, UX review, UX review 2; the demo walk includes the guided tour in 中文/light and EN/dark) | 33/33, 14/14, 17/17, 18/18, R2UX |
 
 The segmenter agrees with the skill's `style_check.py` on 100% of the fixture's sentences. An adversarial review from
-five angles (integrity, anchoring, security, SDK correctness, UX) found 36 problems; each was reproduced by a failing
-test and fixed, and the tests stay as regressions.
+five angles (integrity, anchoring, security, SDK correctness, UX) found 36 problems; a second review (integrity, data
+safety, security, UX) found 33 more. Each was reproduced by a failing test and fixed, and the tests stay as
+regressions. Two more runs guard data safety: `node e2e/perf.mjs` (typing, lint, compile and memory budgets on the
+multi-file paper, all met) and `SOAK_SEED=11 SOAK_MINUTES=5 node e2e/soak.mjs` (5 minutes of random typing, IME,
+paste, undo, AI actions, pulls, kill -9 and reloads in two tabs; seeds 11 and 23 hold every invariant after every
+action). What changed overnight, in Chinese: [docs/overnight-report.md](docs/overnight-report.md).
 
 **Not yet verified, because this needs your machine:** real Claude API calls and the Agent SDK (run
 `scripts/bench/ttft.ts` and `scripts/bench/prewarm-format.ts` first, see [scripts/bench/README.md](scripts/bench/README.md)),
