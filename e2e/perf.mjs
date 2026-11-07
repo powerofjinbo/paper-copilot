@@ -225,7 +225,7 @@ function instrument() {
   }
   const api = window.__paper.api;
   for (const type of ['sentences.patch', 'doc.ack', 'lint.update', 'doc.snapshot', 'compile.status']) {
-    api.on(type, (m) => perf.msgs.push({ type, at: performance.now(), file: m.file ?? null, scope: m.scope ?? null, n: m.upserts?.length ?? m.units?.length ?? m.flags?.length ?? null, state: m.state ?? null }));
+    api.on(type, (m) => perf.msgs.push({ type, at: performance.now(), file: m.file ?? null, version: m.version ?? null, scope: m.scope ?? null, n: m.upserts?.length ?? m.units?.length ?? m.flags?.length ?? null, state: m.state ?? null }));
   }
 }
 
@@ -317,14 +317,18 @@ async function measureTyping(file, prefix, phrase) {
   });
   await cursorAfter(prefix);
   const lastKey = await typePhrase(phrase);
-  await waitFor(
-    ([f, t]) => window.__perf.msgs.some((m) => m.type === 'sentences.patch' && m.file === f && m.at > t),
-    [file, lastKey],
-    10000,
-    `sentences.patch for ${file}`,
-  );
+  // the patch that covers the LAST keystroke: its version reaches the server's version after that key (the
+  // newest doc.ack). An earlier patch can arrive mid-burst when something flushes the file (a report, the
+  // file list), and timing that one would read as a patch faster than the debounce.
+  await pc(() => {
+    window.__perfCovering = (f, t) => {
+      const acked = Math.max(-1, ...window.__perf.msgs.filter((m) => m.type === 'doc.ack' && m.file === f).map((m) => m.version ?? -1));
+      return window.__perf.msgs.find((m) => m.type === 'sentences.patch' && m.file === f && m.at > t && (m.version ?? 0) >= acked) ?? null;
+    };
+  });
+  await waitFor(([f, t]) => !!window.__perfCovering(f, t), [file, lastKey], 10000, `sentences.patch for ${file}`);
   const r = await pc(([f, t]) => {
-    const patch = window.__perf.msgs.find((m) => m.type === 'sentences.patch' && m.file === f && m.at > t);
+    const patch = window.__perfCovering(f, t);
     return { keys: window.__perf.keys.slice(), slow: window.__perf.slow.slice(), patchAt: patch.at, lastKey: t };
   }, [file, lastKey]);
   const js = r.keys.map((k) => k.update);
@@ -437,7 +441,7 @@ async function main() {
     row('main.tex keystroke update p95', tMain.jsP95, 'ms', null, `p50 ${tMain.jsP50.toFixed(2)}, ${tMain.n} keys; keydown->updated p95 ${tMain.latP95?.toFixed(1)}`);
     row('main.tex keystroke update+measure p95', tMain.renderP95, 'ms', BUDGET.keyRenderP95 * 2, `p50 ${tMain.renderP50.toFixed(2)}, max ${tMain.renderMax.toFixed(1)}`);
     row('main.tex keystroke -> sentences.patch', tMain.patch, 'ms', null, `server debounce ${SEG_DEBOUNCE} ms`);
-    row('main.tex patch after debounce', tMain.patch - SEG_DEBOUNCE, 'ms', BUDGET.patchAfterDebounce);
+    row('main.tex patch after debounce', Math.max(0, tMain.patch - SEG_DEBOUNCE), 'ms', BUDGET.patchAfterDebounce, tMain.patch < SEG_DEBOUNCE ? 'segmented before the debounce ran out: a server read of the file (ghost context, lint, a report) segments pending typing first' : '');
 
     const openRes = await openMeasured('sections/results.tex');
     row('open sections/results.tex (file switch -> decorated)', openRes, 'ms', BUDGET.open);
@@ -450,7 +454,7 @@ async function main() {
     row('results.tex keystroke update+measure p95', tRes.renderP95, 'ms', BUDGET.keyRenderP95, `p50 ${tRes.renderP50.toFixed(2)}, max ${tRes.renderMax.toFixed(1)}`);
     row('slow input events / long frames >= 50 ms while typing', tRes.slow + tMain.slow, 'count', 1, 'Event Timing + LoAF');
     row('results.tex keystroke -> sentences.patch', tRes.patch, 'ms', null, `server debounce ${SEG_DEBOUNCE} ms`);
-    row('results.tex patch after debounce', tRes.patch - SEG_DEBOUNCE, 'ms', BUDGET.patchAfterDebounce);
+    row('results.tex patch after debounce', Math.max(0, tRes.patch - SEG_DEBOUNCE), 'ms', BUDGET.patchAfterDebounce, tRes.patch < SEG_DEBOUNCE ? 'segmented before the debounce ran out: a server read of the file (ghost context, lint, a report) segments pending typing first' : '');
     await shot('03-typed');
 
     // lint: the document pass follows the patch after the server's 2 s debounce
