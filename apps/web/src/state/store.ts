@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import type { WorkspaceState } from '../contracts';
+import { sectionOf, stepOf } from '../components/steps';
+import { useShell } from './extra';
 
 let noticeSeq = 0;
 
@@ -18,7 +20,7 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   jobs: {},
   notices: [],
   questions: [],
-  leftTab: 'outline',
+  leftTab: 'plan',
   rightPane: 'pdf',
   editor: null,
 
@@ -36,7 +38,17 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   pushNotice: (level, message) => set((s) => ({ notices: [...s.notices.slice(-4), { id: ++noticeSeq, level, message }] })),
   dismissNotice: (id) => set((s) => ({ notices: s.notices.filter((n) => n.id !== id) })),
   setQuestions: (questions) => set({ questions }),
-  setLeftTab: (leftTab) => set({ leftTab }),
+  setLeftTab: (tab) => {
+    // Older panel names select their step and ask it to open that section; 'voice' lives in Settings.
+    const step = stepOf(tab);
+    if (!step) {
+      useShell.getState().setSettingsOpen(true);
+      return;
+    }
+    set({ leftTab: step });
+    const section = sectionOf(tab);
+    if (section) useShell.getState().focusSection(section);
+  },
   setRightPane: (rightPane) => set({ rightPane }),
   setEditor: (editor) => set({ editor }),
 }));

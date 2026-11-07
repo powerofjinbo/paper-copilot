@@ -141,6 +141,102 @@ function fakeGhost(h: FakeGhostHint): unknown {
   return { text, fact_ids: factIds, cite_keys: [], fulfilled_move_ids: fulfilled };
 }
 
+/* ------------------------------------------------------------------------------------ */
+/* Simulated drafter text                                                                */
+/* ------------------------------------------------------------------------------------ */
+
+export interface FakeDraftStep {
+  intent: string;
+  move: string | null;
+  /** Facts the step may state: id, LaTeX-safe rendering (a fact alias) and the fact's definition. */
+  facts: Array<{ id: string; rendering: string; definition: string }>;
+  /** Cite keys the step may use (already restricted to resolved keys). */
+  citeKeys: string[];
+}
+
+export interface FakeDraftInput {
+  job: string;
+  sectionTitle: string;
+  moves: string[];
+  steps: FakeDraftStep[];
+}
+
+export interface FakeDraftSentence {
+  text: string;
+  move: string | null;
+  factIds: string[];
+  citeKeys: string[];
+}
+
+/** Words a plan sentence starts with that are instructions to the writer, not part of the topic. */
+const PLAN_LEADS = new Set(
+  'show shows explain explains state states give gives introduce introduces describe describes motivate motivates present presents compare compares report reports argue argues establish establishes say tell list define defines summarize summarise summarizes discuss discusses note mention quote claim claims demonstrate demonstrates point make set put lay highlight emphasize stress conclude recall review why how what that which we our us it its this these those here there then also now first next finally briefly clearly to'.split(
+    ' ',
+  ),
+);
+const ARTICLES = new Set(['the', 'a', 'an']);
+/** Words a noun phrase must not end with. */
+const DANGLING = new Set('of the a an and or to for with in on at by from than over against as into versus vs is are was were be that which'.split(' '));
+
+/**
+ * A short noun phrase naming the topic of a plan sentence, never the sentence itself:
+ * "Show the efficiency gain of the GNN over the baseline" -> "efficiency gain of the GNN".
+ * Digits, CJK and LaTeX are dropped (numbers come only from facts); empty when nothing usable is left.
+ */
+export function topicPhrase(raw: string, maxWords = 6): string {
+  const words = safeWords(raw ?? '', 40);
+  let i = 0;
+  while (i < words.length && (PLAN_LEADS.has(words[i]!.toLowerCase()) || ARTICLES.has(words[i]!.toLowerCase()))) i++;
+  const out: string[] = [];
+  for (let k = i; k < words.length && out.length < maxWords; k++) {
+    const w = words[k]!;
+    // stop at the clause's verb: the topic is the noun phrase before it
+    if (out.length > 0 && VERBISH.test(w) && !/^[A-Z]/.test(w)) break;
+    if (/^(?:and|but|so|because|while|whereas|which|that)$/i.test(w) && out.length > 0) break;
+    out.push(w);
+  }
+  while (out.length && DANGLING.has(out[out.length - 1]!.toLowerCase())) out.pop();
+  if (out.length && /^[A-Z][a-z]+$/.test(out[0]!) && !/^[A-Z][a-z]+[A-Z]/.test(out[0]!)) out[0] = out[0]!.toLowerCase();
+  return out.join(' ');
+}
+
+const STEP_OPENERS = ['We then discuss the ', 'Next we consider the ', 'We also examine the '];
+
+function withCites(body: string, keys: readonly string[]): string {
+  return keys.length ? `${body}~\\cite{${keys.join(',')}}` : body;
+}
+
+/**
+ * The simulated drafter's sentences for one paragraph: an opening sentence that names the paragraph's
+ * topic (built from the job, never a copy of it), then one sentence per remaining plan step. Numbers are
+ * only the facts' own renderings (aliases), cite keys only the resolved keys the step names, so every
+ * sentence passes the faithfulness gate. Deterministic: same plan, same text.
+ */
+export function fakeDraftSentences(input: FakeDraftInput): FakeDraftSentence[] {
+  const out: FakeDraftSentence[] = [];
+  const jobTopic = topicPhrase(input.job) || topicPhrase(input.sectionTitle);
+  out.push({
+    text: jobTopic ? `We now turn to the ${jobTopic}.` : 'We now turn to the next point of this section.',
+    move: input.moves[0] ?? null,
+    factIds: [],
+    citeKeys: [],
+  });
+  input.steps.forEach((step, k) => {
+    const topic = topicPhrase(step.intent) || (step.facts[0] ? topicPhrase(step.facts[0].definition) : '') || jobTopic;
+    const facts = step.facts.filter((f) => f.rendering.trim().length > 0).slice(0, 3);
+    let body: string;
+    if (facts.length === 0) {
+      body = `${STEP_OPENERS[k % STEP_OPENERS.length]}${topic || 'remaining point of this paragraph'}`;
+    } else {
+      const r = facts.map((f) => f.rendering);
+      const stated = r.length === 1 ? r[0]! : r.length === 2 ? `${r[0]}, compared with ${r[1]}` : `${r.slice(0, -1).join(', ')} and ${r[r.length - 1]}`;
+      body = topic ? `For the ${topic}, we find ${stated}` : `We find ${stated}`;
+    }
+    out.push({ text: `${withCites(body, step.citeKeys)}.`, move: step.move, factIds: facts.map((f) => f.id), citeKeys: [...step.citeKeys] });
+  });
+  return out;
+}
+
 function note(lang: 'zh' | 'en', zh: string, en: string): string {
   return lang === 'zh' ? zh : en;
 }

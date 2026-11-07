@@ -2,8 +2,9 @@
  * Imperative actions shared by the top bar, keyboard shortcuts and panels. They read the stores
  * directly (no React), so they can run from event handlers and global shortcuts.
  */
-import type { ChangeAnnotation } from '@paper-copilot/core';
-import type { ApiClient } from '../contracts';
+import type { ChangeAnnotation, Venue } from '@paper-copilot/core';
+import type { ApiClient, LeftStep } from '../contracts';
+import type { StepSection } from './steps';
 import { errorText } from '../api/errors';
 import { translate, type MsgKey, type Vars } from '../i18n';
 import { useShell } from '../state/extra';
@@ -55,6 +56,7 @@ export async function loadWorkspace(api: ApiClient): Promise<void> {
     refetchOutline(api),
     refetchQuestions(api),
     api.cost().then((c) => useWorkspace.getState().setCost(c)),
+    refreshFiles(api),
   ]);
   for (const r of results) if (r.status === 'rejected') notify('warn', errorText(r.reason));
 }
@@ -63,8 +65,17 @@ export async function loadWorkspace(api: ApiClient): Promise<void> {
 /* Editor and PDF                                                                        */
 /* ------------------------------------------------------------------------------------ */
 
-export function revealSentence(id: string, openCard = false): void {
-  const ed = useWorkspace.getState().editor;
+/**
+ * Reveal a sentence. With `file` (report rows, other files' items) the editor first switches to that file
+ * when it is not the open one, then reveals the sentence once its units arrived (pendingReveal).
+ */
+export function revealSentence(id: string, openCard = false, file?: string | null): void {
+  const ws0 = useWorkspace.getState();
+  if (file && ws0.file && file !== ws0.file) {
+    revealIn({ file, sentenceId: id, line: null, openCard });
+    return;
+  }
+  const ed = ws0.editor;
   if (!ed) {
     notify('warn', tr('common.notReady'));
     return;
@@ -76,8 +87,13 @@ export function revealSentence(id: string, openCard = false): void {
   ed.revealSentence(id, { openCard });
 }
 
-export function revealLine(line: number): void {
-  const ed = useWorkspace.getState().editor;
+export function revealLine(line: number, file?: string | null): void {
+  const ws0 = useWorkspace.getState();
+  if (file && ws0.file && file !== ws0.file) {
+    revealIn({ file, sentenceId: null, line, openCard: false });
+    return;
+  }
+  const ed = ws0.editor;
   if (!ed) {
     notify('warn', tr('common.notReady'));
     return;
@@ -147,11 +163,82 @@ export async function pullNow(api: ApiClient): Promise<void> {
   }
 }
 
+/** Open a file in the editor (top-bar switcher). The units of the old file are dropped at once. */
+export function switchFile(file: string): void {
+  const ws = useWorkspace.getState();
+  if (ws.file === file) return;
+  ws.setEditor(null);
+  ws.setUnits([]);
+  ws.setLint([]);
+  ws.setActiveSentence(null);
+  ws.setFile(file);
+}
+
+/** Switch to `file` if needed, then reveal the sentence (or line) once the editor has that file's units. */
+export function revealIn(target: { file: string; sentenceId: string | null; line: number | null; openCard: boolean }): void {
+  const ws = useWorkspace.getState();
+  if (ws.file !== target.file) {
+    const known = useShell.getState().files;
+    if (known.length && !known.some((f) => f.file === target.file)) {
+      notify('warn', tr('files.unknown', { file: target.file }));
+      return;
+    }
+    switchFile(target.file);
+  }
+  useShell.getState().setPendingReveal(target);
+}
+
+/** Try to perform the pending reveal; returns true when done (or abandoned). Called on store changes. */
+export function flushPendingReveal(now: number = Date.now(), startedAt: number = now): boolean {
+  const p = useShell.getState().pendingReveal;
+  if (!p) return true;
+  const ws = useWorkspace.getState();
+  const ready = ws.file === p.file && !!ws.editor && ws.units.length > 0;
+  const has = p.sentenceId ? ws.units.some((u) => u.id === p.sentenceId) : true;
+  if (ready && has) {
+    useShell.getState().setPendingReveal(null);
+    if (p.sentenceId) ws.editor!.revealSentence(p.sentenceId, { openCard: p.openCard });
+    else if (p.line !== null) ws.editor!.revealLine(p.line);
+    return true;
+  }
+  if (now - startedAt > 8000) {
+    useShell.getState().setPendingReveal(null);
+    if (ready && p.line !== null) ws.editor!.revealLine(p.line);
+    else notify('warn', tr('common.sentenceGone'));
+    return true;
+  }
+  return false;
+}
+
+/** Select a rail step (expanding the panel), optionally opening one of its sections. */
+export function openStep(step: LeftStep, section?: StepSection): void {
+  const ws = useWorkspace.getState();
+  ws.setLeftTab(step);
+  useShell.getState().setLeftCollapsed(false);
+  if (section) useShell.getState().focusSection(section);
+}
+
+/** GET /api/files into the shell store (file switcher, other files' to-do counts). */
+export async function refreshFiles(api: ApiClient): Promise<void> {
+  try {
+    useShell.getState().setFiles(await api.files());
+  } catch {
+    /* an older server without /api/files: the switcher falls back to project.files */
+  }
+}
+
+/** Run the submission check (top-bar pill, ④). Failures become a notice. */
+export async function runSubmissionCheck(api: ApiClient, venue?: Venue): Promise<void> {
+  try {
+    useShell.getState().setSubmission(await api.submissionCheck(venue));
+  } catch (e) {
+    notify('error', errorText(e));
+  }
+}
+
 /** Top-bar Push: open the Sync panel and run the push check there (push needs a message and a look at the diff). */
 export function openPush(): void {
-  const ws = useWorkspace.getState();
-  ws.setLeftTab('sync');
-  useShell.getState().setLeftCollapsed(false);
+  openStep('check', 'sync');
   useShell.getState().requestPushCheck();
 }
 

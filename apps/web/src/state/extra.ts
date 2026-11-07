@@ -4,8 +4,9 @@
  * ready. Per-viewer conveniences are persisted in localStorage (every access wrapped in try/catch).
  */
 import { create } from 'zustand';
-import type { PushCheck, ReanchorReport } from '@paper-copilot/core';
-import type { PdfHandle, ServerMessageOf } from '../contracts';
+import type { PushCheck, ReanchorReport, SubmissionReport } from '@paper-copilot/core';
+import type { PdfHandle, ProjectFileInfo, ServerMessageOf } from '../contracts';
+import { firstRunSeen, markFirstRunSeen, type StepSection } from '../components/steps';
 
 export type Lang = 'en' | 'zh';
 export type ThemePref = 'system' | 'light' | 'dark';
@@ -87,6 +88,20 @@ export interface ShellState {
   pinned: { left: boolean; pdf: boolean };
   /** The keyboard-shortcut overlay ("?"). */
   helpOpen: boolean;
+  /** The Settings drawer (⚙): voice, language, theme, ownership heatmap, cost. */
+  settingsOpen: boolean;
+  /** The first-run hint (the 4-step flow) was dismissed (remembered in localStorage). */
+  firstRunDone: boolean;
+  /** A request to open and scroll to a section of the active step (seq increments per request). */
+  focus: { section: StepSection; seq: number } | null;
+  /** ② Sources sub-tab. */
+  sourcesTab: 'facts' | 'lit';
+  /** Last submission check (top-bar pill and ④); null until one ran. */
+  submission: SubmissionReport | null;
+  /** Project .tex files with per-file counts (top-bar file switcher). */
+  files: ProjectFileInfo[];
+  /** Reveal this target once its file is open in the editor (cross-file navigation, SyncTeX inverse). */
+  pendingReveal: { file: string; sentenceId: string | null; line: number | null; openCard: boolean; seq: number } | null;
 
   setLang(l: Lang, chosen?: boolean): void;
   defaultLang(l: Lang): void;
@@ -108,6 +123,13 @@ export interface ShellState {
   /** Show the left panel (an explicit user action: it is pinned). */
   showLeft(): void;
   setHelpOpen(open: boolean): void;
+  setSettingsOpen(open: boolean): void;
+  dismissFirstRun(): void;
+  focusSection(section: StepSection): void;
+  setSourcesTab(t: 'facts' | 'lit'): void;
+  setSubmission(r: SubmissionReport | null): void;
+  setFiles(f: ProjectFileInfo[]): void;
+  setPendingReveal(r: { file: string; sentenceId: string | null; line: number | null; openCard: boolean } | null): void;
 }
 
 function browserLang(): Lang {
@@ -143,6 +165,13 @@ export const useShell = create<ShellState>((set, get) => {
     fitHidden: { left: false, pdf: false },
     pinned: { left: false, pdf: initial.pdfPinned },
     helpOpen: false,
+    settingsOpen: false,
+    firstRunDone: firstRunSeen(),
+    focus: null,
+    sourcesTab: 'facts',
+    submission: null,
+    files: [],
+    pendingReveal: null,
 
     setLang: (lang, chosen = true) => {
       set({ lang, langChosen: chosen || get().langChosen });
@@ -179,6 +208,16 @@ export const useShell = create<ShellState>((set, get) => {
     },
     showLeft: () => get().setLeftCollapsed(false),
     setHelpOpen: (helpOpen) => set({ helpOpen }),
+    setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+    dismissFirstRun: () => {
+      markFirstRunSeen();
+      set({ firstRunDone: true });
+    },
+    focusSection: (section) => set((s) => ({ focus: { section, seq: (s.focus?.seq ?? 0) + 1 }, sourcesTab: section === 'lit' ? 'lit' : section === 'facts' ? 'facts' : s.sourcesTab })),
+    setSourcesTab: (sourcesTab) => set({ sourcesTab }),
+    setSubmission: (submission) => set({ submission }),
+    setFiles: (files) => set({ files }),
+    setPendingReveal: (r) => set((s) => ({ pendingReveal: r ? { ...r, seq: (s.pendingReveal?.seq ?? 0) + 1 } : null })),
     setPdf: (pdf) => set({ pdf }),
     setFakeLlm: (fakeLlm) => set({ fakeLlm }),
     setServerVersion: (serverVersion) => set({ serverVersion }),

@@ -11,6 +11,7 @@
  *   `doc.open` for every file opened so far, then flushes messages queued while disconnected.
  */
 import {
+  FEATURE_ROUTES,
   ROUTES,
   route,
   ServerMessage,
@@ -33,6 +34,13 @@ import {
   type StyleDistanceResponse,
   type Venue,
   type EditPair,
+  type EchoReport,
+  type FigurePlanReport,
+  type LitRecord,
+  type ProjectFilesResponse,
+  type RestoreResponse,
+  type SubmissionReport,
+  type TerminologyReport,
 } from '@paper-copilot/core';
 import type { ApiClient, ServerMessageOf } from '../contracts';
 import { ApiError, messageOf, unwrapArray, unwrapObject } from './errors';
@@ -608,6 +616,42 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
 
   async dismissLint(flagId: string): Promise<void> {
     await this.request<unknown>('POST', route(ROUTES.lintDismiss, { id: flagId }), { body: {} });
+  }
+
+  /* Batch B (additive) */
+
+  async files(): Promise<ProjectFilesResponse> {
+    const d = await this.request<unknown>('GET', FEATURE_ROUTES.files);
+    return unwrapArray<ProjectFilesResponse[number]>(d, 'files');
+  }
+
+  consistency(): Promise<EchoReport> {
+    return this.request('GET', FEATURE_ROUTES.consistency);
+  }
+
+  terminologyReport(): Promise<TerminologyReport> {
+    return this.request('GET', FEATURE_ROUTES.terminologyReport);
+  }
+
+  figurePlan(): Promise<FigurePlanReport> {
+    return this.request('GET', FEATURE_ROUTES.figurePlan);
+  }
+
+  submissionCheck(venue?: Venue): Promise<SubmissionReport> {
+    return this.request('GET', FEATURE_ROUTES.submissionCheck, { query: { venue } });
+  }
+
+  resolveLit(keys?: string[]): Promise<{ jobId: string }> {
+    return this.request('POST', ROUTES.litResolve, { body: keys ? { keys } : {} });
+  }
+
+  async confirmLit(key: string, confirmed: boolean): Promise<LitRecord> {
+    const d = await this.request<unknown>('POST', `${ROUTES.lit}/${encodeURIComponent(key)}/confirm`, { body: { confirmed } });
+    return unwrapObject<LitRecord>(d, 'record', (o) => typeof o.key === 'string' && 'status' in o);
+  }
+
+  restoreVersion(sentenceId: string, version: number): Promise<RestoreResponse> {
+    return this.request('POST', route(FEATURE_ROUTES.sentenceRestore, { id: sentenceId }), { body: { version } });
   }
 }
 

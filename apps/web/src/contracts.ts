@@ -31,6 +31,14 @@ import type {
   Venue,
   CorpusEntry,
   EditPair,
+  EchoReport,
+  FigurePlanReport,
+  LitRecord,
+  SubmissionReport,
+  TerminologyReport,
+  ProjectFileEntry,
+  ProjectFilesResponse,
+  RestoreResponse,
 } from '@paper-copilot/core';
 
 export type ServerMessageOf<T extends ServerMessage['type']> = Extract<ServerMessage, { type: T }>;
@@ -81,7 +89,32 @@ export interface ApiClient {
   cost(): Promise<CostTotals>;
   /** Dismiss a lint flag (persisted on the server; a lint.update with the full list follows). */
   dismissLint(flagId: string): Promise<void>;
+
+  /* Batch B (additive): project files, the ④ Check reports, literature, restore. */
+  /** Every .tex file of the project in document order, with per-file sentence counts. */
+  files(): Promise<ProjectFilesResponse>;
+  /** Echo check: numbers across abstract, body, captions and conclusions (core echoCheck). */
+  consistency(): Promise<EchoReport>;
+  terminologyReport(): Promise<TerminologyReport>;
+  figurePlan(): Promise<FigurePlanReport>;
+  /** The one-click submission checklist (core submissionCheck); venue defaults to the project's. */
+  submissionCheck(venue?: Venue): Promise<SubmissionReport>;
+  /** Resolve the bibliography on INSPIRE (job 'resolve-lit'); progress arrives as job.progress. */
+  resolveLit(keys?: string[]): Promise<{ jobId: string }>;
+  /** Mark a bib key as checked by the author (status user_confirmed), or undo that. */
+  confirmLit(key: string, confirmed: boolean): Promise<LitRecord>;
+  /**
+   * Restore an earlier version of a sentence: the server answers with the text and the annotation the
+   * editor applies as ONE transaction (provenance is never laundered: restoring AI text keeps everAi).
+   * `noop`: the sentence already reads like that version.
+   */
+  restoreVersion(sentenceId: string, version: number): Promise<RestoreResult>;
 }
+
+/** One .tex file of the project (GET /api/files, core ProjectFileEntry). */
+export type ProjectFileInfo = ProjectFileEntry;
+/** POST /api/sentences/:id/restore (core RestoreResponse). */
+export type RestoreResult = RestoreResponse;
 
 /** Imperative handle the Editor exposes to the shell and panels. */
 export interface EditorHandle {
@@ -121,7 +154,14 @@ export interface PdfPaneProps {
   onReady?(handle: PdfHandle): void;
 }
 
-export type LeftTab = 'outline' | 'facts' | 'review' | 'placeholders' | 'questions' | 'voice' | 'sync';
+/** The four steps of the left rail, in writing order: ① Plan ② Sources ③ To do ④ Check & submit. */
+export type LeftStep = 'plan' | 'sources' | 'todo' | 'check';
+/**
+ * The active rail step. The older panel names stay accepted (they name the section inside a step:
+ * 'outline' -> plan, 'facts' -> sources, 'review' | 'placeholders' | 'questions' -> todo, 'sync' ->
+ * check; 'voice' opens the Settings drawer); the store normalizes them to a LeftStep.
+ */
+export type LeftTab = LeftStep | 'outline' | 'facts' | 'review' | 'placeholders' | 'questions' | 'voice' | 'sync';
 
 /** Shared UI state (zustand store in state/store.ts). */
 export interface WorkspaceState {

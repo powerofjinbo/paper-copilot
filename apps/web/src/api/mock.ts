@@ -70,6 +70,23 @@ import {
   type VersionOrigin,
   type Claim,
   type FigureEntry,
+  derivedRelations,
+  echoCheck,
+  extractTitle,
+  figurePlan,
+  orderUnits,
+  projectFileOrder,
+  submissionCheck,
+  terminologyReport,
+  unitsWithText,
+  type CompileError,
+  type ConsistencyUnit,
+  type EchoReport,
+  type FigurePlanReport,
+  type ProjectFileEntry,
+  type RestoreResponse,
+  type SubmissionReport,
+  type TerminologyReport,
 } from '@paper-copilot/core';
 import mainTex from '../../../../fixtures/canto-demo/tex/main.tex?raw';
 import claimJson from '../../../../fixtures/canto-demo/repo/results/addendum_g_g1_v1_claim.json?raw';
@@ -110,6 +127,12 @@ export const MOCK_FILE = 'main.tex';
 
 export interface MockOptions {
   tex?: string;
+  /** Multi-file project: file -> text (overrides `tex`/`file`); `mainFile` names the root. */
+  files?: Record<string, string>;
+  mainFile?: string;
+  projectName?: string;
+  /** Extra facts beside the claim JSON's (the large fixture's results/*.json, *.csv). */
+  extraFacts?: (sha: (raw: string) => Promise<string>) => Promise<Fact[]>;
   claimJson?: string;
   bib?: string;
   file?: string;
@@ -126,6 +149,25 @@ export interface MockOptions {
 }
 
 type Range = { from: number; to: number };
+
+/** One mirrored .tex file of the demo project. */
+interface MockDoc {
+  file: string;
+  text: string;
+  /** Text at the last (simulated) sync: the push diff is against this. */
+  baseText: string;
+  version: number;
+  units: SentenceUnit[];
+  intentLines: IntentLineInfo[];
+  labels: string[];
+  dirty: Range[];
+  pendingAnn: { annotation: ChangeAnnotation; range: Range } | null;
+  debounceTimer: ReturnType<typeof setTimeout> | null;
+}
+
+function newDoc(file: string, text: string): MockDoc {
+  return { file, text, baseText: text, version: 0, units: [], intentLines: [], labels: [], dirty: [], pendingAnn: null, debounceTimer: null };
+}
 type AnyListener = (msg: ServerMessage) => void;
 
 const IMPORT_ANNOTATION: ChangeAnnotation = {
@@ -142,6 +184,8 @@ const IMPORT_ANNOTATION: ChangeAnnotation = {
   move: null,
   requestId: null,
 };
+
+const AI_ORIGINS_SET = new Set<VersionOrigin>(['ai_ghost', 'ai_intent', 'ai_draft', 'ai_rewrite', 'grammar_fix', 'replan']);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -175,7 +219,6 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   /** Messages the mock produced that failed the core ServerMessage schema (tests assert this stays empty). */
   readonly invalidMessages: Array<{ msg: unknown; issues: unknown }> = [];
 
-  private readonly file: string;
   private readonly claimRaw: string;
   private readonly bibRaw: string;
   private readonly latency: number;
@@ -185,6 +228,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   private readonly jobStep: number;
   private readonly notesLanguage: NotesLanguage;
   private readonly log: (msg: string, data?: unknown) => void;
+  private readonly extraFacts: MockOptions['extraFacts'];
 
   private _connected = false;
   private initPromise: Promise<void> | null = null;
@@ -192,16 +236,13 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   private readonly connListeners = new Set<(c: boolean) => void>();
   private readonly coreFailures = new Set<string>();
 
-  private text: string;
-  private baseText: string;
-  private version = 0;
-  private units: SentenceUnit[] = [];
-  private intentLines: IntentLineInfo[] = [];
-  private labels: string[] = [];
+  /** Every .tex file of the demo project (main first, then the files it inputs). */
+  private readonly docs = new Map<string, MockDoc>();
+  private readonly mainFile: string;
+  /** The document the current call works on (selected per message / per sentence). */
+  private cur!: MockDoc;
+  private readonly projectName: string;
   private readonly versions = new Map<string, SentenceVersion[]>();
-  private dirty: Range[] = [];
-  private pendingAnn: { annotation: ChangeAnnotation; range: Range } | null = null;
-  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly pendingDrafts = new Map<string, DraftSentence>();
   private readonly ghostTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -216,21 +257,122 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   private corpus: CorpusEntry[] = [];
   private editPairs: EditPair[] = [];
   private costTotals: CostTotals = zeroCost();
+  private lastCompile: { state: 'idle' | 'running' | 'ok' | 'error'; errors: CompileError[] } | null = null;
   private jobSeq = 0;
 
   constructor(opts: MockOptions = {}) {
-    this.text = opts.tex ?? mainTex;
-    this.baseText = this.text;
+    const files: Record<string, string> = opts.files ?? { [opts.file ?? MOCK_FILE]: opts.tex ?? mainTex };
+    this.mainFile = opts.mainFile ?? opts.file ?? Object.keys(files)[0] ?? MOCK_FILE;
+    for (const [file, text] of Object.entries(files)) this.docs.set(file, newDoc(file, text));
+    if (!this.docs.has(this.mainFile)) this.docs.set(this.mainFile, newDoc(this.mainFile, ''));
+    this.cur = this.docs.get(this.mainFile)!;
+    this.projectName = opts.projectName ?? 'canto-demo';
     this.claimRaw = opts.claimJson ?? claimJson;
     this.bibRaw = opts.bib ?? refsBib;
-    this.file = opts.file ?? MOCK_FILE;
     this.latency = opts.latencyMs ?? 12;
     this.restLatency = opts.restLatencyMs ?? 60;
     this.debounceMs = opts.debounceMs ?? 300;
     this.ghostDelay = opts.ghostDelayMs ?? 380;
     this.jobStep = opts.jobStepMs ?? 450;
     this.notesLanguage = opts.notesLanguage ?? 'zh';
+    this.extraFacts = opts.extraFacts;
     this.log = opts.log ?? ((msg, data) => console.warn(`[mock] ${msg}`, data ?? ''));
+  }
+
+  /* The current document's state (this.text, this.units ... read and write `cur`). */
+  private get file(): string {
+    return this.cur.file;
+  }
+  private get text(): string {
+    return this.cur.text;
+  }
+  private set text(v: string) {
+    this.cur.text = v;
+  }
+  private get baseText(): string {
+    return this.cur.baseText;
+  }
+  private set baseText(v: string) {
+    this.cur.baseText = v;
+  }
+  private get version(): number {
+    return this.cur.version;
+  }
+  private set version(v: number) {
+    this.cur.version = v;
+  }
+  private get units(): SentenceUnit[] {
+    return this.cur.units;
+  }
+  private set units(v: SentenceUnit[]) {
+    this.cur.units = v;
+  }
+  private get intentLines(): IntentLineInfo[] {
+    return this.cur.intentLines;
+  }
+  private set intentLines(v: IntentLineInfo[]) {
+    this.cur.intentLines = v;
+  }
+  private get labels(): string[] {
+    return this.cur.labels;
+  }
+  private set labels(v: string[]) {
+    this.cur.labels = v;
+  }
+  private get dirty(): Range[] {
+    return this.cur.dirty;
+  }
+  private set dirty(v: Range[]) {
+    this.cur.dirty = v;
+  }
+  private get pendingAnn(): { annotation: ChangeAnnotation; range: Range } | null {
+    return this.cur.pendingAnn;
+  }
+  private set pendingAnn(v: { annotation: ChangeAnnotation; range: Range } | null) {
+    this.cur.pendingAnn = v;
+  }
+  private get debounceTimer(): ReturnType<typeof setTimeout> | null {
+    return this.cur.debounceTimer;
+  }
+  private set debounceTimer(v: ReturnType<typeof setTimeout> | null) {
+    this.cur.debounceTimer = v;
+  }
+
+  /** Make `file` the current document; false when the demo has no such file. */
+  private select(file: string): boolean {
+    const d = this.docs.get(file);
+    if (!d) return false;
+    this.cur = d;
+    return true;
+  }
+
+  /** Select the document that holds sentence `id` (404 when none does). */
+  private selectUnit(id: string): SentenceUnit {
+    for (const d of this.docs.values()) {
+      const u = d.units.find((x) => x.id === id);
+      if (u) {
+        this.cur = d;
+        return u;
+      }
+    }
+    throw new ApiError('No such sentence (it may have been edited away).', 404);
+  }
+
+  /** All documents in project order (main first). */
+  private allDocs(): MockDoc[] {
+    const main = this.docs.get(this.mainFile);
+    return [...(main ? [main] : []), ...[...this.docs.values()].filter((d) => d !== main)];
+  }
+
+  /** Run `fn` with `doc` selected, then restore the previous selection. */
+  private withDoc<T>(doc: MockDoc, fn: () => T): T {
+    const prev = this.cur;
+    this.cur = doc;
+    try {
+      return fn();
+    } finally {
+      this.cur = prev;
+    }
   }
 
   /* ---------------------------------------------------------------------------------- */
@@ -275,7 +417,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
 
   /** Stop timers (tests). */
   dispose(): void {
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    for (const d of this.docs.values()) if (d.debounceTimer) clearTimeout(d.debounceTimer);
     for (const t of this.ghostTimers.values()) clearTimeout(t);
     this.ghostTimers.clear();
     this.listeners.clear();
@@ -332,7 +474,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
         this.emit(this.welcome());
         return;
       case 'doc.open':
-        if (msg.file !== this.file) {
+        if (!this.select(msg.file)) {
           this.notice('error', `No such file in the demo: ${msg.file}`);
           return;
         }
@@ -340,10 +482,14 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
         this.emitLint();
         return;
       case 'doc.change':
+        if (!this.select(msg.file)) {
+          this.notice('error', `No such file in the demo: ${msg.file}`);
+          return;
+        }
         this.applyChange(msg);
         return;
       case 'doc.flush':
-        if (this.debounceTimer || this.dirty.length || this.pendingAnn) this.resegment();
+        for (const d of this.docs.values()) this.withDoc(d, () => this.flushPending());
         return;
       case 'ghost.request':
         this.ghostRequest(msg);
@@ -367,15 +513,23 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
     if (!this.initPromise) {
       this.initPromise = (async () => {
         this.factSha = await sha256Hex(this.claimRaw);
-        this.factsState = buildClaimFacts(this.claimRaw, MOCK_ARTIFACT, this.factSha);
+        this.factsState = await this.buildFacts();
         this.lit = buildLitFromBib(this.bibRaw);
-        this.importDocument();
+        for (const d of this.allDocs()) this.withDoc(d, () => this.importDocument());
         this.claims = buildClaims(this.claimRaw, this.factsState);
-        this.figures = figuresFromSource(this.text, this.claims.map((c) => c.claimId));
+        this.figures = this.allDocs().flatMap((d) => figuresFromSource(d.text, this.claims.map((c) => c.claimId)));
         this.outlineState = outlineWithSections(this.sectionHeads());
       })();
     }
     return this.initPromise;
+  }
+
+  private async buildFacts(): Promise<Fact[]> {
+    const claim = buildClaimFacts(this.claimRaw, MOCK_ARTIFACT, this.factSha);
+    if (!this.extraFacts) return claim;
+    const extra = await this.extraFacts(sha256Hex);
+    const seen = new Set(claim.map((f) => f.id));
+    return [...claim, ...extra.filter((f) => !seen.has(f.id))];
   }
 
   private segmentNow(): Segmentation | null {
@@ -410,6 +564,12 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   }
 
   private sectionHeads(): SectionHead[] {
+    const heads: SectionHead[] = [];
+    for (const d of this.allDocs()) for (const h of this.withDoc(d, () => this.docSectionHeads())) if (!heads.some((x) => x.id === h.id)) heads.push(h);
+    return heads;
+  }
+
+  private docSectionHeads(): SectionHead[] {
     const seg = this.segmentNow();
     if (seg && seg.sections.length) {
       const heads: SectionHead[] = [];
@@ -417,7 +577,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
       if (!heads.some((h) => h.id === 'abstract') && seg.sentences.some((s) => s.sectionId === 'abstract')) heads.unshift({ id: 'abstract', title: 'Abstract' });
       return heads;
     }
-    return sectionsFromSource(this.text);
+    return this.text.includes('\\section') || this.text.includes('\\begin{abstract}') ? sectionsFromSource(this.text) : [];
   }
 
   private appendVersions(rows: SentenceVersion[]): void {
@@ -466,10 +626,6 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   }
 
   private applyChange(msg: Extract<ClientMessage, { type: 'doc.change' }>): void {
-    if (msg.file !== this.file) {
-      this.notice('error', `No such file in the demo: ${msg.file}`);
-      return;
-    }
     if (msg.baseVersion !== this.version) {
       // Same as the server: reject and send a fresh snapshot.
       this.flushPending();
@@ -510,7 +666,8 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
       this.resegment();
     } else {
       if (this.debounceTimer) clearTimeout(this.debounceTimer);
-      this.debounceTimer = setTimeout(() => this.resegment(), this.debounceMs);
+      const doc = this.cur;
+      this.debounceTimer = setTimeout(() => this.withDoc(doc, () => this.resegment()), this.debounceMs);
     }
   }
 
@@ -664,7 +821,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
     if (old) clearTimeout(old);
     const timer = setTimeout(() => {
       this.ghostTimers.delete(msg.requestId);
-      if (msg.file !== this.file) {
+      if (!this.select(msg.file)) {
         this.emit({ type: 'ghost.error', requestId: msg.requestId, message: `No such file: ${msg.file}` });
         return;
       }
@@ -731,9 +888,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   }
 
   private unitOr404(id: string): SentenceUnit {
-    const u = this.units.find((x) => x.id === id);
-    if (!u) throw new ApiError('No such sentence (it may have been edited away).', 404);
-    return u;
+    return this.selectUnit(id);
   }
 
   private async rest(): Promise<void> {
@@ -769,10 +924,10 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   private config(): ProjectConfig {
     return {
       schemaVersion: 1,
-      name: 'canto-demo',
-      texRoot: '/demo/canto-demo/tex',
-      mainFile: this.file,
-      repoDir: '/demo/canto-demo/repo',
+      name: this.projectName,
+      texRoot: `/demo/${this.projectName}/tex`,
+      mainFile: this.mainFile,
+      repoDir: `/demo/${this.projectName}/repo`,
       skillDir: '/demo/hep-paper-writing',
       bibFiles: ['refs.bib'],
       venue: 'aps',
@@ -790,7 +945,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
     await this.rest();
     return {
       config: this.config(),
-      files: [this.file],
+      files: this.allDocs().map((d) => d.file),
       fakeLlm: true,
       skill: {
         found: true,
@@ -799,19 +954,33 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
         references: ['story-and-structure.md', 'layering-and-flow.md', 'sentences-and-words.md', 'figures-and-evidence.md'],
       },
       stats: {
-        units: this.units.length,
-        proposed: this.units.filter((u) => u.state === 'proposed').length,
+        units: this.allUnits().length,
+        proposed: this.allUnits().filter((u) => u.state === 'proposed').length,
         facts: this.factsState.length,
-        placeholders: this.units.reduce((n, u) => n + u.placeholders.length, 0),
+        placeholders: this.allUnits().reduce((n, u) => n + u.placeholders.length, 0),
       },
     };
+  }
+
+  /** Units of every file (main first). */
+  private allUnits(): SentenceUnit[] {
+    return this.allDocs().flatMap((d) => d.units);
+  }
+
+  private docText(file: string): string {
+    return this.docs.get(file)?.text ?? '';
+  }
+
+  /** A unit's text in its own file. */
+  private anyUnitText(u: SentenceUnit): string {
+    return this.docText(u.file).slice(u.start, u.end);
   }
 
   private unresolved(): FactsResponse['unresolved'] {
     const facts = this.promptFacts();
     const out: FactsResponse['unresolved'] = [];
-    for (const u of this.units) {
-      const link = this.core('linkSentenceFacts', () => linkSentenceFacts(this.unitText(u), facts, u.facts), null);
+    for (const u of this.allUnits()) {
+      const link = this.core('linkSentenceFacts', () => linkSentenceFacts(this.anyUnitText(u), facts, u.facts), null);
       if (!link) continue;
       for (const t of link.unmatched) out.push({ sentenceId: u.id, raw: t.raw, candidates: [] });
       for (const a of link.ambiguous) out.push({ sentenceId: u.id, raw: a.token.raw, candidates: a.candidates });
@@ -839,7 +1008,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
     await this.rest();
     await sleep(this.jobStep / 2);
     const prev = new Map(this.factsState.map((f) => [f.id, f]));
-    const fresh = buildClaimFacts(this.claimRaw, MOCK_ARTIFACT, this.factSha);
+    const fresh = await this.buildFacts();
     const stale: string[] = [];
     this.factsState = fresh.map((f) => {
       const p = prev.get(f.id);
@@ -1012,6 +1181,9 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
         };
       });
       for (const s of sentences) this.pendingDrafts.set(s.text.trim(), s);
+      // the file that holds the section (an \\input file of a multi-file project), else the requested one
+      const home = this.allDocs().find((d) => d.units.some((u) => u.sectionId === req.sectionId)) ?? this.docs.get(req.file) ?? this.cur;
+      this.cur = home;
       const inSection = this.units.filter((u) => u.sectionId === req.sectionId && u.kind === 'prose');
       const afterSentenceId = req.afterSentenceId ?? inSection[inSection.length - 1]?.id ?? null;
       const pid = (req.paragraphIds && section?.paragraphs.find((p) => req.paragraphIds?.includes(p.pid))?.pid) || `${req.sectionId}/draft-${this.jobSeq}`;
@@ -1019,7 +1191,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
       this.emit({
         type: 'draft.proposed',
         jobId,
-        file: req.file,
+        file: this.file,
         afterSentenceId,
         insertAt: afterSentenceId ? null : this.sectionInsertOffset(req.sectionId),
         version: this.version,
@@ -1057,7 +1229,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
       progress(this.sim(`Reading "${section?.title ?? sectionId}" as a referee`, `正在以审稿人的角度阅读“${section?.title ?? sectionId}”`));
       await sleep(this.jobStep * 2);
       this.countRequest('drafter');
-      const first = this.units.find((u) => u.sectionId === sectionId)?.id ?? null;
+      const first = this.allUnits().find((u) => u.sectionId === sectionId)?.id ?? null;
       const qs = simulatedReferee(sectionId, section?.title ?? sectionId, this.notesLanguage, factWords(this.promptFacts()), first)
         .slice(0, 4)
         .map((q) => ({ ...q, id: shortId('q-') }));
@@ -1074,6 +1246,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
 
   async compile(): Promise<void> {
     await this.rest();
+    this.lastCompile = { state: 'ok', errors: [] };
     this.emit({ type: 'compile.status', state: 'running', pdfVersion: null, errors: [], logTail: '' });
     setTimeout(() => {
       this.emit({
@@ -1102,13 +1275,20 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
 
   async pull(): Promise<ReanchorReport[]> {
     await this.rest();
-    this.flushPending();
+    for (const d of this.docs.values()) this.withDoc(d, () => this.flushPending());
     await sleep(this.jobStep);
     this.notice('info', this.sim('Pulled: no co-author changes in the browser demo.', '已拉取：浏览器演示中没有合作者的修改。'));
-    return [{ unchanged: this.units.length, edited: [], created: [], orphaned: [], split: [] }];
+    return this.allDocs().map((d) => ({ unchanged: d.units.length, edited: [], created: [], orphaned: [], split: [] }));
   }
 
   private computePushCheck(): PushCheck {
+    const per = this.allDocs().map((d) => this.withDoc(d, () => this.docPushCheck()));
+    const diff = per.map((p) => p.diff).filter(Boolean).join('');
+    const blockers = per.flatMap((p) => p.blockers);
+    return { ok: blockers.length === 0, blockers, diff, files: per.flatMap((p) => p.files) };
+  }
+
+  private docPushCheck(): PushCheck {
     this.flushPending();
     const blockers: PushCheck['blockers'] = [];
     for (const u of this.units) {
@@ -1136,7 +1316,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
     if (!check.ok) return { ok: false, output: `Push refused: ${check.blockers.length} blocker(s) remain.`, check };
     if (!check.diff) return { ok: true, output: 'Nothing to push: no changes since the last sync.', check };
     await sleep(this.jobStep);
-    this.baseText = this.text;
+    for (const d of this.docs.values()) d.baseText = d.text;
     return {
       ok: true,
       output: `(simulated) git commit -m ${JSON.stringify(message || 'Update')} && git push\nNothing left the browser: this is the demo.`,
@@ -1151,7 +1331,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   async disclosure(venue: Venue): Promise<DisclosureResponse> {
     await this.rest();
     try {
-      const stats = computeDisclosureStats(this.units, this.allVersions());
+      const stats = computeDisclosureStats(this.allUnits(), this.allVersions());
       const d = renderDisclosure(venue, stats, { toolName: 'paper-copilot', toolVersion: '0.1.0 (browser demo, simulated AI)', recordPath: '.paper/history.jsonl' });
       return { venue, latex: d.latex, plain: d.plain, placement: d.placement, stats: stats as unknown as Record<string, unknown> };
     } catch (e) {
@@ -1173,8 +1353,8 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   async styleDistance(scope: 'document' | 'section' | 'paragraph', id?: string): Promise<StyleDistanceResponse> {
     await this.rest();
     try {
-      const units = this.units.filter((u) => u.kind === 'prose' && (scope === 'document' || !id || (scope === 'section' ? u.sectionId === id : u.paragraphId === id)));
-      const sents = units.map((u) => ({ id: u.id, text: plainText(this.unitText(u)) }));
+      const units = this.allUnits().filter((u) => u.kind === 'prose' && (scope === 'document' || !id || (scope === 'section' ? u.sectionId === id : u.paragraphId === id)));
+      const sents = units.map((u) => ({ id: u.id, text: plainText(this.anyUnitText(u)) }));
       const features = styleFeatures(sents.map((s) => s.text));
       const own = this.corpusSentences();
       const authorFeatures: StyleFeatures | null = own.length ? styleFeatures(own) : null;
@@ -1231,6 +1411,178 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
     await this.rest();
     this.dismissedLint.add(flagId);
     this.emitLint();
+  }
+
+  /* ---------------------------------------------------------------------------------- */
+  /* Batch B: files, reports (core functions over every file), literature, restore     */
+  /* ---------------------------------------------------------------------------------- */
+
+  private projectFiles(): Array<{ file: string; text: string }> {
+    return this.allDocs().map((d) => ({ file: d.file, text: d.text }));
+  }
+
+  private order() {
+    return this.core('projectFileOrder', () => projectFileOrder(this.mainFile, this.projectFiles()), this.allDocs().map((d) => ({ file: d.file, appendix: false, included: true })));
+  }
+
+  /** Units of every file with their source text, in document order. */
+  private consistencyUnits(): ConsistencyUnit[] {
+    for (const d of this.docs.values()) this.withDoc(d, () => this.flushPending());
+    const texts = Object.fromEntries(this.allDocs().map((d) => [d.file, d.text]));
+    const all = unitsWithText(this.allUnits(), texts);
+    return this.core('orderUnits', () => orderUnits(all, this.order()), all);
+  }
+
+  async files(): Promise<ProjectFileEntry[]> {
+    await this.rest();
+    const order = this.order();
+    return order.map((o) => {
+      const d = this.docs.get(o.file);
+      const units = d?.units ?? [];
+      return {
+        file: o.file,
+        main: o.file === this.mainFile,
+        parent: null,
+        depth: o.file === this.mainFile ? 0 : 1,
+        included: o.included,
+        appendix: o.appendix,
+        open: true,
+        units: units.length,
+        proposed: units.filter((u) => u.state === 'proposed').length,
+        unsupported: units.filter((u) => u.state === 'unsupported').length,
+        placeholders: units.filter((u) => u.placeholders.length > 0).length,
+        aiTouched: units.filter((u) => u.everAi).length,
+      };
+    });
+  }
+
+  private title(): string | null {
+    return this.core('extractTitle', () => extractTitle(this.docText(this.mainFile)), null);
+  }
+
+  async consistency(): Promise<EchoReport> {
+    await this.rest();
+    const facts = this.factsState.filter((f) => !f.excluded);
+    try {
+      return echoCheck(this.consistencyUnits(), facts, this.outlineState, { title: this.title(), derived: this.core('derivedRelations', () => derivedRelations(facts), []) });
+    } catch (e) {
+      throw new ApiError(`The echo check is unavailable: ${errorText(e)}`, 501);
+    }
+  }
+
+  async terminologyReport(): Promise<TerminologyReport> {
+    await this.rest();
+    try {
+      return terminologyReport(this.consistencyUnits(), []);
+    } catch (e) {
+      throw new ApiError(`The terminology report is unavailable: ${errorText(e)}`, 501);
+    }
+  }
+
+  async figurePlan(): Promise<FigurePlanReport> {
+    await this.rest();
+    try {
+      return figurePlan(this.projectFiles(), this.consistencyUnits(), this.outlineState, { order: this.order(), figures: this.figures, claims: this.claims });
+    } catch (e) {
+      throw new ApiError(`The figure plan is unavailable: ${errorText(e)}`, 501);
+    }
+  }
+
+  async submissionCheck(venue?: Venue): Promise<SubmissionReport> {
+    await this.rest();
+    try {
+      const flags = this.allDocs().flatMap((d) => this.withDoc(d, () => this.lintFlags()));
+      return submissionCheck({
+        mainFile: this.mainFile,
+        files: this.projectFiles(),
+        units: this.consistencyUnits(),
+        facts: this.factsState,
+        venue: venue ?? 'aps',
+        bibKeys: this.lit.map((l) => l.key),
+        lit: this.lit,
+        compile: this.lastCompile,
+        lintFlags: flags,
+        outline: this.outlineState,
+        terms: [],
+      });
+    } catch (e) {
+      throw new ApiError(`The submission check is unavailable: ${errorText(e)}`, 501);
+    }
+  }
+
+  async resolveLit(keys?: string[]): Promise<{ jobId: string }> {
+    await this.rest();
+    const want = keys ? new Set(keys) : null;
+    const jobId = this.startJob('resolve-lit', async (progress) => {
+      progress(this.sim('Looking the keys up on INSPIRE-HEP', '正在 INSPIRE-HEP 上查找引用键'));
+      await sleep(this.jobStep);
+      // The demo cannot reach INSPIRE: a key with an arXiv id or DOI counts as found, the rest stays unresolved.
+      let resolved = 0;
+      this.lit = this.lit.map((l) => {
+        if ((want && !want.has(l.key)) || l.status === 'user_confirmed') return l;
+        if (l.arxiv || l.doi) {
+          resolved++;
+          return { ...l, status: 'resolved', texkey: l.texkey ?? l.key };
+        }
+        return { ...l, status: 'unresolved' };
+      });
+      return { resolved, total: this.lit.length };
+    });
+    return { jobId };
+  }
+
+  async confirmLit(key: string, confirmed: boolean): Promise<LitRecord> {
+    await this.rest();
+    const i = this.lit.findIndex((l) => l.key === key);
+    if (i < 0) throw new ApiError(`No such bib key: ${key}`, 404);
+    const cur = this.lit[i]!;
+    const next: LitRecord = { ...cur, status: confirmed ? 'user_confirmed' : cur.arxiv || cur.doi ? 'resolved' : 'unresolved' };
+    this.lit[i] = next;
+    return { ...next };
+  }
+
+  async restoreVersion(sentenceId: string, version: number): Promise<RestoreResponse> {
+    await this.rest();
+    const u = this.selectUnit(sentenceId);
+    this.flushPending();
+    const unit = this.selectUnit(sentenceId);
+    const v = (this.versions.get(sentenceId) ?? []).find((x) => x.version === version);
+    if (!v) throw new ApiError(`Sentence ${sentenceId} has no version ${version}.`, 404);
+    const current = this.unitText(unit);
+    const ai = AI_ORIGINS_SET.has(v.origin);
+    let state: SentenceUnit['state'] = ai ? (v.origin === 'ai_draft' || v.origin === 'replan' ? 'proposed' : 'ai-edited') : 'human';
+    const issues = ai ? (this.gate(v.text, 'rewrite', { original: current })?.issues ?? []) : [];
+    if (ai && issues.some((x) => x.severity === 'block')) state = 'unsupported';
+    if (!ai && u.everAi) state = 'ai-edited';
+    const annotation: ChangeAnnotation = {
+      origin: ai ? v.origin : 'human_edit',
+      sentenceIds: [sentenceId],
+      state,
+      model: ai ? v.model : null,
+      promptHash: ai ? v.promptHash : null,
+      instruction: `restore v${version}`,
+      lang: null,
+      intentNote: null,
+      factIds: [],
+      citeKeys: [],
+      move: null,
+      requestId: null,
+    };
+    return {
+      sentenceId,
+      file: this.file,
+      version,
+      docVersion: this.version,
+      start: unit.start,
+      end: unit.end,
+      current,
+      text: v.text,
+      origin: annotation.origin,
+      state,
+      annotation,
+      issues,
+      noop: current === v.text,
+    };
   }
 
   /* Convenience for tests and the demo. */

@@ -19,6 +19,7 @@ import type {
   RepoBriefOutput,
 } from '@paper-copilot/core';
 import { isSecretPath } from './guard';
+import { fakeDraftSentences } from '../llm/fake';
 import type { ProposeInput, Verdict } from './collector';
 
 export type Lang = 'zh' | 'en';
@@ -276,33 +277,28 @@ export function fakeParagraph(i: {
   const byId = new Map(i.facts.map((f) => [f.id, f]));
   const notes = i.fromNotes && i.paragraph.intentNotes.length ? `${zh ? '意图笔记' : 'intent notes'}: ${i.paragraph.intentNotes.join(' / ')}` : '';
   const note = (what: string) => `${L}${zh ? '依据段落计划：' : 'from the paragraph plan: '}${what}${notes ? `; ${notes}` : ''}`;
-  const sentences: ProposeInput['sentences'] = [];
+  // Text from the simulated drafter (services/llm/fake.ts): a topic sentence built from the job (not a
+  // copy of it) and one sentence per plan step stating the step's facts by their own renderings.
+  const steps = i.paragraph.plan.remaining.map((step) => ({
+    intent: step.intent,
+    move: step.move,
+    facts: step.factIds
+      .map((id) => byId.get(id))
+      .filter((f): f is Fact => !!f && rendering(f) !== null)
+      .map((f) => ({ id: f.id, rendering: rendering(f)!, definition: f.definition })),
+    citeKeys: step.citeKeys.filter((key) => i.allowedKeys.includes(key)),
+  }));
+  const drafted = fakeDraftSentences({ job: i.paragraph.job || i.section.question || i.section.title, sectionTitle: i.section.title, moves: i.paragraph.moves, steps });
   const job = i.paragraph.job || i.section.question || i.section.title;
-  sentences.push({
-    text: `${planStatement(job, `This paragraph addresses ${planStatement(i.section.title, 'this section').toLowerCase()}`)}.`,
-    move: i.paragraph.moves[0] ?? null,
-    fact_ids: [],
-    cite_keys: [],
+  const sentences: ProposeInput['sentences'] = drafted.map((d, k) => ({
+    text: d.text,
+    move: d.move,
+    fact_ids: d.factIds,
+    cite_keys: d.citeKeys,
     placeholders: [],
-    note_zh: note(job),
+    note_zh: note(k === 0 ? job : (i.paragraph.plan.remaining[k - 1]?.intent ?? job)),
     referee_question: null,
-  });
-  i.paragraph.plan.remaining.forEach((step, k) => {
-    const used = step.factIds.map((id) => byId.get(id)).filter((f): f is Fact => !!f && rendering(f) !== null);
-    const keys = step.citeKeys.filter((key) => i.allowedKeys.includes(key));
-    let text = planStatement(step.intent, `We state point ${['one', 'two', 'three', 'four', 'five', 'six'][k] ?? 'next'} of this paragraph`);
-    if (used.length) text += `: ${used.map((f) => rendering(f)!).join(' against ')}`;
-    if (keys.length) text += `~\\cite{${keys.join(',')}}`;
-    sentences.push({
-      text: `${text}.`,
-      move: step.move,
-      fact_ids: used.map((f) => f.id),
-      cite_keys: keys,
-      placeholders: [],
-      note_zh: note(step.intent),
-      referee_question: null,
-    });
-  });
+  }));
   if (i.extraSentence) {
     sentences.push({ text: i.extraSentence, move: 'result', fact_ids: [], cite_keys: [], placeholders: [], note_zh: `${L}${zh ? '故意加入的无依据数字（测试）' : 'deliberately unsupported number (test)'}`, referee_question: null });
   }
