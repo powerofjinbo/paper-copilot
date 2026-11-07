@@ -20,7 +20,8 @@
  * plan, disclosure, sync blockers with Push disabled); the four-step rail, the first-run hint (remembered),
  * the simplified top bar, the Settings drawer (language, theme, heatmap, voice, cost); card history restore;
  * the large \input fixture (`?fixture=large`: file switcher, cross-file reveal); 中文 and dark screenshots of
- * every step; a narrow window with no page scroll; no page errors.
+ * every step; a narrow window with no page scroll; the guided tour on a fresh profile (中文 light, EN dark:
+ * the offer, all eight steps done for real, the example PDF, demo SyncTeX, the ? menu, reset); no page errors.
  */
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
@@ -231,6 +232,229 @@ async function openCheckSection(id) {
   return sec;
 }
 
+/**
+ * The guided tour on a fresh profile (new browser context: empty localStorage): the first-launch offer,
+ * then every step done for real in the demo paper (each one advances on its own once done), the example
+ * PDF after Compile, approximate SyncTeX both ways, the ? menu (restart, reset the example paper).
+ */
+async function tourWalk(browser, { lang, dark, errors }) {
+  const saved = page;
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1, colorScheme: dark ? 'dark' : 'light' });
+  if (lang === 'en') await context.addInitScript(() => localStorage.setItem('paper-copilot.shell.v1', JSON.stringify({ lang: 'en', theme: 'system' })));
+  page = await context.newPage();
+  page.on('pageerror', (e) => errors.push(`[tour ${lang}] ${e.message}`));
+  page.on('console', (m) => m.type() === 'error' && errors.push(`[tour ${lang}] ${m.text()}`));
+  const tag = `${lang}-${dark ? 'dark' : 'light'}`;
+  const stepIs = (id) => waitFor((i) => document.querySelector('[data-testid="tour-card"]')?.getAttribute('data-step') === i, id, 8000, `tour step ${id}`);
+  /** The spotlight is on screen and the card does not cover it. */
+  const cardClear = async (what) => {
+    const spot = await page.locator('[data-testid="tour-spot"]').boundingBox();
+    const card = await page.locator('[data-testid="tour-card"]').boundingBox();
+    assert(spot, `${what}: no spotlight`);
+    assert(card, `${what}: no card`);
+    const inView = card.x >= 0 && card.y >= 0 && card.x + card.width <= 1440 && card.y + card.height <= 900;
+    assert(inView, `${what}: card outside the window ${JSON.stringify(card)}`);
+    const o = spot.x < card.x + card.width && spot.x + spot.width > card.x && spot.y < card.y + card.height && spot.y + spot.height > card.y;
+    assert(!o, `${what}: card covers the highlighted element ${JSON.stringify({ spot, card })}`);
+  };
+  const steps = [];
+  try {
+    await page.goto(`${BASE}/?mock=1`);
+    await page.waitForSelector('.cm-content .pc-s', { timeout: 20000 });
+    await page.waitForSelector('[data-testid="tour-offer"]', { timeout: 4000 });
+    const offer = await page.locator('[data-testid="tour-offer"]').innerText();
+    assert(lang === 'zh' ? /引导/.test(offer) : /tour/i.test(offer), `offer not in ${lang}: ${offer.slice(0, 60)}`);
+    await shot(`tour-${tag}-0-offer`);
+    await page.locator('[data-testid="tour-offer-start"]').click();
+    // (a) the four steps
+    await stepIs('rail');
+    const focused = await pc(() => !!document.activeElement?.closest('[data-testid="tour-card"]'));
+    assert(focused, 'the tour card did not take focus on start');
+    await cardClear('rail');
+    await shot(`tour-${tag}-1-rail`);
+    // keyboard: → and ← move between steps from the card
+    await page.keyboard.press('ArrowRight');
+    await stepIs('card');
+    await page.keyboard.press('ArrowLeft');
+    await stepIs('rail');
+    await page.locator('.rail [data-step="sources"]').click();
+    await waitFor(() => !!document.querySelector('[data-testid="tour-done"]'), null, 3000, 'rail step done');
+    steps.push('rail');
+    // (b) click a sentence: its card
+    await stepIs('card');
+    await sleep(300);
+    await cardClear('card');
+    await shot(`tour-${tag}-2-card`);
+    const cardId = await unitId('Searches for long-lived particles');
+    const r = await pc((i) => {
+      const n = document.querySelector(`.cm-content [data-unit="${i}"]`);
+      const b = n?.getClientRects()[0];
+      return b ? { x: b.x + 30, y: b.y + b.height / 2 } : null;
+    }, cardId);
+    assert(r, 'card sentence not on screen');
+    await page.mouse.click(r.x, r.y);
+    await page.waitForSelector('[data-testid="sentence-card"]', { timeout: 3000 });
+    await sleep(250);
+    // the tour card stays clear of the sentence card too
+    const sc = await page.locator('[data-testid="sentence-card"]').boundingBox();
+    const tc = await page.locator('[data-testid="tour-card"]').boundingBox();
+    assert(!(sc.x < tc.x + tc.width && sc.x + sc.width > tc.x && sc.y < tc.y + tc.height && sc.y + sc.height > tc.y), 'tour card covers the sentence card');
+    await shot(`tour-${tag}-2-card-open`);
+    await page.keyboard.press('Escape');
+    steps.push('card');
+    // (c) instruct in Chinese and accept
+    await stepIs('instruct');
+    await sleep(300);
+    await cardClear('instruct');
+    await shot(`tour-${tag}-3-instruct`);
+    await cursorIn('On isolated displaced particles that neither');
+    await page.keyboard.press('Control+i');
+    await page.waitForSelector('.pc-card input.pc-input', { timeout: 3000 });
+    await page.keyboard.insertText('把基线放在前面');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('[data-testid="proposal"]', { timeout: 5000 });
+    await sleep(250);
+    await shot(`tour-${tag}-3-instruct-proposal`);
+    await page.keyboard.press('Control+Enter');
+    steps.push('instruct');
+    // (d) a Chinese thought on its own line, rendered
+    await stepIs('intent');
+    await sleep(300);
+    await cardClear('intent');
+    await shot(`tour-${tag}-4-intent`);
+    const intentId = await unitId('In this paper, we train on generic events only');
+    await pc((i) => window.__paper.workspace.getState().editor.revealSentence(i), intentId);
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.insertText('我们只用通用事例训练');
+    await waitFor(() => document.querySelectorAll('.pc-intent-line').length > 0, null, 3000, 'teal intent line');
+    await page.keyboard.press('Control+Enter');
+    await page.waitForSelector('.pc-intent-render .pc-ir-option', { timeout: 5000 });
+    await sleep(200);
+    await shot(`tour-${tag}-4-intent-render`);
+    await page.keyboard.press('Tab');
+    steps.push('intent');
+    // (e) ghost text, Tab accepts
+    await stepIs('ghost');
+    await sleep(300);
+    await cardClear('ghost');
+    const ghostId = await unitId('This lead holds for every particle species');
+    await pc((i) => window.__paper.workspace.getState().editor.revealSentence(i), ghostId);
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('The gain');
+    await page.keyboard.press('Control+Space');
+    await page.waitForSelector('[data-testid="ghost"]', { timeout: 5000 });
+    await sleep(200);
+    await shot(`tour-${tag}-5-ghost`);
+    await page.keyboard.press('Tab');
+    steps.push('ghost');
+    // (f) a number with no source
+    await stepIs('number');
+    await sleep(300);
+    await cardClear('number');
+    const numId = await unitId('The test set holds');
+    await pc((i) => window.__paper.workspace.getState().editor.revealSentence(i), numId);
+    await page.keyboard.press('ArrowLeft'); // collapse the selection to the sentence start
+    for (let i = 0; i < 'The test set holds '.length; i++) await page.keyboard.press('ArrowRight');
+    for (let i = 0; i < 5; i++) await page.keyboard.press('Shift+ArrowRight');
+    await page.keyboard.type('9,000');
+    await waitFor(() => window.__paper.workspace.getState().lint.some((f) => f.check === 'unmatched_number' && /9,000/.test(f.word ?? f.msg)), null, 5000, '9,000 flagged');
+    await sleep(300);
+    await shot(`tour-${tag}-6-number`);
+    steps.push('number');
+    // (g) the five items, a draft, review it in ③
+    await stepIs('draft');
+    await sleep(400);
+    await cardClear('draft');
+    await shot(`tour-${tag}-7-draft`);
+    assert((await pc(() => window.__paper.workspace.getState().leftTab)) === 'plan', 'the draft step did not open ① Plan');
+    const story = page.locator('.five-items textarea').first();
+    await story.scrollIntoViewIfNeeded();
+    await story.fill('A tracker trained without the signal finds more displaced particles than the baseline.');
+    await page.locator('.attest input[type="checkbox"]').first().check();
+    const sec = page.locator('.section-card').filter({ hasText: /Results/ }).first();
+    await sec.scrollIntoViewIfNeeded();
+    await sec.locator('button').first().click();
+    const draftBtn = sec.getByRole('button', { name: /Draft from outline|根据大纲起草/ }).first();
+    await draftBtn.scrollIntoViewIfNeeded();
+    await draftBtn.click();
+    await waitFor(() => window.__paper.workspace.getState().units.some((u) => u.state === 'proposed'), null, 10000, 'drafted sentences');
+    await sleep(500);
+    await page.locator('.rail [data-step="todo"]').click();
+    await sleep(400);
+    await cardClear('draft review');
+    await shot(`tour-${tag}-7-draft-review`);
+    await pc(() => window.__paper.workspace.getState().editor.revealLine(1));
+    await page.keyboard.press('Alt+ArrowDown');
+    await waitFor(() => {
+      const ws = window.__paper.workspace.getState();
+      return ws.units.find((x) => x.id === ws.activeSentenceId)?.state === 'proposed';
+    }, null, 3000, 'a proposed sentence active');
+    await page.keyboard.press('Control+Enter');
+    steps.push('draft');
+    // (h) the submission check, then Compile shows the example PDF
+    await stepIs('check');
+    await sleep(300);
+    await cardClear('check');
+    await page.locator('.rail [data-step="check"]').click();
+    await page.locator('[data-testid="submission-pill"]').click();
+    await page.waitForSelector('[data-testid="submission-check"] .sub-list', { timeout: 8000 });
+    await sleep(300);
+    await cardClear('check: compile');
+    await shot(`tour-${tag}-8-check`);
+    await page.locator('.compile-pill').click();
+    await waitFor(() => document.querySelectorAll('.pdfp-page canvas, .pdfp-page').length > 0 && document.querySelector('.pdfp')?.getAttribute('data-state') === 'ready', null, 10000, 'example PDF shown');
+    await waitFor(() => !document.querySelector('[data-testid="tour-card"]'), null, 5000, 'tour finished');
+    steps.push('check');
+    const st = await pc(() => JSON.parse(localStorage.getItem('paper-copilot.tour.v1')));
+    assert(st.status === 'finished' && st.done.length === 8, `tour state ${JSON.stringify(st)}`);
+    const note = await page.locator('[data-testid="pdf-demo-note"]').innerText();
+    assert(lang === 'zh' ? /示例 PDF：浏览器演示模式没有 LaTeX/.test(note) : /Example PDF: the browser demo has no LaTeX/.test(note), `PDF note: ${note}`);
+    const pill = await page.locator('.compile-pill').innerText();
+    assert(lang === 'zh' ? /示例 PDF/.test(pill) : /Example PDF/.test(pill), `compile pill: ${pill}`);
+    await sleep(600);
+    await shot(`tour-${tag}-9-pdf`);
+    // SyncTeX in the demo, approximate: the cursor line shows in the PDF; a click in the PDF reveals its line
+    const lineOf = await pc(() => {
+      const ws = window.__paper.workspace.getState();
+      const t = ws.editor.getText();
+      return t.slice(0, t.indexOf('However, these studies trained')).split('\n').length;
+    });
+    await pc((l) => window.__paper.workspace.getState().editor.revealLine(l), lineOf);
+    await page.keyboard.press('Control+Shift+J');
+    await waitFor(() => !!document.querySelector('.pdfp-hl'), null, 4000, 'forward-search box');
+    await shot(`tour-${tag}-9-forward`);
+    // inverse: a click on that highlighted line in the PDF puts the cursor back on it
+    const hl = await page.locator('.pdfp-hl').first().boundingBox();
+    await pc(() => window.__paper.workspace.getState().editor.revealLine(1));
+    await page.mouse.click(hl.x + 20, hl.y + Math.min(6, hl.height / 2));
+    await waitFor(() => /^However, these studies trained/.test(document.querySelector('.cm-activeLine')?.textContent ?? ''), null, 4000, 'inverse search back to the line');
+    const active = await pc(() => (document.querySelector('.cm-activeLine')?.textContent ?? '').slice(0, 60));
+    // ? menu: restart the tour, reset the example paper
+    await page.locator('[data-testid="help-menu"]').click();
+    const menu = await page.locator('.help-menu').innerText();
+    assert(lang === 'zh' ? /新手引导/.test(menu) && /重置示例论文/.test(menu) : /Take the tour/.test(menu) && /Reset the example paper/.test(menu), `? menu: ${menu}`);
+    await shot(`tour-${tag}-10-menu`);
+    page.once('dialog', (d) => d.accept());
+    await page.locator('[data-testid="demo-reset"]').click();
+    await page.waitForSelector('.cm-content .pc-s', { timeout: 20000 });
+    await sleep(800);
+    const text = await docText();
+    assert(text.includes('8,710') && !text.includes('9,000'), 'reset did not bring the original text back');
+    assert((await page.locator('[data-testid="tour-offer"]').count()) === 0, 'the offer came back after the tour was finished');
+    await page.locator('[data-testid="help-menu"]').click();
+    await page.locator('[data-testid="tour-menu-start"]').click();
+    await stepIs('rail');
+    await page.locator('[data-testid="tour-skip"]').click();
+    await waitFor(() => !document.querySelector('[data-testid="tour-card"]'), null, 2000, 'skipped');
+    return `${steps.length} steps done by doing them; inverse click -> "${active.slice(0, 40)}"; reset ok`;
+  } finally {
+    await context.close();
+    page = saved;
+  }
+}
+
 async function main() {
   const child = await ensureServer();
   const browser = await chromium.launch({ headless: !HEADED });
@@ -246,6 +470,13 @@ async function main() {
   await page.goto(`${BASE}/?mock=1`);
   await page.waitForSelector('.cm-content .pc-s', { timeout: 20000 });
   await sleep(800);
+
+  await check('tour: offered once on the first launch of the demo; "Not now" is remembered', async () => {
+    await page.waitForSelector('[data-testid="tour-offer"]', { timeout: 4000 });
+    await page.locator('[data-testid="tour-offer-later"]').click();
+    await waitFor(() => !document.querySelector('[data-testid="tour-offer"]'), null, 2000, 'offer closed');
+    return 'declined';
+  });
 
   await check('first-run hint shows the four steps once and stays dismissed after a reload', async () => {
     await page.waitForSelector('[data-testid="first-run"]', { timeout: 3000 });
@@ -758,6 +989,13 @@ async function main() {
     await shot('files-check');
     return `${items.length} files; revealed ${target.id.slice(-6)} in ${target.file}; ${drafted} drafted sentence(s) landed in results.tex`;
   });
+
+  for (const v of [
+    { lang: 'zh', dark: false },
+    { lang: 'en', dark: true },
+  ]) {
+    await check(`tour (${v.lang}, ${v.dark ? 'dark' : 'light'}): eight steps done in the demo paper, example PDF, SyncTeX, ? menu, reset`, () => tourWalk(browser, { ...v, errors }));
+  }
 
   await check('no page errors', async () => {
     const real = errors.filter((e) => !/favicon/.test(e));

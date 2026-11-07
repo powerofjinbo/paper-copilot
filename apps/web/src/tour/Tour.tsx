@@ -105,11 +105,18 @@ function prepare(step: TourStepId, target: ReturnType<typeof stepTarget>): void 
   }
   if (step === 'check') return;
   if (target && 'sentence' in target) {
+    // scroll to the sentence with the cursor at its line start: no selection, so typing never replaces it;
+    // a keyboard user stays on the tour card
+    const ws = useWorkspace.getState();
+    const u = ws.units.find((x) => x.id === target.sentence);
+    if (!u) return;
+    const card = document.activeElement?.closest('[data-testid="tour-card"]') ? (document.activeElement as HTMLElement) : null;
     try {
-      useWorkspace.getState().editor?.revealSentence(target.sentence);
+      ws.editor?.revealLine(u.line);
     } catch {
       /* the editor is not ready: "Show me where" tries again */
     }
+    card?.focus({ preventScroll: true });
   }
 }
 

@@ -68,7 +68,8 @@ export function demoForward(currentText: string, line: number, boxes: ReadonlyMa
 /**
  * Inverse search: the line of the current text for a click at (x, y) points on `page`. The smallest box
  * that contains the point (prose lines first), else the box nearest vertically within 24 pt; its fixture
- * line is mapped to the current text by its content (the nearest identical line), else kept as is.
+ * line is mapped to the current text by its content (the nearest identical line), else counted from the
+ * nearest unchanged line above it.
  */
 export function demoInverse(currentText: string, page: number, x: number, y: number, boxes: ReadonlyMap<number, DemoBox> = BOXES, original: readonly string[] = ORIGINAL, bodyStart = BODY_START): number | null {
   const slack = 1.5;
@@ -91,7 +92,16 @@ export function demoInverse(currentText: string, page: number, x: number, y: num
   const orig = hit?.line ?? near?.line ?? null;
   if (orig === null) return null;
   const cur = currentText.split('\n');
-  return nearestSame(cur, norm(original[orig - 1]), orig) ?? Math.min(orig, cur.length);
+  const same = nearestSame(cur, norm(original[orig - 1]), orig);
+  if (same !== null) return same;
+  // the author changed that line: count from the nearest unchanged line above it
+  for (let k = orig - 1; k >= 1; k--) {
+    const text = norm(original[k - 1]);
+    if (!text) continue;
+    const at = nearestSame(cur, text, k);
+    if (at !== null) return Math.min(cur.length, at + (orig - k));
+  }
+  return Math.min(orig, cur.length);
 }
 
 /** True when the committed SyncTeX table loaded (forward / inverse search work in the demo). */

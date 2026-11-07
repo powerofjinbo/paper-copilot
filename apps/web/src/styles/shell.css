@@ -1204,3 +1204,7 @@ body.is-resizing canvas {
 .menu-item .menu-kbd {
   margin-left: auto;
 }
+.compile-popover .tex-install,
+.compile-popover .compile-demo-note {
+  color: var(--ink);
+}

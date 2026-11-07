@@ -122,7 +122,9 @@ function CompilePill({ api }: { api: ApiClient }) {
   const rightPane = useWorkspace((s) => s.rightPane);
   const setRightPane = useWorkspace((s) => s.setRightPane);
   const pdfFitHidden = useShell((s) => s.fitHidden.pdf);
-  const pdfShown = rightPane === 'pdf' && !pdfFitHidden;
+  const pdfAsked = useShell((s) => s.pdfAsked);
+  // the pane is on screen only once there is a PDF or the author asked for it (App: wantPdf)
+  const pdfShown = rightPane === 'pdf' && (compile.pdfVersion !== null || pdfAsked) && !pdfFitHidden;
   const statusId = useId();
   const demo = isMockClient(api);
   const noTex = isNoTex(compile);
