@@ -25,7 +25,8 @@
  *   significant figures as a factor ("2.5 times", "a factor of 3"); maxSigfigs 2.
  * - difference: a - b in percentage points for fractions, percents and points; maxSigfigs 3.
  * - relative: (a - b) / b x 100, in both directions ("60% lower", "151% higher"); maxSigfigs 3.
- * - share: a / b for two counts with a < b, written as a fraction, a percent or "N out of M".
+ * - share: a / b for two counts with a < b and different stems (a part and its whole, not two population
+ *   sizes), written as a fraction, a percent or "N out of M".
  */
 import type { Fact } from '../schemas';
 import type { DerivedRelation } from '../gate/gate';
@@ -212,7 +213,9 @@ function relationsFor(p: Pair, include: Set<DerivedKind>, minRatio: number): Der
       out.push({ value: q, raw: r[0]!, factIds: [hi.f.id, lo.f.id], description: `${hi.f.id} / ${lo.f.id} = ${sig(q, 3)} (ratio)`, kind: 'ratio', form: 'factor', maxSigfigs: 2, renderings: r.map((x) => `${x} times`) });
     }
   }
-  if (include.has('share') && fam === 'count' && a.x > 0 && b.x > 0 && a.x !== b.x) {
+  // a share is a part over its whole (n_matched / n_targets): two counts of the same quantity in
+  // different rows are the sizes of two populations, and their quotient is nobody's efficiency
+  if (include.has('share') && fam === 'count' && a.x > 0 && b.x > 0 && a.x !== b.x && a.stem !== b.stem) {
     const [num, den] = a.x < b.x ? [a, b] : [b, a];
     const q = num.x / den.x;
     const r = renderings(q, [2, 3]);

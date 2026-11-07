@@ -143,11 +143,8 @@ export function submissionCheck(input: SubmissionInput): SubmissionReport {
   // ---------------------------------------------------------------- review state
   item('unreviewed', 'block', units.filter((u) => u.state === 'proposed').map((u) => entryOf(u)));
   item('unsupported', 'block', units.filter((u) => u.state === 'unsupported').map((u) => entryOf(u)));
-  item(
-    'placeholders',
-    'block',
-    units.filter((u) => u.state === 'placeholder' || (u.placeholders?.length ?? 0) > 0 || findPlaceholders(u.text).length > 0).map((u) => entryOf(u)),
-  );
+  const placeholderUnits = units.filter((u) => u.state === 'placeholder' || (u.placeholders?.length ?? 0) > 0 || findPlaceholders(u.text).length > 0);
+  const placeholderEntries = placeholderUnits.map((u) => entryOf(u));
 
   // ---------------------------------------------------------------- file scans
   const intents: SubmissionEntry[] = [];
@@ -165,6 +162,21 @@ export function submissionCheck(input: SubmissionInput): SubmissionReport {
     } catch {
       /* none */
     }
+    // placeholders anywhere in a typeset file: table cells, section titles and captions are not sentence units
+    if (order.find((e) => e.file === file)?.included !== false) {
+      try {
+        const mt = maskComments(text);
+        for (const p of findPlaceholders(mt)) {
+          const covered = placeholderUnits.some((u) => u.file === file && typeof u.start === 'number' && typeof u.end === 'number' && u.start <= p.start && p.start < u.end);
+          if (covered) continue;
+          const line = mt.slice(0, p.start).split('\n').length;
+          if (placeholderEntries.some((e) => e.file === file && e.line === line && e.sentenceId === null)) continue;
+          placeholderEntries.push({ file, sentenceId: null, line, text: shorten(text.split('\n')[line - 1] ?? p.text) });
+        }
+      } catch {
+        /* none */
+      }
+    }
     const masked = maskComments(text).split('\n');
     const raw = text.split('\n');
     const hasOpen = raw.some((l) => /^<{7}(?: |$)/.test(l));
@@ -181,6 +193,7 @@ export function submissionCheck(input: SubmissionInput): SubmissionReport {
       /* no cites */
     }
   }
+  item('placeholders', 'block', placeholderEntries);
   item('intent_lines', 'block', intents);
   item('cjk', 'block', cjk);
   item('merge_conflicts', 'block', conflicts);

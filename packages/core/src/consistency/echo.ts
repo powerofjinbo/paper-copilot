@@ -486,6 +486,46 @@ export function echoCheck(units: readonly ConsistencyUnit[], facts: readonly Fac
     }
   }
 
+  // ---------------------------------------------------------------- drifted copies that equal a per-seed value
+  // "96.84%" in the conclusions against "96.94%" (the mean of three seeds) in the abstract: a one-digit
+  // typo that happens to be one seed's value. A sentence that does not speak of seeds does not state a
+  // per-seed value, so such a copy is a drifted copy of the aggregate.
+  {
+    for (const [key, list] of byKey) {
+      if (key.startsWith('derived:')) continue;
+      const f = cls.fact(key.slice(0, key.lastIndexOf('#')));
+      if (!f || !perSeed(f)) continue;
+      for (const o of list) {
+        if (o.field !== 'value' || o.value === 0) continue;
+        const u = us[o.unitIndex];
+        if (!u || /\bseeds?\b|\bper[-\s]seed\b|\brandom\s+initiali[sz]ation/i.test(plainText(u.text))) continue;
+        let best: { key: string; o: Occ; d: number } | null = null;
+        for (const [k2, l2] of byKey) {
+          if (k2 === key || k2.startsWith('derived:')) continue;
+          const f2 = cls.fact(k2.slice(0, k2.lastIndexOf('#')));
+          if (!f2 || perSeed(f2) || l2[0]!.field !== 'value') continue;
+          const sameForm = l2.find((x) => x.form === o.form);
+          if (!sameForm) continue;
+          const fv = factValueIn(f2, o.form);
+          if (fv === null || fv === 0) continue;
+          const d = Math.abs(Math.abs(o.value) - Math.abs(fv)) / Math.abs(fv);
+          if (d > 0 && d <= tolerance && (!best || d < best.d)) best = { key: k2, o: sameForm, d };
+        }
+        if (!best) continue;
+        const fid = best.key.slice(0, best.key.lastIndexOf('#'));
+        flags.push(
+          makeFlag('drift_value', {
+            subject: `${fid}|${o.sentenceId}|${o.raw}`,
+            heuristic: true,
+            factIds: [fid, f.id],
+            sentenceIds: [o.sentenceId!, best.o.sentenceId!].filter(Boolean),
+            message: `"${o.rendering}" (${o.part}) is the per-seed value ${f.id}, but the sentence does not speak of seeds; ${fid} is written "${best.o.rendering}" (${best.o.part}). An old or mistyped copy?`,
+          }),
+        );
+      }
+    }
+  }
+
   // ---------------------------------------------------------------- drifted copies (unmatched near a stated quantity)
   const unmatchedOut: NumberOccurrence[] = [];
   for (const u of unmatched) {

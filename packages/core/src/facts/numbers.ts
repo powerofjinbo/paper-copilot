@@ -209,6 +209,10 @@ function matchRatio(tok: NumeralDetail, facts: Fact[]): Array<{ factId: string; 
   const den = tok.ratioDen ?? 0;
   const out: Array<{ factId: string; field: string; scale: number }> = [];
   if (!(den > 0)) return out;
+  // M is a number too: a round denominator ("9 out of 10", "1 in 200") is a way of writing a fraction,
+  // any other ("out of 12,000 targets") is a sample size and must be one the analysis has (a count fact)
+  const round = den <= 20 || /^[125]0*$/.test(String(den));
+  if (!round && !facts.some((f) => f && !f.excluded && Number.isInteger(f.value) && f.value === den && normalizeUnit(f.unit) === '')) return out;
   const r = tok.value / den;
   const tol = 0.5 / den + 1e-12;
   const seen = new Set<string>();

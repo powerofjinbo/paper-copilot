@@ -100,7 +100,7 @@ function resolveInclude(arg: string, from: string, have: (f: string) => boolean)
 
 /**
  * Document order of the project's .tex files: the main file, then every file it inputs (\input,
- * \include, \subfile; recursively, in the order the inputs appear outside comments), then the files
+ * \include, \subfile, \import, \subimport, \inputfrom, \includefrom; recursively, in the order the inputs appear outside comments), then the files
  * nothing reaches (sorted), which LaTeX never typesets. A file is in the appendix when its \input
  * comes after `\appendix` (or inside an appendix environment) of a file that is itself typeset.
  */
@@ -114,15 +114,25 @@ export function projectFileOrder(mainFile: string, files: readonly ProjectFile[]
     seen.add(file);
     out.push({ file, appendix, included: true, anchor });
     const src = maskComments(texts.get(file) ?? '');
-    const re = /\\(input|include|subfile)\s*(?:\{([^{}]*)\}|([^\s{}\\%]+))|\\appendix\b|\\begin\s*\{(?:appendix|appendices)\}/g;
+    // \import{dir/}{file} (path from the main file's directory), \subimport{dir/}{file} (from this file's),
+    // and the \inputfrom / \includefrom families of the import package
+    const re = /\\(sub)?(?:import|inputfrom|includefrom)\*?\s*\{([^{}]*)\}\s*\{([^{}]*)\}|\\(input|include|subfile)\s*(?:\{([^{}]*)\}|([^\s{}\\%]+))|\\appendix\b|\\begin\s*\{(?:appendix|appendices)\}/g;
     let inApp = appendix;
     let m: RegExpExecArray | null;
     while ((m = re.exec(src))) {
-      if (!m[1]) {
+      if (m[3] !== undefined) {
+        const dir = (m[2] ?? '').trim().replace(/\\/g, '/');
+        const here = m[1] && file.includes('/') ? file.slice(0, file.lastIndexOf('/') + 1) : '';
+        const joined = `${here}${dir}${dir && !dir.endsWith('/') ? '/' : ''}${m[3].trim()}`.replace(/\/\.\//g, '/').replace(/^\.\//, '');
+        const target = resolveInclude(joined, mainFile, have);
+        if (target) visit(target, inApp, depth + 1, [...anchor, m.index]);
+        continue;
+      }
+      if (!m[4]) {
         inApp = true;
         continue;
       }
-      const target = resolveInclude(m[2] ?? m[3] ?? '', file, have);
+      const target = resolveInclude(m[5] ?? m[6] ?? '', file, have);
       if (target) visit(target, inApp, depth + 1, [...anchor, m.index]);
     }
   };
