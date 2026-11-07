@@ -10,9 +10,10 @@ import { Editor } from './editor/Editor';
 import { PdfPane } from './pdf/PdfPane';
 import { getApiClient } from './api';
 import { errorText } from './api/errors';
-import { compileNow, forwardSync, loadWorkspace, notify, refetchFacts, refetchOutline, refetchQuestions } from './components/actions';
+import { compileNow, flushPendingReveal, forwardSync, loadWorkspace, notify, refetchFacts, refetchOutline, refetchQuestions, refreshFiles, revealIn, switchFile } from './components/actions';
 import { LeftRail } from './components/LeftRail';
 import { Resizer } from './components/Resizer';
+import { SettingsDrawer } from './components/SettingsDrawer';
 import { ShortcutHelp } from './components/ShortcutHelp';
 import { StatusBar } from './components/StatusBar';
 import { Toasts } from './components/Toasts';
@@ -21,8 +22,13 @@ import { PanelHost } from './panels/PanelHost';
 import { htmlLang, jobKey, translate, useT } from './i18n';
 import { useShell } from './state/extra';
 import { useWorkspace } from './state/store';
+import { useEditorUi } from './editor/uiStore';
+
+// the shell's Settings drawer holds the heatmap and font toggles
+useEditorUi.setState({ togglesInShell: true });
 import './styles/shell.css';
 import './styles/panels.css';
+import './styles/steps.css';
 
 function tr(key: Parameters<typeof translate>[1], vars?: Parameters<typeof translate>[2]): string {
   return translate(useShell.getState().lang, key, vars);
@@ -64,7 +70,9 @@ function useBus(api: ApiClient): void {
   useEffect(() => {
     const ws = () => useWorkspace.getState();
     let factsTimer: ReturnType<typeof setTimeout> | null = null;
+    let filesTimer: ReturnType<typeof setTimeout> | null = null;
     const onJobDone = (kind: string) => {
+      if (kind === 'draft') void refreshFiles(api);
       if (kind === 'read-repo') void refetchFacts(api).catch(() => undefined);
       else if (kind === 'outline-framings') void refetchOutline(api).catch(() => undefined);
       else if (kind === 'referee') void refetchQuestions(api).catch(() => undefined);
@@ -94,6 +102,14 @@ function useBus(api: ApiClient): void {
       api.on('plan.updated', (m) => ws().setOutline(m.outline)),
       api.on('cost.update', (m) => ws().setCost(m.totals)),
       api.on('notice', (m) => notify(m.level, m.message)),
+      api.on('sentences.patch', () => {
+        // per-file counts of the file switcher (other files' counts change on drafts, pulls)
+        if (filesTimer) clearTimeout(filesTimer);
+        filesTimer = setTimeout(() => {
+          filesTimer = null;
+          void refreshFiles(api);
+        }, 1500);
+      }),
       api.on('lint.update', (m) => {
         // The flags are the FULL list for that file.
         const f = ws().file;
@@ -101,12 +117,19 @@ function useBus(api: ApiClient): void {
       }),
       api.on('draft.proposed', (m) => {
         const ed = ws().editor;
+        if (m.file && ws().file && m.file !== ws().file) {
+          // the section lives in another file of the project: open it, the editor inserts on ready
+          useShell.getState().queueDraft(m);
+          switchFile(m.file);
+          return;
+        }
         if (ed) ed.insertDraft(m);
         else useShell.getState().queueDraft(m);
       }),
     ];
     return () => {
       if (factsTimer) clearTimeout(factsTimer);
+      if (filesTimer) clearTimeout(filesTimer);
       for (const off of offs) off();
     };
   }, [api]);
@@ -195,6 +218,23 @@ function useAutoFit(mainRef: RefObject<HTMLDivElement | null>, wantLeft: boolean
   }, [width, wantLeft, wantPdf, leftWidth, rightWidth, pinned, mainRef]);
 }
 
+/** Cross-file navigation: once the requested file is open and its units arrived, reveal the target. */
+function usePendingReveal(): void {
+  const pending = useShell((s) => s.pendingReveal);
+  const file = useWorkspace((s) => s.file);
+  const units = useWorkspace((s) => s.units);
+  const editor = useWorkspace((s) => s.editor);
+  const started = useRef<{ seq: number; at: number } | null>(null);
+  useEffect(() => {
+    if (!pending) return;
+    if (started.current?.seq !== pending.seq) started.current = { seq: pending.seq, at: Date.now() };
+    if (flushPendingReveal(Date.now(), started.current.at)) return;
+    // re-check after the timeout even if nothing changes
+    const timer = setTimeout(() => flushPendingReveal(Date.now(), started.current?.at ?? Date.now()), 8200);
+    return () => clearTimeout(timer);
+  }, [pending, file, units, editor]);
+}
+
 function useDevHandle(api: ApiClient): void {
   useEffect(() => {
     // Dev server, or a build made for the full-stack E2E (`VITE_PAPER_E2E=1 vite build`, e2e/fullstack.mjs).
@@ -209,6 +249,7 @@ function Workspace({ api }: { api: ApiClient }) {
   useBus(api);
   useShortcuts(api);
   useDevHandle(api);
+  usePendingReveal();
   const lang = useShell((s) => s.lang);
   const file = useWorkspace((s) => s.file);
   const connected = useWorkspace((s) => s.connected);
@@ -235,11 +276,9 @@ function Workspace({ api }: { api: ApiClient }) {
   const onPdfReady = useCallback((h: PdfHandle) => useShell.getState().setPdf(h), []);
   const onInverse = useCallback((target: { file: string; line: number }) => {
     const ws = useWorkspace.getState();
-    if (target.file !== ws.file) {
-      ws.pushNotice('info', `${target.file}:${target.line}`);
-      return;
-    }
-    ws.editor?.revealLine(target.line);
+    // a click in text that comes from another \input file: open that file, then show the line
+    if (ws.file && target.file !== ws.file) revealIn({ file: target.file, sentenceId: null, line: target.line, openCard: false });
+    else ws.editor?.revealLine(target.line);
   }, []);
   useEffect(() => {
     if (!showPdf) useShell.getState().setPdf(null);
@@ -282,6 +321,7 @@ function Workspace({ api }: { api: ApiClient }) {
       <StatusBar api={api} />
       <Toasts />
       <ShortcutHelp />
+      <SettingsDrawer api={api} />
     </div>
   );
 }

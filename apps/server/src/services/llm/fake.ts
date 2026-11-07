@@ -7,7 +7,7 @@
  * are labelled with model `fake-<model>` and cost nothing. Latency simulation is off unless
  * `latencyMs` > 0 (the server may set PAPER_FAKE_LATENCY_MS for UI work).
  */
-import { simulatedRewrite } from '@paper-copilot/core';
+import { renderFact, simulatedRewrite, type Fact } from '@paper-copilot/core';
 import type { LlmClient, LlmRequest, LlmResponse } from '../../contracts';
 
 /* ------------------------------------------------------------------------------------ */
@@ -198,6 +198,25 @@ export function topicPhrase(raw: string, maxWords = 6): string {
   while (out.length && DANGLING.has(out[out.length - 1]!.toLowerCase())) out.pop();
   if (out.length && /^[A-Z][a-z]+$/.test(out[0]!) && !/^[A-Z][a-z]+[A-Z]/.test(out[0]!)) out[0] = out[0]!.toLowerCase();
   return out.join(' ');
+}
+
+/**
+ * The alias a paper would print for a numeric fact: the prose form core renderFact chooses ("96.94%" for
+ * the efficiency 0.9694, "2.32 ± 0.28 points"), when it is one of the fact's aliases (the gate matches
+ * aliases); else the first alias. Plain text: callers make it LaTeX-safe.
+ */
+export function preferredAlias(f: Fact): string | null {
+  if (f.kind !== 'number' || typeof f.value !== 'number') return null;
+  const aliases = f.aliases.map((a) => a.trim()).filter((a) => a.length > 0);
+  if (!aliases.length) return null;
+  let prose: string | null = null;
+  try {
+    const m = /=\s*(.*?)(?:\s+\(([^()]*)\))?\s*$/.exec(renderFact(f));
+    prose = m ? (m[2] ?? m[1] ?? null) : null;
+  } catch {
+    prose = null;
+  }
+  return prose && aliases.includes(prose.trim()) ? prose.trim() : aliases[0]!;
 }
 
 const STEP_OPENERS = ['We then discuss the ', 'Next we consider the ', 'We also examine the '];

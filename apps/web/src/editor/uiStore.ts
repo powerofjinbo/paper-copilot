@@ -12,6 +12,11 @@ export interface EditorUiState {
   /** Whole source in a monospace font (default: prose in a text font). Remembered per browser. */
   mono: boolean;
   toggleMono(): void;
+  /**
+   * The full app shell shows the heatmap and font toggles in its Settings drawer: the editor bar then
+   * leaves them out (the standalone editor harness keeps them).
+   */
+  togglesInShell: boolean;
 }
 
 const MONO_KEY = 'paper-copilot.editor.mono';
@@ -28,6 +33,7 @@ export const useEditorUi = create<EditorUiState>((set, get) => ({
   setHeatmap: (heatmap) => set({ heatmap }),
   toggleHeatmap: () => set((s) => ({ heatmap: !s.heatmap })),
   mono: loadMono(),
+  togglesInShell: false,
   toggleMono: () => {
     const mono = !get().mono;
     set({ mono });

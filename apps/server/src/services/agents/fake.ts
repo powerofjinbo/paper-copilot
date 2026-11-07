@@ -19,7 +19,7 @@ import type {
   RepoBriefOutput,
 } from '@paper-copilot/core';
 import { isSecretPath } from './guard';
-import { fakeDraftSentences } from '../llm/fake';
+import { fakeDraftSentences, preferredAlias } from '../llm/fake';
 import type { ProposeInput, Verdict } from './collector';
 
 export type Lang = 'zh' | 'en';
@@ -250,7 +250,7 @@ export function aliasToLatex(alias: string): string {
 
 function rendering(f: Fact): string | null {
   if (f.kind !== 'number' || typeof f.value !== 'number') return null;
-  const alias = f.aliases.find((a) => a.trim().length > 0);
+  const alias = preferredAlias(f);
   return alias ? aliasToLatex(alias) : null;
 }
 

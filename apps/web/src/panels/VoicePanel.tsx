@@ -173,7 +173,8 @@ function StyleMeter({ api, reloadKey }: { api: ApiClient; reloadKey: number }) {
   );
 }
 
-export function VoicePanel({ api }: { api: ApiClient }) {
+/** The voice tools. `embedded` renders only the sections (the Settings drawer provides the frame). */
+export function VoicePanel({ api, embedded = false }: { api: ApiClient; embedded?: boolean }) {
   const t = useT();
   const pushNotice = useWorkspace((s) => s.pushNotice);
   const voice = useLoad(() => api.voice(), [api]);
@@ -220,11 +221,9 @@ export function VoicePanel({ api }: { api: ApiClient }) {
 
   const corpus = voice.data?.corpus ?? [];
 
-  return (
-    <div className="panel">
-      <PanelHeader title={t('voice.title')} subtitle={t('voice.intro')} />
-      <div className="panel-body">
-        <StyleMeter api={api} reloadKey={meterKey} />
+  const sections = (
+    <>
+      <StyleMeter api={api} reloadKey={meterKey} />
 
         <PanelSection title={t('voice.memo')}>
           <p className="muted small">{t('voice.memoHint')}</p>
@@ -289,7 +288,13 @@ export function VoicePanel({ api }: { api: ApiClient }) {
             </Button>
           </div>
         </PanelSection>
-      </div>
+    </>
+  );
+  if (embedded) return <div className="voice-embedded">{sections}</div>;
+  return (
+    <div className="panel">
+      <PanelHeader title={t('voice.title')} subtitle={t('voice.intro')} />
+      <div className="panel-body">{sections}</div>
     </div>
   );
 }

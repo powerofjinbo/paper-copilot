@@ -24,6 +24,7 @@ export function Editor(props: EditorProps) {
   const toggleHeatmap = useEditorUi((s) => s.toggleHeatmap);
   const mono = useEditorUi((s) => s.mono);
   const toggleMono = useEditorUi((s) => s.toggleMono);
+  const togglesInShell = useEditorUi((s) => s.togglesInShell);
   const { t, lang } = useEdT();
   const toReview = useWorkspace((s) => (s.file === null || s.file === file ? reviewQueueOf(s.units).length : 0));
 
@@ -73,6 +74,8 @@ export function Editor(props: EditorProps) {
             ))}
           </span>
         ) : null}
+        {togglesInShell ? null : (
+          <>
         <button
           type="button"
           className="pc-toggle"
@@ -86,6 +89,8 @@ export function Editor(props: EditorProps) {
         <button type="button" className="pc-toggle" aria-pressed={mono} title={t('monoTitle')} onClick={toggleMono}>
           {t('mono')}
         </button>
+          </>
+        )}
       </div>
       <div ref={hostRef} className="pc-editor-host" data-loading={t('opening')} />
       <div className="pc-sr-only" aria-live="polite" role="status">

@@ -12,7 +12,7 @@ import { useWorkspace } from '../state/store';
 import { compileNow, forwardSync, openPush, openStep, pullNow, revealLine, runSubmissionCheck, switchFile } from './actions';
 import { IconCheck, IconChevronDown, IconFile, IconGear, IconHelp, IconLocate, IconPdf, IconPlay, IconPull, IconPush, IconSparkle, IconSync, IconWarn, Spinner } from './Icons';
 import { PopoverButton } from './Popover';
-import { openTodoCount, submissionStatus } from './steps';
+import { submissionStatus } from './steps';
 import { Badge, IconButton } from './ui';
 
 function BrandMark() {
@@ -311,9 +311,6 @@ export function TopBar({ api }: { api: ApiClient }) {
   const project = useWorkspace((s) => s.project);
   const fakeShell = useShell((s) => s.fakeLlm);
   const fake = fakeShell ?? project?.fakeLlm ?? false;
-  const units = useWorkspace((s) => s.units);
-  void openTodoCount;
-  void units;
 
   return (
     <header className="topbar" lang={htmlLang(lang)}>
