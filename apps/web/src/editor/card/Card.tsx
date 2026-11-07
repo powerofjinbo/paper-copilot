@@ -498,6 +498,7 @@ export function SentenceCard({ view, env, snap }: SentenceCardProps) {
 }
 
 function ProposalView({ t, mode }: { t: EdT; mode: Extract<Mode, { kind: 'proposal' }> }) {
+  const { lang } = useEdT();
   const p = mode.proposal;
   const drift = p.drift;
   return (
@@ -536,6 +537,7 @@ function ProposalView({ t, mode }: { t: EdT; mode: Extract<Mode, { kind: 'propos
 }
 
 function MainBody({ t, snap, view, onShowFact, onDismissLint }: { t: EdT; snap: CardSnapshot; view: EditorView; onShowFact: () => void; onDismissLint: (flagId: string) => void }) {
+  const { lang } = useEdT();
   const { unit } = snap;
   return (
     <>

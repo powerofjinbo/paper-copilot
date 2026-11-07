@@ -1173,7 +1173,7 @@ export const MESSAGES: Record<Lang, Record<MsgKey, string>> = { en, zh };
 export type Vars = Record<string, string | number>;
 
 /** English singulars after a count of exactly 1 ("1 warnings" -> "1 warning"); Chinese has no plural. */
-const PLURAL_NOUNS = /(^|[^\d.,])1 (warning|hint|sentence|fact|placeholder|question|blocker|request|text|case|error|item)s\b/g;
+const PLURAL_NOUNS = /(^|[^\d.,])1 (warning|hint|sentence|fact|placeholder|question|blocker|request|text|case|error|item|issue|form|use|ref)s\b/g;
 
 /** Platform key names every string may use: {mod} (⌘ / Ctrl), {alt} (⌥ / Alt), {ghostKey}, {ghostKeyAlt}. */
 const KEY_VARS: Vars = { mod: MOD_KEY, alt: ALT_KEY, ghostKey: GHOST_KEY, ghostKeyAlt: GHOST_KEY_ALT };

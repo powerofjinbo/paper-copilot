@@ -135,7 +135,7 @@ describe('fact, lint and placeholder details', () => {
     }));
     expect(ranges.find((r) => r.text === '2.32')!.cls).toBe('pc-fact');
     expect(ranges.find((r) => r.text === 'principal')!.cls).toBe('pc-lint pc-lint-warn');
-    expect(ranges.find((r) => r.text === 'principal')!.title).toBe('vocab: Excess vocabulary · corpus 0.3/1k words');
+    expect(ranges.find((r) => r.text === 'principal')!.title).toBe('Inflated word: Excess vocabulary · corpus 0.3/1k words');
     const ph = ranges.find((r) => r.cls.startsWith('pc-ph'))!;
     expect(ph.text).toBe('[fact?: rate at large radius]');
     expect(ph.cls).toBe('pc-ph pc-ph-fact');
