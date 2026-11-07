@@ -26,10 +26,14 @@ import {
   ManualFact,
   RepoBriefOutput,
   TermEntry,
+  derivedRelationMatches,
+  derivedRelations,
+  extractNumeralDetails,
   extractNumerals,
   factAliases,
   linkSentenceFacts,
   nowIso,
+  type DerivedRelation,
   type Fact,
   type FactsResponse,
   type SentenceUnit,
@@ -50,6 +54,7 @@ import {
 } from './extractor';
 import { resolveInsideRepo } from './glob';
 import { createPersister, onceLogger } from './persist';
+import { createRepoWatcher, type RepoWatcher, type RepoWatcherOptions } from './repoWatcher';
 import { loadFactsFile, serializeFactsFile, type BaseFact, type FactsFileData, type StoredCandidate, type StoredPatch, type StoredStatus } from './store';
 
 export interface FactServiceOptions {
@@ -63,6 +68,15 @@ export interface FactServiceImpl extends FactService {
   /** Rescan once if the repository was never scanned (used by GET /api/facts). */
   ensureScanned(): Promise<void>;
   scannedAt(): string | null;
+  /**
+   * Numbers derived from two facts (core derivedRelations over the current facts; cached until a fact's
+   * value, definition, unit, tags or exclusion changes). Every gate call and linkUnit use this list.
+   */
+  derived(): DerivedRelation[];
+  /** Watch the analysis repository's fact globs and rescan (debounced) when an artifact changes. No-op without repoDir. */
+  watchRepo(opts?: RepoWatcherOptions): RepoWatcher;
+  /** Stop the repository watcher (and wait for a rescan it started). */
+  close(): Promise<void>;
 }
 
 type LinkResult = ReturnType<FactService['linkUnit']>;
@@ -129,6 +143,22 @@ export function createFactService(ctx: Ctx, opts: FactServiceOptions = {}): Fact
   let claimsCache: Claim[] | null = null;
   let figuresCache: FigureEntry[] | null = null;
   let termsCache: TermEntry[] | null = null;
+  let derivedCache: { version: number; relations: DerivedRelation[] } | null = null;
+  let repoWatcher: RepoWatcher | null = null;
+
+  function derived(): DerivedRelation[] {
+    load();
+    if (derivedCache && derivedCache.version === indexVersion) return derivedCache.relations;
+    let relations: DerivedRelation[];
+    try {
+      relations = derivedRelations(views);
+    } catch (e) {
+      warnOnce('derived', 'facts: core derivedRelations failed; no derived numbers are accepted', String(e));
+      relations = [];
+    }
+    derivedCache = { version: indexVersion, relations };
+    return relations;
+  }
 
   const persister = createPersister(
     async () => {
@@ -658,6 +688,32 @@ export function createFactService(ctx: Ctx, opts: FactServiceOptions = {}): Fact
     }
     const linked = [...res.linked];
     const ambiguous: Array<{ raw: string; candidates: string[] }> = [];
+    // A numeral no fact holds may be a derived number ("2.5 times", "2.3 points higher"): the gate accepts
+    // it through the same relations, so it is linked to both facts (one relation) or listed as ambiguous.
+    let unmatched = res.unmatched.map((t) => t.raw);
+    if (res.unmatched.length) {
+      const rels = derived();
+      if (rels.length) {
+        let details: ReturnType<typeof extractNumeralDetails> = [];
+        try {
+          details = extractNumeralDetails(text);
+        } catch {
+          details = [];
+        }
+        unmatched = [];
+        for (const tok of res.unmatched) {
+          const d = details.find((x) => x.start === tok.start && x.end === tok.end);
+          const hits = d ? rels.filter((r) => derivedRelationMatches(d, r)) : [];
+          if (hits.length === 0) {
+            unmatched.push(tok.raw);
+            continue;
+          }
+          const pairs = new Set(hits.map((h) => [...h.factIds].sort().join('|')));
+          if (pairs.size === 1) linked.push(...hits[0]!.factIds);
+          else ambiguous.push({ raw: tok.raw, candidates: [...new Set(hits.flatMap((h) => h.factIds))] });
+        }
+      }
+    }
     for (const a of res.ambiguous) {
       // Second tier: a single confirmed candidate breaks the tie.
       const confirmed = a.candidates.filter((id) => viewById.get(id)?.confirmed);
@@ -669,7 +725,7 @@ export function createFactService(ctx: Ctx, opts: FactServiceOptions = {}): Fact
       const f = viewById.get(id);
       return !!f && (typeof f.value === 'string' || f.tags.includes('missing'));
     });
-    const result: LinkResult = { factIds: [...new Set([...linked, ...keep])], unmatched: res.unmatched.map((t) => t.raw), ambiguous };
+    const result: LinkResult = { factIds: [...new Set([...linked, ...keep])], unmatched, ambiguous };
     linkCache.set(unit.id, { key, result });
     return result;
   }
@@ -1035,6 +1091,20 @@ export function createFactService(ctx: Ctx, opts: FactServiceOptions = {}): Fact
 
     scannedAt() {
       return load().scannedAt;
+    },
+
+    derived,
+
+    watchRepo(wopts) {
+      if (repoWatcher) return repoWatcher;
+      repoWatcher = createRepoWatcher(ctx, { rescan: () => rescan(), staleIds: () => (load(), staleIds()) }, wopts);
+      return repoWatcher;
+    },
+
+    async close() {
+      const w = repoWatcher;
+      repoWatcher = null;
+      if (w) await w.close();
     },
   };
   return service;

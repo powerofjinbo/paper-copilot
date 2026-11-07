@@ -26,6 +26,7 @@ import {
   RefereeOutput,
   RepoBriefOutput,
   buildSystemBlocks,
+  derivedRelations,
   draftTask,
   emptyOutline,
   extractFictionalNumbers,
@@ -298,11 +299,19 @@ export function createAgentService(ctx: Ctx, opts: AgentServiceOptions = {}): Ag
   function gateEnv(planFactIds: string[]): GateEnv {
     const byId = new Map<string, Fact>();
     for (const f of [...ctx.facts.forPrompt({ factIds: planFactIds, limit: 100_000 }), ...ctx.facts.all()]) if (!f.excluded && !byId.has(f.id)) byId.set(f.id, f);
+    const facts = [...byId.values()];
+    let derived: GateEnv['derived'] = [];
+    try {
+      derived = typeof ctx.facts.derived === 'function' ? ctx.facts.derived() : derivedRelations(facts);
+    } catch (e) {
+      ctx.log.warn('agents: derived relations unavailable; derived numbers are not accepted in drafts', String(e));
+    }
     return {
-      facts: [...byId.values()],
+      facts,
       allowedCiteKeys: ctx.lit.allowedKeys().map((k) => k.key),
       knownLabels: ctx.docs.labels(),
       fictionalNumbers: fictionalNumbers(),
+      derived,
     };
   }
 

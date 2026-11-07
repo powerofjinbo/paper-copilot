@@ -111,7 +111,8 @@ export async function createCtx(opts: CreateCtxOptions): Promise<AppCtx> {
   } as unknown as AppCtx;
 
   ctx.docs = createDocService(ctx, opts.docs);
-  ctx.facts = createFactService(ctx);
+  const facts = createFactService(ctx);
+  ctx.facts = facts;
   ctx.lit = createLitService(ctx);
   ctx.lint = createLintService(ctx);
   ctx.llm = createLlmService(ctx);
@@ -148,6 +149,12 @@ export async function createCtx(opts: CreateCtxOptions): Promise<AppCtx> {
       } catch (e) {
         log.warn('file watcher unavailable; external edits are picked up on the next open', String(e));
       }
+      try {
+        // Re-run analysis results: debounced rescan of the fact store (no-op without repoDir).
+        await facts.watchRepo().ready;
+      } catch (e) {
+        log.warn('repository watcher unavailable; rescan the facts after re-running the analysis', String(e));
+      }
     }
   };
 
@@ -176,6 +183,7 @@ export async function createCtx(opts: CreateCtxOptions): Promise<AppCtx> {
       log.error('could not write every open document on shutdown', String(e));
     }
     if (watcher) await watcher.close().catch(() => undefined);
+    await facts.close().catch(() => undefined);
     if (startupScan) await startupScan;
     for (const [name, svc] of [
       ['facts', ctx.facts],

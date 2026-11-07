@@ -29,6 +29,7 @@ import {
   alternativesTail,
   buildSystemBlocks,
   cleanModelSentence,
+  derivedRelations,
   gateSentence,
   ghostTail,
   grammarTail,
@@ -46,6 +47,7 @@ import {
   wordDiff,
   type ClientMessage,
   type CostTotals,
+  type DerivedRelation,
   type Fact,
   type GateContext,
   type GateIssue,
@@ -374,10 +376,16 @@ export function createLlmService(ctx: Ctx, opts: LlmServiceOptions = {}): LlmSer
     });
   }
 
+  /** Derived numbers ("2.5 times", "2.3 points higher") the gate accepts: the fact service's cached list. */
+  const derivedFor = (facts: Fact[]): DerivedRelation[] =>
+    safe('facts.derived', () => (typeof ctx.facts.derived === 'function' ? ctx.facts.derived() : derivedRelations(facts)), []);
+
   function gateContext(mode: GateMode, extra: Partial<GateContext> = {}): GateContext {
+    const facts = usableFacts();
     return {
       mode,
-      facts: usableFacts(),
+      facts,
+      derived: derivedFor(facts),
       allowedCiteKeys: allowedCiteKeys().map((k) => k.key),
       knownLabels: safe('docs.labels', () => ctx.docs.labels(), []),
       fictionalNumbers: skillLoader.fictionalNumbers(),

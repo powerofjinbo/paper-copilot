@@ -705,3 +705,93 @@ export const REPORT_ROUTES = {
   submission: '/api/reports/submission',
   derived: '/api/facts/derived',
 } as const;
+
+/* ------------------------------------------------------------------------------------ */
+/* Batch B server routes (apps/server/src/routes/reports.ts, routes/restore.ts)            */
+/* ------------------------------------------------------------------------------------ */
+
+/**
+ * Report and project-tree routes. The reports are computed on demand over every .tex file of the \input
+ * tree (the server opens the included files it has not opened yet). The REPORT_ROUTES paths above are
+ * served as aliases of the first four.
+ *   GET  consistency        EchoReport
+ *   GET  terminologyReport  TerminologyReport
+ *   GET  figurePlan         FigurePlanReport
+ *   GET  submissionCheck    SubmissionReport   (?venue= overrides the project's venue)
+ *   GET  factsDerived       DerivedRelationData[] (the relations every gate call accepts)
+ *   GET  files              ProjectFilesResponse (an array of ProjectFileEntry)
+ *   POST sentenceRestore    RestoreRequest -> RestoreResponse
+ */
+export const FEATURE_ROUTES = {
+  consistency: '/api/consistency',
+  terminologyReport: '/api/terminology-report',
+  figurePlan: '/api/figure-plan',
+  submissionCheck: '/api/submission-check',
+  factsDerived: '/api/facts/derived',
+  files: '/api/files',
+  sentenceRestore: '/api/sentences/:id/restore',
+} as const;
+
+/** One .tex file of the project, in document order (the \input tree first, then files nothing inputs). */
+export const ProjectFileEntry = z.object({
+  file: z.string(),
+  /** The project's main file. */
+  main: z.boolean(),
+  /** The file that \input-s it (null for the main file and for files nothing reaches). */
+  parent: z.string().nullable(),
+  /** 0 for the main file, 1 for a file it inputs, ...; files nothing reaches: 0. */
+  depth: z.number().int(),
+  /** Reached from the main file through \input / \include / \subfile (LaTeX typesets it). */
+  included: z.boolean(),
+  /** Typeset after \appendix. */
+  appendix: z.boolean(),
+  /** Mirrored by the server right now (a client has it open, or a report needed it). */
+  open: z.boolean(),
+  /** Sentence units (for a file never opened: the sentences the segmenter finds; all the author's). */
+  units: z.number().int(),
+  /** AI sentences waiting for review. */
+  proposed: z.number().int(),
+  /** AI sentences that failed the faithfulness gate. */
+  unsupported: z.number().int(),
+  /** Sentences holding a placeholder ([fact?: ...], [ref], [claim: ...?]). */
+  placeholders: z.number().int(),
+  /** Sentences any AI origin ever touched. */
+  aiTouched: z.number().int(),
+});
+export type ProjectFileEntry = z.infer<typeof ProjectFileEntry>;
+
+/** GET /api/files: every .tex file, the main file first, then the \input tree in document order, then files nothing inputs (sorted). */
+export const ProjectFilesResponse = z.array(ProjectFileEntry);
+export type ProjectFilesResponse = z.infer<typeof ProjectFilesResponse>;
+
+/** Restore an earlier version of a sentence (`version` from GET history). */
+export const RestoreRequest = z.object({ version: z.number().int().min(0) });
+export type RestoreRequest = z.infer<typeof RestoreRequest>;
+
+/**
+ * What the client applies as ONE annotated change: replace [start, end) of document version `docVersion`
+ * (the unit's current text, `current`) with `text`, carrying `annotation`. The server never writes the
+ * text itself, so provenance is recorded on the same path as every other edit. Origin: 'human_edit'
+ * when the restored version is the author's (or a co-author's) text, else the version's own AI origin
+ * with its model and prompt hash. `state` is what the unit becomes: AI text the author edited stays
+ * 'ai-edited', a draft or re-plan text is 'proposed' again (it needs a review), and restored AI text that
+ * no longer passes the faithfulness gate (a fact changed since) is 'unsupported'. everAi is never
+ * cleared. `noop`: the sentence already reads exactly like that version (nothing to apply).
+ */
+export const RestoreResponse = z.object({
+  sentenceId: z.string(),
+  file: z.string(),
+  version: z.number().int(),
+  docVersion: z.number().int(),
+  start: z.number().int(),
+  end: z.number().int(),
+  current: z.string(),
+  text: z.string(),
+  origin: VersionOrigin,
+  state: SentenceState,
+  annotation: ChangeAnnotation,
+  /** Gate issues of restored AI text (empty for the author's own text). */
+  issues: z.array(GateIssueWire),
+  noop: z.boolean(),
+});
+export type RestoreResponse = z.infer<typeof RestoreResponse>;

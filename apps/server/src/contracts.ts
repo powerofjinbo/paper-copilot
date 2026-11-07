@@ -56,6 +56,7 @@ import type {
   TermEntry,
   Usage,
   PromptBlock,
+  DerivedRelation,
 } from '@paper-copilot/core';
 import type { z } from 'zod';
 
@@ -259,6 +260,12 @@ export interface FactService {
   saveFigures(figures: FigureEntry[]): Promise<void>;
   saveTerminology(terms: TermEntry[]): Promise<void>;
   addEvidence(rec: EvidenceRecord): Promise<void>;
+  /**
+   * Numbers derived from two facts that the gate accepts (core derivedRelations, cached). Passed to every
+   * gate call (ghost, rewrite, draft) and used by linkUnit. Optional (additive): callers fall back to
+   * core derivedRelations(all()).
+   */
+  derived?(): DerivedRelation[];
 }
 
 export interface LitService {

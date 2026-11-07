@@ -15,7 +15,7 @@
  * The same class serves the fake drafter, so tests exercise the real decision code.
  */
 import { gateSentence } from '@paper-copilot/core';
-import type { DraftParagraph, DraftSentence, Fact, GateIssue, GateIssueWire, GateResult } from '@paper-copilot/core';
+import type { DerivedRelation, DraftParagraph, DraftSentence, Fact, GateIssue, GateIssueWire, GateResult } from '@paper-copilot/core';
 import type { HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
@@ -53,6 +53,8 @@ export interface GateEnv {
   allowedCiteKeys: string[];
   knownLabels: string[];
   fictionalNumbers: string[];
+  /** Derived numbers the gate accepts (facts.derived()); optional for older callers. */
+  derived?: DerivedRelation[];
 }
 
 export interface PlannedParagraph {
@@ -193,6 +195,7 @@ export class DraftCollector {
         allowedCiteKeys: env.allowedCiteKeys,
         knownLabels: env.knownLabels,
         fictionalNumbers: env.fictionalNumbers,
+        derived: env.derived ?? [],
         intentText,
         claimedFactIds: s.fact_ids ?? [],
       }),
