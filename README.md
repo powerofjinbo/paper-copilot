@@ -102,7 +102,7 @@ and is tested here (simulated AI, local git remote, TeX Live 2023):
 | `apps/web` (sync core, decorations, ghost, panels, API client, guided tour, demo PDF) | 242 tests pass |
 | `sidecar` (your `style_check.py` behind a JSON-lines process) | 25 tests pass |
 | `node e2e/fullstack.mjs` (real server + built app in Chromium: the Phase 1a acceptance walk, compile, SyncTeX both ways, draft and review, push refused then allowed, a co-author pull keeping 29/29 sentence ids, kill -9 and restart; the submission check, a planted abstract/body number drift, restoring a version, a derived "2.5 times" through the gate, a re-run result JSON marking its fact stale, the file switcher on the multi-file fixture, the 4-step layout in 中文/light/dark) | 28/28 |
-| Browser harnesses (`apps/web/harness/*.mjs`: app in demo mode, editor, PDF, UX review; the demo walk includes the guided tour in 中文/light and EN/dark) | 32/32, 14/14, 17/17, 18/18 |
+| Browser harnesses (`apps/web/harness/*.mjs`: app in demo mode, editor, PDF, UX review; the demo walk includes the guided tour in 中文/light and EN/dark) | 33/33, 14/14, 17/17, 18/18 |
 
 The segmenter agrees with the skill's `style_check.py` on 100% of the fixture's sentences. An adversarial review from
 five angles (integrity, anchoring, security, SDK correctness, UX) found 36 problems; each was reproduced by a failing
