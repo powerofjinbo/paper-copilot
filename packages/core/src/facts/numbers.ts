@@ -268,6 +268,10 @@ function matchWith(tok: NumeralToken, facts: Fact[], scalesOf: (t: NumeralToken,
  * see the module comment.)
  */
 export function matchNumeral(tok: NumeralToken, facts: Fact[]): NumeralMatch[] {
+  return matchNumeralUncached(tok, facts);
+}
+
+function matchNumeralUncached(tok: NumeralToken, facts: Fact[]): NumeralMatch[] {
   try {
     return matchWith(tok, facts, strictScales).map((m) => ({ factId: m.factId, field: m.field, scale: m.scale as 1 | 100 }));
   } catch {
@@ -455,6 +459,17 @@ export function resolveLinks(toks: NumeralDetail[], facts: Fact[], prefer: strin
   const cutFacts = usable.filter((f) => CUT_KINDS.has(f.kind));
   const pref = new Set(Array.isArray(prefer) ? prefer : []);
   const byId = new Map(usable.map((f) => [f.id, f] as const));
+  // Within this one call the fact lists are fixed, so equal numerals ("1\\%" written 3000 times in a pulled
+  // paragraph) share one match: the cost is per distinct numeral, not per occurrence. The key holds every
+  // token field matchWith reads (raw covers exponentOf's fallback).
+  const memo = new Map<string, NumeralMatch[]>();
+  const matchNumeral = (tok: NumeralToken, list: Fact[]): NumeralMatch[] => {
+    const d = tok as Partial<NumeralDetail>;
+    const key = `${list === usable ? 'u' : 'c'}|${tok.raw}|${tok.value}|${tok.decimals}|${tok.unit}|${tok.percent}|${tok.points}|${d.factor}|${d.ratioDen}|${d.exponent}`;
+    let ms = memo.get(key);
+    if (!ms) memo.set(key, (ms = matchNumeralUncached(tok, list)));
+    return ms.map((m) => ({ ...m }));
+  };
   const links: TokenLink[] = toks.map((tok) => {
     if (tok.structural && tok.smallCount && !tok.ratioPart) {
       const ms = matchNumeral(tok, usable);

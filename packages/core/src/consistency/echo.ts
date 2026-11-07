@@ -188,7 +188,7 @@ type Resolution = { id: string; by: 'same_value' | 'row' | 'context' };
  * Pick one candidate of an unlinked numeral that fits facts with different values, for the report only
  * (see NumberOccurrence.resolvedBy). Null when the numeral stays ambiguous.
  */
-function resolveForReport(cls: Classes, l: TokenLink, ids: readonly string[], siblingRows: ReadonlySet<string>, sentenceStems: ReadonlySet<string>): Resolution | null {
+function resolveForReport(cls: Classes, l: TokenLink, ids: readonly string[], siblingRows: ReadonlySet<string>, sentenceStems: ReadonlySet<string>, stemsOf: (f: Fact) => Set<string> = nameStems): Resolution | null {
   // 1. every candidate holds this very number: prefer the uncertainty field of a main fact (groups with "2.49 ± 0.24")
   const keys = new Set(ids.map((id) => matchedNumberKey(cls, l, id)));
   if (keys.size === 1 && !keys.has(null)) {
@@ -207,7 +207,7 @@ function resolveForReport(cls: Classes, l: TokenLink, ids: readonly string[], si
   const qs = cls.quantities(ids);
   const names = qs.map((id) => {
     const f = cls.fact(id);
-    return f ? nameStems(f) : new Set<string>();
+    return f ? stemsOf(f) : new Set<string>();
   });
   const common = names.length ? [...names[0]!].filter((w) => names.every((n) => n.has(w))) : [];
   const scores = names.map((n) => [...n].filter((w) => !common.includes(w) && sentenceStems.has(w)).length);
@@ -219,7 +219,17 @@ function resolveForReport(cls: Classes, l: TokenLink, ids: readonly string[], si
 function occurrencesOf(units: readonly ConsistencyUnit[], cls: Classes, facts: Fact[], derived: readonly DerivedRelation[]): { occ: Occ[]; unmatched: Occ[] } {
   const occ: Occ[] = [];
   const unmatched: Occ[] = [];
+  // Facts are fixed during one report: name words are computed once per fact, and within a sentence an
+  // identical numeral with identical candidates resolves the same way (a pulled paragraph that repeats
+  // "1\\%" thousands of times costs one resolution, not thousands).
+  const stemCache = new Map<Fact, Set<string>>();
+  const stemsOf = (f: Fact): Set<string> => {
+    let st = stemCache.get(f);
+    if (!st) stemCache.set(f, (st = nameStems(f)));
+    return st;
+  };
   units.forEach((u, unitIndex) => {
+    const resolveMemo = new Map<string, Resolution | null>();
     let toks: NumeralDetail[];
     let links: TokenLink[];
     try {
@@ -260,7 +270,9 @@ function occurrencesOf(units: readonly ConsistencyUnit[], cls: Classes, facts: F
         let resolved: Resolution | null = null;
         if (!l.linked && qs.length > 1) {
           sentenceStems ??= new Set(contentStems(plainTokens(plainText(u.text))));
-          resolved = resolveForReport(cls, l, ids, siblingRows, sentenceStems);
+          const key = `${ids.join(',')}|${l.matches.map((m) => `${m.factId}:${m.field}:${m.scale}`).join(',')}`;
+          if (resolveMemo.has(key)) resolved = resolveMemo.get(key) ?? null;
+          else resolveMemo.set(key, (resolved = resolveForReport(cls, l, ids, siblingRows, sentenceStems, stemsOf)));
         }
         const chosen = l.linked ?? resolved?.id ?? null;
         const primary = chosen ? (resolved?.by === 'same_value' ? chosen : cls.primary(chosen)) : (qs[0] ?? ids[0]!);
