@@ -235,8 +235,7 @@ function Consistency({ r }: { r: EchoReport }) {
                   ))}
                   {q.renderings.length > 1 ? <Badge tone="warn">{t('cons.forms', { n: q.renderings.length })}</Badge> : null}
                   {q.stale ? <Badge tone="warn">{t('facts.stale')}</Badge> : null}
-                </span>
-                <span className="q-parts">
+                  <span className="q-sep" aria-hidden="true" />
                   {q.parts.map((p) => (
                     <PartChip key={p} part={p} />
                   ))}

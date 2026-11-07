@@ -968,3 +968,21 @@ button.chip {
 .voice-embedded .psec:last-child {
   border-bottom: 0;
 }
+
+/* the editor bar holds only transient items in the shell (its toggles moved to Settings): hide it when empty */
+.pc-editor-bar:not(:has(> :not(.pc-bar-spacer))) {
+  display: none;
+}
+.q-sep {
+  width: 1px;
+  height: 12px;
+  margin: 0 2px;
+  background: var(--line);
+}
+/* the file switcher's menu hangs below the bar: the left group must not clip it */
+.topbar-left {
+  overflow: visible;
+}
+.topbar-left .crumbs-btn {
+  max-width: 100%;
+}

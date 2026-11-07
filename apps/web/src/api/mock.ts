@@ -131,6 +131,8 @@ export interface MockOptions {
   files?: Record<string, string>;
   mainFile?: string;
   projectName?: string;
+  /** Repository path of the claim JSON (default MOCK_ARTIFACT). */
+  claimArtifact?: string;
   /** Extra facts beside the claim JSON's (the large fixture's results/*.json, *.csv). */
   extraFacts?: (sha: (raw: string) => Promise<string>) => Promise<Fact[]>;
   claimJson?: string;
@@ -229,6 +231,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   private readonly notesLanguage: NotesLanguage;
   private readonly log: (msg: string, data?: unknown) => void;
   private readonly extraFacts: MockOptions['extraFacts'];
+  private readonly claimArtifact: string;
 
   private _connected = false;
   private initPromise: Promise<void> | null = null;
@@ -276,6 +279,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
     this.jobStep = opts.jobStepMs ?? 450;
     this.notesLanguage = opts.notesLanguage ?? 'zh';
     this.extraFacts = opts.extraFacts;
+    this.claimArtifact = opts.claimArtifact ?? MOCK_ARTIFACT;
     this.log = opts.log ?? ((msg, data) => console.warn(`[mock] ${msg}`, data ?? ''));
   }
 
@@ -525,7 +529,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
   }
 
   private async buildFacts(): Promise<Fact[]> {
-    const claim = buildClaimFacts(this.claimRaw, MOCK_ARTIFACT, this.factSha);
+    const claim = buildClaimFacts(this.claimRaw, this.claimArtifact, this.factSha);
     if (!this.extraFacts) return claim;
     const extra = await this.extraFacts(sha256Hex);
     const seen = new Set(claim.map((f) => f.id));
@@ -1099,7 +1103,7 @@ export class MockApiClient implements ApiClient, ApiClientExtras {
     const jobId = this.startJob('read-repo', async (progress) => {
       progress(this.sim('Reading README.md and docs/', '正在阅读 README.md 和 docs/'));
       await sleep(this.jobStep);
-      progress(this.sim(`Reading ${MOCK_ARTIFACT}`, `正在读取 ${MOCK_ARTIFACT}`));
+      progress(this.sim(`Reading ${this.claimArtifact}`, `正在读取 ${this.claimArtifact}`));
       await sleep(this.jobStep);
       const r = await this.rescanFacts();
       return { facts: r.count, candidates: 0 };
