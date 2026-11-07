@@ -14,7 +14,15 @@
  *   changes (no .paper files, no CJK); a co-author commit (one edited, one inserted sentence) -> Pull ->
  *   >= 95% ids kept, the edited sentence `external`, the editor updated (doc.replace); the APS disclosure
  *   counts; reload -> state persists; kill -9 + restart -> ids, states and the last PDF persist; dark
- *   mode; with sync mode "none" Pull/Push are unavailable and the Sync panel says why.
+ *   mode; with sync mode "none" Pull/Push are unavailable and the Sync panel says why. Batch B features: the
+ *   submission check (top-bar pill) lists the proposed sentences as unreviewed blockers and is clean once
+ *   they are reviewed and the APS AI-use statement is in the paper; a number mistyped in the abstract is a
+ *   drift flag in ④ Consistency; the card's History restores the imported sentence (one change, the flag
+ *   goes away); an instruct proposal stating a derived "2.5 times" (scripted simulated AI, PAPER_FAKE_SCRIPT)
+ *   passes the gate and links both facts; editing a result JSON in the analysis repo marks its fact stale
+ *   (watcher notice, Facts panel, card chip, consistency); on fixtures/large-multifile the file switcher
+ *   lists main.tex and its four \input files and opens each, the unresolved numerals cover every file and
+ *   a row in another file opens it; the 4-step rail in 中文, light and dark, without overflow.
  *
  *   node e2e/fullstack.mjs [--shots DIR] [--work DIR] [--port 4417] [--no-build] [--keep] [--headed]
  *
