@@ -29,6 +29,7 @@ import { STATE_LABEL } from './labels';
 import { rewritableLength, rewriteEffect, rewriteExtension } from './rewrite';
 import { factLabel, nextInQueueOf, reviewQueueOf } from './safe';
 import { publishUnits, storeBridge } from './storeBridge';
+import { compileErrorLines } from './compileErrors';
 import { DocSync } from './sync/docSync';
 import { paperTheme, texHighlight } from './theme';
 import { useEditorUi } from './uiStore';
@@ -183,6 +184,7 @@ export class EditorController {
           hoverCards(),
           paperGutters(),
           storeBridge(),
+          compileErrorLines(),
           tooltips({ position: 'fixed' }),
           paperTheme,
           EditorView.contentAttributes.of({

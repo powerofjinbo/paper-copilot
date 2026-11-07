@@ -32,14 +32,15 @@
 .rail-num {
   display: inline-grid;
   place-items: center;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   border: 1px solid currentColor;
-  font-size: 9px;
+  /* WCAG AA at this size: full opacity and the secondary ink (not the muted one) */
+  font-size: 10.5px;
   font-weight: 650;
   line-height: 1;
-  opacity: 0.85;
+  color: var(--ink-2);
   font-variant-numeric: tabular-nums;
 }
 .rail-tab.is-active .rail-num {
@@ -132,6 +133,22 @@
 }
 .first-run-line {
   color: var(--ink-2);
+}
+.first-run-subtitle {
+  margin: 8px 0 4px;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+.first-run-editor {
+  margin: 0;
+  padding: 0 0 0 18px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+.first-run-editor .kbd {
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 4px;
 }
 .first-run-foot {
   display: flex;

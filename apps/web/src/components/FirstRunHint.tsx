@@ -8,6 +8,15 @@ import { Button } from './ui';
 
 const LINES: Record<LeftStep, MsgKey> = { plan: 'firstRun.plan', sources: 'firstRun.sources', todo: 'firstRun.todo', check: 'firstRun.check' };
 const LABELS: Record<LeftStep, MsgKey> = { plan: 'step.planTitle', sources: 'step.sourcesTitle', todo: 'step.todoTitle', check: 'step.checkTitle' };
+/** How to write with the AI: the interactions all happen in the editor, so the intro names them (Mac-aware keys). */
+const EDITOR_LINES: readonly MsgKey[] = ['firstRun.editorClick', 'firstRun.editorGhost', 'firstRun.editorIntent', 'firstRun.editorReview', 'firstRun.editorCompile', 'firstRun.editorHelp'];
+
+/** Key names in the (translated, our own) text, shown as <kbd>: ⌘+Enter, ⌥/, ⌥+↓, Ctrl+S, Tab, ?. */
+const KEY_RE = /((?:⌘|⌥|Ctrl|Alt)(?:\+?(?:Enter|Space|Shift|\/|↓|↑|→|\.|[A-Za-z](?![a-z])))+|\bTab\b|\?)/;
+
+function withKeys(text: string) {
+  return text.split(KEY_RE).map((p, i) => (i % 2 ? <kbd key={i} className="kbd">{p}</kbd> : p));
+}
 
 export function FirstRunHint() {
   const t = useT();
@@ -33,6 +42,12 @@ export function FirstRunHint() {
           </li>
         ))}
       </ol>
+      <h3 className="first-run-subtitle">{t('firstRun.editorTitle')}</h3>
+      <ul className="first-run-editor">
+        {EDITOR_LINES.map((k) => (
+          <li key={k}>{withKeys(t(k))}</li>
+        ))}
+      </ul>
       <div className="first-run-foot">
         <span className="muted small">{t('firstRun.settings')}</span>
         <Button size="sm" variant="primary" onClick={dismiss}>

@@ -9,7 +9,7 @@ import type { ApiClient } from '../contracts';
 import { htmlLang, useT } from '../i18n';
 import { useShell } from '../state/extra';
 import { useWorkspace } from '../state/store';
-import { compileNow, forwardSync, openPush, openStep, pullNow, revealLine, runSubmissionCheck, switchFile } from './actions';
+import { compileNow, forwardSync, notify, openPush, openStep, pullNow, revealLine, runSubmissionCheck, switchFile } from './actions';
 import { IconCheck, IconChevronDown, IconFile, IconGear, IconHelp, IconLocate, IconPdf, IconPlay, IconPull, IconPush, IconSparkle, IconSync, IconWarn, Spinner } from './Icons';
 import { PopoverButton } from './Popover';
 import { submissionStatus } from './steps';
@@ -111,6 +111,7 @@ function compileLabel(t: ReturnType<typeof useT>, compile: ReturnType<typeof use
 function CompilePill({ api }: { api: ApiClient }) {
   const t = useT();
   const compile = useWorkspace((s) => s.compile);
+  const connected = useWorkspace((s) => s.connected);
   const rightPane = useWorkspace((s) => s.rightPane);
   const setRightPane = useWorkspace((s) => s.setRightPane);
   const pdfFitHidden = useShell((s) => s.fitHidden.pdf);
@@ -123,11 +124,13 @@ function CompilePill({ api }: { api: ApiClient }) {
       <button
         type="button"
         className={`compile-pill compile-${compile.state}`}
-        onClick={() => void compileNow(api)}
+        onClick={() => (connected ? void compileNow(api) : notify('warn', t('net.unreachable')))}
         aria-label={t('compile.button')}
         aria-describedby={statusId}
         aria-keyshortcuts="Control+S Meta+S"
-        title={`${label} — ${t('compile.clickToCompile')}`}
+        // the server is gone (terminal closed, laptop slept): say so instead of a raw "Failed to fetch"
+        aria-disabled={!connected}
+        title={connected ? `${label} — ${t('compile.clickToCompile')}` : t('compile.offline')}
       >
         {icon}
         <span className="compile-pill-label" id={statusId}>
@@ -213,6 +216,7 @@ function SyncMenu({ api }: { api: ApiClient }) {
   const t = useT();
   const project = useWorkspace((s) => s.project);
   const reports = useShell((s) => s.pullReports);
+  const connected = useWorkspace((s) => s.connected);
   const [pulling, setPulling] = useState(false);
   const syncOff = project?.config.sync.mode === 'none';
   const sum = reports?.reduce(
@@ -241,7 +245,7 @@ function SyncMenu({ api }: { api: ApiClient }) {
             type="button"
             role="menuitem"
             className="menu-item"
-            disabled={syncOff || pulling}
+            disabled={syncOff || pulling || !connected}
             title={t('top.pullTitle')}
             onClick={async () => {
               close();
@@ -260,7 +264,8 @@ function SyncMenu({ api }: { api: ApiClient }) {
             type="button"
             role="menuitem"
             className="menu-item"
-            title={syncOff ? t('sync.offShort') : t('top.pushTitle')}
+            disabled={!connected}
+            title={!connected ? t('compile.offline') : syncOff ? t('sync.offShort') : t('top.pushTitle')}
             onClick={() => {
               close();
               openPush();

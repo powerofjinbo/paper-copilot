@@ -9,7 +9,7 @@ import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemir
 import type { Proposal } from '@paper-copilot/core';
 import { changeAnnotation, makeAnnotation } from './annotations';
 import { ctxField } from './context';
-import { MOD_KEY } from './labels';
+import { ALT_KEY, MOD_KEY } from './labels';
 import { currentLang, edText, type EdKey } from './i18n';
 
 const tr = (key: EdKey, vars?: Record<string, string | number>) => edText(currentLang(), key, vars);
@@ -141,7 +141,7 @@ class IntentHintWidget extends WidgetType {
     const span = document.createElement('span');
     span.className = 'pc-intent-hint';
     span.setAttribute('aria-hidden', 'true');
-    span.textContent = tr('irHint', { mod: MOD_KEY });
+    span.textContent = tr('irHint', { mod: MOD_KEY, alt: ALT_KEY });
     return span;
   }
 }

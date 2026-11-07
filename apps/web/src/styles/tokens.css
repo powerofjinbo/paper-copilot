@@ -8,7 +8,8 @@
   --bg-sunken: #f2f0eb;
   --ink: #1d1c1a;
   --ink-2: #4a4843;
-  --ink-3: #78756e;
+  /* muted text: >= 4.5:1 (WCAG AA) on every light surface, the rail and status-bar grey included */
+  --ink-3: #63605a;
   --line: #e2dfd8;
   --accent: #2f5fb3;
   --accent-ink: #ffffff;

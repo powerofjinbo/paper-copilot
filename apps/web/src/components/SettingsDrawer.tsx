@@ -44,6 +44,14 @@ export function SettingsDrawer({ api }: { api: ApiClient }) {
   const mono = useEditorUi((s) => s.mono);
   const toggleMono = useEditorUi((s) => s.toggleMono);
   const rightPane = useWorkspace((s) => s.rightPane);
+  // what is on screen, computed as App does: the pane opens after a compile (or when asked for) and the
+  // auto-fit may hide it to keep the editor readable
+  const pdfCompiled = useWorkspace((s) => s.compile.pdfVersion !== null || s.compile.state !== 'idle');
+  const pdfPinned = useShell((s) => s.pinned.pdf);
+  const pdfWanted = pdfCompiled || pdfPinned;
+  const pdfFitHidden = useShell((s) => s.fitHidden.pdf);
+  const pdfShown = rightPane === 'pdf' && pdfWanted && !pdfFitHidden;
+  const pdfHint = rightPane !== 'pdf' || pdfShown ? null : pdfWanted ? t('settings.pdfHintHidden') : t('settings.pdfHintIdle');
   const setRightPane = useWorkspace((s) => s.setRightPane);
   const panelRef = useRef<HTMLDivElement>(null);
   const returnTo = useRef<HTMLElement | null>(null);
@@ -122,13 +130,17 @@ export function SettingsDrawer({ api }: { api: ApiClient }) {
             <label className="settings-check">
               <input
                 type="checkbox"
-                checked={rightPane === 'pdf'}
+                checked={pdfShown}
                 onChange={(e) => {
+                  // an explicit choice: shown now (pinned), or kept closed even after a compile
                   useShell.getState().pinPdf(e.target.checked);
                   setRightPane(e.target.checked ? 'pdf' : 'none');
                 }}
               />
-              <span>{t('settings.pdf')}</span>
+              <span>
+                {t('settings.pdf')}
+                {pdfHint ? <span className="muted small settings-hint">{pdfHint}</span> : null}
+              </span>
             </label>
             {firstRunDone ? (
               <button type="button" className="link-btn small" onClick={() => useShell.setState({ firstRunDone: false })}>

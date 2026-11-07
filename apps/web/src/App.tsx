@@ -9,9 +9,11 @@ import type { ApiClient, EditorHandle, PdfHandle } from './contracts';
 import { Editor } from './editor/Editor';
 import { PdfPane } from './pdf/PdfPane';
 import { getApiClient } from './api';
-import { errorText } from './api/errors';
+import { errorText, setNetworkErrorText } from './api/errors';
 import { compileNow, flushPendingReveal, forwardSync, loadWorkspace, notify, openStep, refetchFacts, refetchOutline, refetchQuestions, refreshFiles, revealIn, revealLine, revealSentence, runSubmissionCheck, switchFile } from './components/actions';
-import { LeftRail } from './components/LeftRail';
+import { CompileBar } from './components/CompileBar';
+import { LeftRail, STEP_META } from './components/LeftRail';
+import { stepOf } from './components/steps';
 import { Resizer } from './components/Resizer';
 import { SettingsDrawer } from './components/SettingsDrawer';
 import { ShortcutHelp } from './components/ShortcutHelp';
@@ -26,6 +28,8 @@ import { useEditorUi } from './editor/uiStore';
 
 // the shell's Settings drawer holds the heatmap and font toggles
 useEditorUi.setState({ togglesInShell: true });
+// "Failed to fetch" / "Load failed" become a translated "cannot reach the server, run pnpm paper open"
+setNetworkErrorText(() => translate(useShell.getState().lang, 'net.unreachable'));
 import './styles/shell.css';
 import './styles/panels.css';
 import './styles/steps.css';
@@ -184,17 +188,22 @@ function isHelpKey(e: KeyboardEvent): boolean {
 
 /** Narrowest editor column the auto-fit keeps (about 60 characters of prose plus the gutters). */
 const EDITOR_MIN_PX = 560;
+/** Width of the strip that stands for a pane hidden to make room (shell.css .pane-strip). */
+const STRIP_PX = 30;
 
 /**
  * Give the editor priority over the side panes (one sentence per line only reads well on a wide
  * column): when the editor would be narrower than EDITOR_MIN_PX, hide the PDF first, then the left
- * panel (the rail stays). A pane the user opened explicitly (pinned) is never hidden. Nothing is
- * persisted, so the panes come back when the window is wide enough again.
+ * panel (the rail stays). A pane the user opened explicitly (pinned) is not hidden; when BOTH are pinned
+ * and do not fit, the one pinned earlier yields. A hidden pane leaves a narrow strip (App: PaneStrip) that
+ * says it is there and brings it back. Nothing is persisted, so the panes come back when the window is
+ * wide enough again.
  */
 function useAutoFit(mainRef: RefObject<HTMLDivElement | null>, wantLeft: boolean, wantPdf: boolean): void {
   const leftWidth = useShell((s) => s.leftWidth);
   const rightWidth = useShell((s) => s.rightWidth);
   const pinned = useShell((s) => s.pinned);
+  const lastPinned = useShell((s) => s.lastPinned);
   const [width, setWidth] = useState(0);
   useEffect(() => {
     const el = mainRef.current;
@@ -212,13 +221,56 @@ function useAutoFit(mainRef: RefObject<HTMLDivElement | null>, wantLeft: boolean
     // the panes' CSS limits (shell.css): left 260px..42vw, PDF 240px..50vw
     const lw = Math.max(260, Math.min(leftWidth, 0.42 * vw));
     const pw = Math.max(240, Math.min(rightWidth, 0.5 * vw));
-    const editor = (l: boolean, p: boolean) => width - rail - (l ? lw + 1 : 0) - (p ? pw + 1 : 0);
+    const editor = (l: boolean, p: boolean) => width - rail - (l ? lw + 1 : wantLeft ? STRIP_PX : 0) - (p ? pw + 1 : wantPdf ? STRIP_PX : 0);
+    if (wantLeft && wantPdf && pinned.left && pinned.pdf && editor(true, true) < EDITOR_MIN_PX) {
+      // both asked for, no room for both: the newer request wins (this effect runs again with the new pins)
+      if (lastPinned === 'pdf') useShell.getState().unpinLeft();
+      else useShell.getState().pinPdf(false);
+      return;
+    }
     let pdf = wantPdf;
     let left = wantLeft;
     if (pdf && !pinned.pdf && editor(left, true) < EDITOR_MIN_PX) pdf = false;
     if (left && !pinned.left && editor(true, pdf) < EDITOR_MIN_PX) left = false;
     useShell.getState().setFitHidden({ left: wantLeft && !left, pdf: wantPdf && !pdf });
-  }, [width, wantLeft, wantPdf, leftWidth, rightWidth, pinned, mainRef]);
+  }, [width, wantLeft, wantPdf, leftWidth, rightWidth, pinned, lastPinned, mainRef]);
+}
+
+/**
+ * The strip a pane leaves when the auto-fit hid it to keep the editor readable: it says the pane is there
+ * (and, for the PDF, the compile state), and a click brings it back (pinning it; the other pane then yields).
+ */
+function PaneStrip({ side }: { side: 'left' | 'pdf' }) {
+  const t = useT();
+  const compile = useWorkspace((s) => s.compile);
+  const step = useWorkspace((s) => s.leftTab);
+  if (side === 'left') {
+    const label = t(STEP_META[stepOf(step) ?? 'plan'].label);
+    return (
+      <button type="button" className="pane-strip pane-strip-left" data-testid="panel-strip" title={t('fit.panelHidden')} aria-label={`${label}: ${t('fit.panelHidden')}`} onClick={() => useShell.getState().setLeftCollapsed(false)}>
+        <span className="pane-strip-arrow" aria-hidden="true">›</span>
+        <span className="pane-strip-label">{label}</span>
+      </button>
+    );
+  }
+  const tone = compile.state === 'error' ? 'error' : compile.state === 'running' ? 'busy' : compile.pdfVersion !== null ? 'ok' : 'idle';
+  return (
+    <button
+      type="button"
+      className={`pane-strip pane-strip-pdf is-${tone}`}
+      data-testid="pdf-strip"
+      title={t('fit.pdfHidden')}
+      aria-label={`PDF: ${t('fit.pdfHidden')}`}
+      onClick={() => {
+        if (useWorkspace.getState().rightPane === 'none') useWorkspace.getState().setRightPane('pdf');
+        useShell.getState().pinPdf(true);
+      }}
+    >
+      <span className="pane-strip-arrow" aria-hidden="true">‹</span>
+      <span className="pane-strip-dot" aria-hidden="true" />
+      <span className="pane-strip-label">PDF</span>
+    </button>
+  );
 }
 
 /** Cross-file navigation: once the requested file is open and its units arrived, reveal the target. */
@@ -313,6 +365,7 @@ function Workspace({ api }: { api: ApiClient }) {
       <TopBar api={api} />
       <div className="shell-main" ref={mainRef}>
         <LeftRail />
+        {fitHidden.left && !userCollapsed ? <PaneStrip side="left" /> : null}
         {!leftCollapsed ? (
           <>
             <aside className="shell-panel" aria-label={t('tab.list')} lang={htmlLang(lang)}>
@@ -322,6 +375,7 @@ function Workspace({ api }: { api: ApiClient }) {
           </>
         ) : null}
         <main className="shell-editor" lang="en">
+          <CompileBar />
           {file ? (
             <Editor key={file} api={api} file={file} onReady={onEditorReady} />
           ) : (
@@ -331,6 +385,7 @@ function Workspace({ api }: { api: ApiClient }) {
             </div>
           )}
         </main>
+        {wantPdf && fitHidden.pdf ? <PaneStrip side="pdf" /> : null}
         {showPdf ? (
           <>
             <Resizer side="right" label={t('panel.resizeRight')} />

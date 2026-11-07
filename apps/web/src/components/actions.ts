@@ -102,8 +102,8 @@ export function revealLine(line: number, file?: string | null): void {
 }
 
 export async function compileNow(api: ApiClient): Promise<void> {
-  // the author asked for the PDF: show it (on a narrow window the left panel makes room instead)
-  useShell.getState().pinPdf(true);
+  // Compiling opens the PDF pane if there is room, but does not PIN it: on a narrow window it waits behind
+  // the "PDF" strip at the right edge instead of taking the step panel the author is working in.
   const ws = useWorkspace.getState();
   if (ws.rightPane === 'none') ws.setRightPane('pdf');
   try {

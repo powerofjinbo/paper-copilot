@@ -951,3 +951,9 @@ button.pc-chip {
   gap: 6px;
   margin-top: 6px;
 }
+
+/* A line a compile error points to (compileErrors.ts). */
+.pc-editor .cm-line.pc-compile-error {
+  background: var(--danger-bg, rgba(194, 65, 45, 0.1));
+  box-shadow: inset 3px 0 0 var(--danger, #b3261e);
+}

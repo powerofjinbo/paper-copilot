@@ -19,11 +19,15 @@ interface Persisted {
   leftWidth: number;
   rightWidth: number;
   leftCollapsed: boolean;
-  /** The author asked for the PDF (PDF button, compile, forward search): never hidden for space. */
-  pdfPinned: boolean;
+  /**
+   * The author asked for the PDF pane explicitly ("Show PDF", the PDF strip, Settings, forward search): it is
+   * not hidden to make room. A compile alone does not pin it. (Stored under a new name: earlier versions also
+   * pinned it on every compile, and that stale pin must not keep hiding the step panel on every load.)
+   */
+  pdfPinnedByUser: boolean;
 }
 
-const DEFAULTS: Persisted = { lang: null, theme: 'system', leftWidth: 360, rightWidth: 520, leftCollapsed: false, pdfPinned: false };
+const DEFAULTS: Persisted = { lang: null, theme: 'system', leftWidth: 360, rightWidth: 520, leftCollapsed: false, pdfPinnedByUser: false };
 
 export const LEFT_MIN = 280;
 export const LEFT_MAX = 640;
@@ -41,7 +45,7 @@ function load(): Persisted {
       leftWidth: clamp(Number(p.leftWidth) || DEFAULTS.leftWidth, LEFT_MIN, LEFT_MAX),
       rightWidth: clamp(Number(p.rightWidth) || DEFAULTS.rightWidth, RIGHT_MIN, RIGHT_MAX),
       leftCollapsed: p.leftCollapsed === true,
-      pdfPinned: p.pdfPinned === true,
+      pdfPinnedByUser: p.pdfPinnedByUser === true,
     };
   } catch {
     return { ...DEFAULTS };
@@ -86,6 +90,8 @@ export interface ShellState {
   fitHidden: { left: boolean; pdf: boolean };
   /** Panes the user opened explicitly (the left one in this session; the PDF is remembered): never hidden for space. */
   pinned: { left: boolean; pdf: boolean };
+  /** The pane pinned last: when both are pinned and the editor would get too narrow, the other one yields. */
+  lastPinned: 'left' | 'pdf' | null;
   /** The keyboard-shortcut overlay ("?"). */
   helpOpen: boolean;
   /** The Settings drawer (⚙): voice, language, theme, ownership heatmap, cost. */
@@ -120,6 +126,8 @@ export interface ShellState {
   requestPushCheck(): void;
   setFitHidden(f: { left: boolean; pdf: boolean }): void;
   pinPdf(on: boolean): void;
+  /** Let the left panel be hidden for space again (it stays open if there is room). */
+  unpinLeft(): void;
   /** Show the left panel (an explicit user action: it is pinned). */
   showLeft(): void;
   setHelpOpen(open: boolean): void;
@@ -145,7 +153,7 @@ const initial = load();
 export const useShell = create<ShellState>((set, get) => {
   const persist = () => {
     const s = get();
-    save({ lang: s.langChosen ? s.lang : null, theme: s.theme, leftWidth: s.leftWidth, rightWidth: s.rightWidth, leftCollapsed: s.leftCollapsed, pdfPinned: s.pinned.pdf });
+    save({ lang: s.langChosen ? s.lang : null, theme: s.theme, leftWidth: s.leftWidth, rightWidth: s.rightWidth, leftCollapsed: s.leftCollapsed, pdfPinnedByUser: s.pinned.pdf });
   };
   return {
     lang: initial.lang ?? browserLang(),
@@ -163,7 +171,8 @@ export const useShell = create<ShellState>((set, get) => {
     jobFinishedAt: {},
     pushCheckRequest: 0,
     fitHidden: { left: false, pdf: false },
-    pinned: { left: false, pdf: initial.pdfPinned },
+    pinned: { left: false, pdf: initial.pdfPinnedByUser },
+    lastPinned: initial.pdfPinnedByUser ? 'pdf' : null,
     helpOpen: false,
     settingsOpen: false,
     firstRunDone: firstRunSeen(),
@@ -194,7 +203,7 @@ export const useShell = create<ShellState>((set, get) => {
     },
     setLeftCollapsed: (leftCollapsed) => {
       // expanding is always the user's explicit choice: the panel is then never hidden for space
-      set((s) => ({ leftCollapsed, pinned: { ...s.pinned, left: !leftCollapsed } }));
+      set((s) => ({ leftCollapsed, pinned: { ...s.pinned, left: !leftCollapsed }, lastPinned: leftCollapsed ? s.lastPinned : 'left' }));
       persist();
     },
     setFitHidden: (f) => {
@@ -203,8 +212,11 @@ export const useShell = create<ShellState>((set, get) => {
     },
     pinPdf: (on) => {
       if (get().pinned.pdf === on) return;
-      set((s) => ({ pinned: { ...s.pinned, pdf: on } }));
+      set((s) => ({ pinned: { ...s.pinned, pdf: on }, lastPinned: on ? 'pdf' : s.lastPinned }));
       persist();
+    },
+    unpinLeft: () => {
+      if (get().pinned.left) set((s) => ({ pinned: { ...s.pinned, left: false } }));
     },
     showLeft: () => get().setLeftCollapsed(false),
     setHelpOpen: (helpOpen) => set({ helpOpen }),

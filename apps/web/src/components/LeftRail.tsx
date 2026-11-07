@@ -96,14 +96,14 @@ export function LeftRail() {
               data-step={id}
               aria-selected={selected}
               aria-controls={panelId(id)}
-              aria-expanded={selected ? !collapsed : undefined}
               aria-label={aria}
               title={`${t(meta.title)} — ${t(meta.hint)}`}
               tabIndex={selected ? 0 : -1}
               className={`rail-tab${selected ? ' is-active' : ''}${selected && collapsed ? ' is-collapsed' : ''}`}
               onClick={() => {
-                if (selected) setCollapsed(!collapsed);
-                else select(id);
+                // a step button only selects and opens (the first click on ① must not hide the plan the
+                // intro points to); the « button at the rail foot collapses the panel
+                select(id);
               }}
             >
               <span className="rail-icon">

@@ -38,6 +38,18 @@ const GROUPS: Array<{ title: MsgKey; rows: Row[] }> = [
     ],
   },
   {
+    // the letter keys of the sentence card (open it with a click or {mod}+.; the focus must be in the card)
+    title: 'help.cardKeys',
+    rows: [
+      { keys: ['L'], label: 'help.cardAlternatives' },
+      { keys: ['R'], label: 'help.cardRewrite' },
+      { keys: ['X'], label: 'help.cardReject' },
+      { keys: ['H'], label: 'help.cardHistory' },
+      { keys: ['A'], label: 'help.cardApply' },
+      { keys: ['1–9'], label: 'help.cardPick' },
+    ],
+  },
+  {
     title: 'help.notes',
     rows: [
       { keys: [`${M}+Enter`], label: 'help.noteRender' },

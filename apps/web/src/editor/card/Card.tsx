@@ -10,7 +10,7 @@ import type { HistoryResponse, Proposal } from '@paper-copilot/core';
 import { useWorkspace } from '../../state/store';
 import { clearReplanEffect } from '../context';
 import type { EditorEnv } from '../env';
-import { isCjk, MOD_KEY } from '../labels';
+import { ALT_KEY, isCjk, MOD_KEY } from '../labels';
 import { issueLabel, lintExplain, lintLabel, originLabel, relTime, stateLabel, useEdT, type EdT } from '../i18n';
 import { factLabel, wordDiffOf } from '../safe';
 import { lintTitle } from '../decorations';
@@ -488,7 +488,7 @@ export function SentenceCard({ view, env, snap }: SentenceCardProps) {
       </div>
       {mode.kind === 'main' && !hasFocus ? (
         <div className="pc-card-hint">
-          <Kbd>{MOD_LABEL}+.</Kbd> {t('hintLetters')} · <Kbd>Alt+↓</Kbd> {t('hintNext')}
+          <Kbd>{MOD_LABEL}+.</Kbd> {t('hintLetters')} · <Kbd>{ALT_KEY}+↓</Kbd> {t('hintNext')}
         </div>
       ) : null}
       {/* text of the sentence for screen readers (the card never covers it visually) */}

@@ -24,8 +24,24 @@ export function messageOf(body: unknown, fallback: string): string {
   return fallback;
 }
 
+/**
+ * The browser's own words for "the server did not answer" (Chrome "Failed to fetch", Safari "Load failed",
+ * Firefox "NetworkError when attempting to fetch resource.", node "fetch failed"): untranslated, and they do
+ * not say that the local server stopped.
+ */
+export function isNetworkError(e: unknown): boolean {
+  return e instanceof TypeError && /failed to fetch|load failed|networkerror|fetch failed|network request failed/i.test(e.message);
+}
+
+let networkText: (() => string) | null = null;
+/** The shell's translated "cannot reach the server" message (set once by App; errors.ts stays UI-free). */
+export function setNetworkErrorText(fn: (() => string) | null): void {
+  networkText = fn;
+}
+
 /** A message for any thrown value, for notices and inline errors. */
 export function errorText(e: unknown): string {
+  if (networkText && isNetworkError(e)) return networkText();
   if (e instanceof Error) return e.message || e.name;
   if (typeof e === 'string') return e;
   try {

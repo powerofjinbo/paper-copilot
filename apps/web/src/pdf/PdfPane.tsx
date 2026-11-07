@@ -8,6 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { PdfHandle, PdfPaneProps } from '../contracts';
+import { isMockClient } from '../api/extras';
 import { useWorkspace } from '../state/store';
 import { zoomPercent } from './layout';
 import { usePdfT } from './strings';
@@ -28,6 +29,9 @@ export function PdfPane({ api, pdfVersion, onInverse, onReady }: PdfPaneProps) {
   const [retryKey, setRetryKey] = useState(0);
   const [pageDraft, setPageDraft] = useState<string | null>(null);
   const compileState = useWorkspace((s) => s.compile.state);
+  const logTail = useWorkspace((s) => s.compile.logTail);
+  const logLast = logTail.trim().split('\n').slice(-2).join(' ').slice(0, 300);
+  const mock = isMockClient(api);
 
   // Latest props for callbacks created once.
   const latest = useRef({ api, onInverse, t });
@@ -202,11 +206,37 @@ export function PdfPane({ api, pdfVersion, onInverse, onReady }: PdfPaneProps) {
                     <path d="M7 2.5h18l8.5 8.5v32a2.5 2.5 0 0 1-2.5 2.5H7A2.5 2.5 0 0 1 4.5 43V5A2.5 2.5 0 0 1 7 2.5Z" />
                     <path d="M25 2.5V11h8.5M11 20h18M11 26h18M11 32h12" />
                   </svg>
-                  <p className="pdfp-title">{t('empty')}</p>
-                  <p className="pdfp-hint">{compileState === 'error' ? t('emptyFailed') : t('emptyHint')}</p>
-                  <button type="button" className="pdfp-action" onClick={compile}>
-                    {t('compile')}
-                  </button>
+                  {compileState === 'error' ? (
+                    <>
+                      <p className="pdfp-title">{t('failedTitle')}</p>
+                      <p className="pdfp-hint">{t('emptyFailed')}</p>
+                      <button type="button" className="pdfp-action" onClick={compile}>
+                        {t('compileAgain')}
+                      </button>
+                    </>
+                  ) : compileState === 'ok' ? (
+                    // a compile succeeded without a PDF (the browser demo has no LaTeX): say why, and do not
+                    // offer the same Compile button again
+                    mock ? (
+                      <>
+                        <p className="pdfp-title">{t('demoTitle')}</p>
+                        <p className="pdfp-hint">{t('demoHint')}</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="pdfp-title">{t('noPdfTitle')}</p>
+                        {logLast ? <p className="pdfp-hint pdfp-errmsg">{logLast}</p> : null}
+                      </>
+                    )
+                  ) : (
+                    <>
+                      <p className="pdfp-title">{t('empty')}</p>
+                      <p className="pdfp-hint">{t('emptyHint')}</p>
+                      <button type="button" className="pdfp-action" onClick={compile}>
+                        {t('compile')}
+                      </button>
+                    </>
+                  )}
                 </>
               )
             ) : state === 'loading' ? (

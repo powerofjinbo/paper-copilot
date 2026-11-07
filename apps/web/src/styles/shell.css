@@ -1043,3 +1043,121 @@ body.is-resizing canvas {
     padding: 0 3px 0 4px;
   }
 }
+
+/* ---------------------------------------------------------------------------------- */
+/* Pane strips: a pane the auto-fit hid to keep the editor readable (App.tsx PaneStrip)  */
+/* ---------------------------------------------------------------------------------- */
+
+.pane-strip {
+  flex: none;
+  width: 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  background: var(--bg-sunken);
+  color: var(--ink-2);
+  font: 600 12px var(--font-ui);
+  cursor: pointer;
+}
+.pane-strip:hover {
+  background: var(--bg-hover);
+  color: var(--ink);
+}
+.pane-strip:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.pane-strip-label {
+  writing-mode: vertical-rl;
+  letter-spacing: 0.04em;
+}
+.pane-strip-arrow {
+  font-size: 15px;
+  line-height: 1;
+}
+.pane-strip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+.pane-strip-pdf.is-ok .pane-strip-dot {
+  background: var(--ok);
+}
+.pane-strip-pdf.is-error .pane-strip-dot {
+  background: var(--danger);
+}
+.pane-strip-pdf.is-busy .pane-strip-dot {
+  background: var(--accent);
+  animation: pane-strip-pulse 1s ease-in-out infinite;
+}
+@keyframes pane-strip-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* ---------------------------------------------------------------------------------- */
+/* Compile problems above the editor (CompileBar)                                       */
+/* ---------------------------------------------------------------------------------- */
+
+.compile-bar {
+  flex: none;
+  margin: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--danger-line);
+  background: var(--danger-bg);
+  color: var(--ink);
+  font: 13px/1.45 var(--font-ui);
+}
+.compile-bar.is-warn {
+  border-bottom-color: var(--warn-line);
+  background: var(--warn-bg);
+}
+.compile-bar-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.compile-bar-title {
+  font-weight: 650;
+  color: var(--danger);
+}
+.compile-bar.is-warn .compile-bar-title {
+  color: var(--warn);
+}
+.compile-bar-spacer {
+  flex: 1;
+}
+.compile-bar-list {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.compile-bar-list li {
+  margin: 2px 0;
+}
+.compile-bar-loc {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  margin-right: 6px;
+}
+.compile-bar-hint {
+  margin: 4px 0 0;
+  color: var(--ink-2);
+}
+.compile-bar-log {
+  max-height: 180px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--bg-elev);
+  font: 11.5px/1.4 var(--font-mono);
+  white-space: pre-wrap;
+}
