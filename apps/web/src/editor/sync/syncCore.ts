@@ -396,12 +396,17 @@ export class SyncCore {
 
     // Same server process. After a reconnect some pending entries may have been applied with their acks
     // lost: assume the k first were applied when that explains the snapshot best (k <= V - ackedVersion).
+    // Only entries that were actually on the wire can have been applied: a change typed while the socket
+    // was down (sent=false) never reached the server, however well it would "explain" the snapshot (a
+    // co-author's insertion at the same spot can be a smaller diff from it than from the true base).
     let k = 0;
     let base = acked;
     let serverSide = opts.diff(acked.toString(), snapshot.text);
     if (opts.reconnect) {
+      let onWire = 0;
+      while (onWire < pending.length && pending[onWire]!.sent) onWire++;
       let t = acked;
-      for (let i = 0; i < Math.min(pending.length, V - this.ackedVersion); i++) {
+      for (let i = 0; i < Math.min(onWire, V - this.ackedVersion); i++) {
         t = pending[i]!.changes.apply(t);
         const d = opts.diff(t.toString(), snapshot.text);
         if (changeSize(d) < changeSize(serverSide)) {

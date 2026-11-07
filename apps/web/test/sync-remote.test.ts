@@ -475,7 +475,7 @@ describe('server restart with two tabs', () => {
     const base = 'a\nb\nc\n';
     const ours = 'a\nb at eac\nc!\n';
     const theirs = 'a\nb at each tracker\nc\n';
-    expect(merge3(base, ours, theirs)).toEqual({ text: 'a\nb at eac\nc!\n', conflicts: [2] });
+    expect(merge3(base, ours, theirs)).toEqual({ text: 'a\nb at eac\nb at each tracker\nc!\n', conflicts: [2] });
     expect(merge3(base, ours, theirs, { prefer: 'theirs' })).toEqual({ text: 'a\nb at each tracker\nc!\n', conflicts: [] });
   });
 });

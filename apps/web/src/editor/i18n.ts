@@ -156,7 +156,7 @@ const EN = {
   syncMerged: '{file}: merged a change from the server (pull, disk edit or another tab) with your unsent typing.',
   syncConflict: '{file}: your edit and a change from the server (pull, disk edit or another tab) touched the same text at line {lines}. Both texts were kept; please check.',
   syncRestored: '{file}: the server restarted without your latest unsaved edits; they were re-sent from the editor.',
-  syncRestoredConflict: '{file}: the server restarted, and line {lines} changed both on disk and in the editor. The editor version was kept; compare it with the disk / Overleaf version.',
+  syncRestoredConflict: '{file}: the server restarted, and line {lines} changed both on disk and in the editor. Both versions were kept (the editor version first, the disk version below it); keep the one you want.',
   syncLegacy: '{file}: re-synced with the server by sending the editor text.',
 } as const;
 
@@ -275,7 +275,7 @@ const ZH: Record<EdKey, string> = {
   syncMerged: '{file}：服务器上的改动（拉取、磁盘修改或另一个标签页）已与你尚未发送的输入合并。',
   syncConflict: '{file}：你的修改和服务器上的改动（拉取、磁盘修改或另一个标签页）改了同一处文字（第 {lines} 行）。两边的文字都保留了，请检查。',
   syncRestored: '{file}：服务器重启后丢失了你最近未保存的修改；已从编辑器重新发送。',
-  syncRestoredConflict: '{file}：服务器重启了，第 {lines} 行在磁盘上和编辑器里都被改过。保留了编辑器的版本；请与磁盘 / Overleaf 上的版本对照。',
+  syncRestoredConflict: '{file}：服务器重启了，第 {lines} 行在磁盘上和编辑器里都被改过。两个版本都保留了：编辑器的在前，磁盘上的在后；请保留你想要的那一个。',
   syncLegacy: '{file}：已用编辑器中的文字与服务器重新同步。',
 };
 

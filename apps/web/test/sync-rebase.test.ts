@@ -457,8 +457,10 @@ describe('merge3', () => {
   it('takes an identical change once', () => {
     expect(merge3(B, 'a\nX\nc\nd\ne\n', 'a\nX\nc\nd\ne\nf\n')).toEqual({ text: 'a\nX\nc\nd\ne\nf\n', conflicts: [] });
   });
-  it('keeps ours on a conflict and reports its line', () => {
-    expect(merge3(B, 'a\nb\nOURS\nd\ne\n', 'a\nb\nTHEIRS\nd\ne\n')).toEqual({ text: 'a\nb\nOURS\nd\ne\n', conflicts: [3] });
+  it('keeps both sides on a conflict (ours first) and reports its line', () => {
+    expect(merge3(B, 'a\nb\nOURS\nd\ne\n', 'a\nb\nTHEIRS\nd\ne\n')).toEqual({ text: 'a\nb\nOURS\nTHEIRS\nd\ne\n', conflicts: [3] });
+    // a last line without a newline does not glue the two versions together
+    expect(merge3('a\nb', 'a\nOURS', 'a\nTHEIRS').text).toBe('a\nOURS\nTHEIRS');
   });
   it('handles insertions at the ends and deletions', () => {
     expect(merge3(B, 'top\na\nb\nc\nd\ne\n', 'a\nb\nd\ne\nend')).toEqual({ text: 'top\na\nb\nd\ne\nend', conflicts: [] });

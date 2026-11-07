@@ -6,8 +6,9 @@
  * Rules (one sentence per line, so a line is the natural unit):
  *  - a region changed on one side only takes that side's lines;
  *  - a region changed identically on both sides is taken once (edits saved before the restart);
- *  - a region changed differently on both sides is a conflict: OUR lines are kept (the author's text is
- *    never lost) and the region's line numbers in the result are reported, so the caller can say so.
+ *  - a region changed differently on both sides is a conflict: OUR lines are kept, followed by THEIR lines
+ *    (neither the author's text nor the disk's is lost), and the region's first line number in the result
+ *    is reported, so the caller can say so.
  *    With `prefer: 'theirs'` THEIR lines are kept and nothing is reported: the caller knows that their side
  *    already descends from ours (another tab restored the same text to the restarted server, then kept
  *    typing), so our older copy of the line must not overwrite the newer one.
@@ -97,7 +98,7 @@ export function lineHunks(a: readonly string[], b: readonly string[]): Hunk[] {
 
 export interface Merge3Result {
   text: string;
-  /** 1-based line numbers (in `text`) of conflicting regions, where our lines were kept. */
+  /** 1-based line numbers (in `text`) of conflicting regions (our lines, then theirs, start there). */
   conflicts: number[];
 }
 
@@ -165,9 +166,14 @@ export function merge3(base: string, ours: string, theirs: string, opts: Merge3O
       else if (insO && !insT) out.push(...(startsWith(t.lines, insO) ? t.lines : [...insO, ...t.lines]));
       else if (preferTheirs) out.push(...t.lines);
       else {
-        // differing edits of the same lines (or two different insertions at one point): ours is kept
+        // differing edits of the same lines (or two different insertions at one point): BOTH are kept, ours
+        // first, so neither the author's text nor the disk's is lost (the restore that follows writes this
+        // text to disk); the region is reported so the caller can ask the author to choose
         conflicts.push(out.length + 1);
-        out.push(...o.lines);
+        const mine = [...o.lines];
+        const last = mine.length - 1;
+        if (t.lines.length && last >= 0 && !mine[last]!.endsWith('\n')) mine[last] = `${mine[last]}\n`;
+        out.push(...mine, ...t.lines);
       }
     } else if (o.changed) out.push(...o.lines);
     else out.push(...t.lines);
