@@ -233,6 +233,6 @@ it.each(SEEDS)('seed %i: two tabs + co-author reloads + reconnects keep every te
     tabsMatchServer: tabs.map((t) => t.ed.text === serverText),
   };
   const ctxLog = `${log.join('\n')}\nnotices: ${tabs.map((t) => t.notices.join(' | ')).join(' || ')}`;
-  writeFileSync(join(ctx.paths.paper, `fuzz-${seed}.log`), ctxLog);
+  if (process.env.R2_LOGDIR) writeFileSync(join(process.env.R2_LOGDIR, `fuzz-${seed}.log`), `${ctxLog}\n\nREPORT ${JSON.stringify(report)}\n\nSERVER\n${serverText}`);
   expect(report, ctxLog.slice(-4000)).toEqual({ lostTokens: [], lostCoauthor: [], duplicated: [], tabsMatchServer: [true, true] });
 }, 120_000);

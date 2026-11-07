@@ -235,6 +235,64 @@ describe.skipIf(!TEX)('BuildService: \\input/\\include in sub-directories', () =
   }, 180_000);
 });
 
+describe.skipIf(!TEX)('BuildService when latexmk remembers an earlier failure (latexmk 4.87 on macOS)', () => {
+  // latexmk >= 4.87 refuses to rerun while the sources are unchanged after a failed pdflatex run
+  // ("Nothing to do ... gave an error in previous invocation", exit 12). Seen on the author's Mac after
+  // TeX was installed while the app was already open: every later compile repeated the stale failure.
+  // The fake latexmk below answers like 4.87 unless it is forced with -g, then runs the real latexmk.
+  function fakeLatexmk(dir: string): { bin: string; calls: () => string[][] } {
+    const bin = join(dir, 'fake-latexmk');
+    const log = join(dir, 'calls.log');
+    writeFileSync(
+      bin,
+      `#!/bin/sh
+echo "$*" >> '${log}'
+for a in "$@"; do
+  if [ "$a" = "-g" ]; then exec latexmk "$@"; fi
+done
+echo "Latexmk: Nothing to do for 'main.tex'."
+echo "Collected error summary (may duplicate other messages):"
+echo "  pdflatex: gave an error in previous invocation of latexmk."
+exit 12
+`,
+      { mode: 0o755 },
+    );
+    // compile runs only (the availability probe 'latexmk -v' is not a compile)
+    return { bin, calls: () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => l.split(' ')).filter((a) => !(a.length === 1 && a[0] === '-v')) : []) };
+  }
+
+  it('a manual compile forces a run (-g) and succeeds', async () => {
+    const project = await makeTempProject();
+    try {
+      const fake = fakeLatexmk(project.root);
+      const build = createBuildService(makeTestCtx(project), { latexmk: fake.bin });
+      const st = await build.compile('manual');
+      expect(st.state).toBe('ok');
+      expect(fake.calls()[0]).toContain('-g');
+      await build.close?.();
+    } finally {
+      project.cleanup();
+    }
+  });
+
+  it('a compile on save that hits the remembered failure retries once with -g', async () => {
+    const project = await makeTempProject();
+    try {
+      const fake = fakeLatexmk(project.root);
+      const build = createBuildService(makeTestCtx(project), { latexmk: fake.bin });
+      const st = await build.compile('save');
+      expect(st.state).toBe('ok');
+      const calls = fake.calls();
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).not.toContain('-g');
+      expect(calls[1]).toContain('-g');
+      await build.close?.();
+    } finally {
+      project.cleanup();
+    }
+  });
+});
+
 describe('BuildService without the toolchain', () => {
   it('reports a missing latexmk clearly instead of throwing', async () => {
     const project = await makeTempProject();
