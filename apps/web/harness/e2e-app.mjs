@@ -14,10 +14,13 @@
  *
  * Flows: fixture render (sentence marks, gutter); status-bar review progress; sentence card by hover and
  * by Ctrl+.; Instruct (Chinese) + accept -> gutter shows an AI state; Grammar (Ctrl+G); Reject -> [claim: ...?]
- * placeholder listed in the Placeholders panel; Draft from the Outline panel -> proposed sentences in the
- * Review queue; Alt+Down / Ctrl+Enter; ghost via Ctrl+Space then Tab; a Chinese intent line (teal) rendered
- * by Ctrl+Enter; Facts panel; Sync panel blockers; UI language toggle (shell, card and editor bar in 中文);
- * light and dark screenshots; a narrow window with no page scroll; no page errors.
+ * placeholder listed in ③ To do; Draft from ① Plan -> proposed sentences in ③ To do; Alt+Down / Ctrl+Enter;
+ * ghost via Ctrl+Space then Tab; a Chinese intent line (teal) rendered by Ctrl+Enter; ② Sources (facts,
+ * literature); ④ Check & submit (submission check from the top-bar pill, consistency, terminology, figure
+ * plan, disclosure, sync blockers with Push disabled); the four-step rail, the first-run hint (remembered),
+ * the simplified top bar, the Settings drawer (language, theme, heatmap, voice, cost); card history restore;
+ * the large \input fixture (`?fixture=large`: file switcher, cross-file reveal); 中文 and dark screenshots of
+ * every step; a narrow window with no page scroll; no page errors.
  */
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
@@ -182,13 +185,50 @@ async function gutterStateFor(id) {
   }, id);
 }
 
-async function openTab(name) {
-  const tab = page.locator('.rail [role="tab"]').filter({ hasText: name }).first();
+/**
+ * The rail has four steps (① Plan ② Sources ③ To do ④ Check & submit); the older panel names select
+ * their step and open their section there.
+ */
+const STEP_OF = { Outline: 'plan', 大纲: 'plan', 构思: 'plan', Plan: 'plan', Facts: 'sources', 事实: 'sources', Sources: 'sources', Literature: 'sources', Review: 'todo', 审阅: 'todo', Placeholders: 'todo', Questions: 'todo', 'To do': 'todo', 待办: 'todo', Sync: 'check', 同步: 'check', Check: 'check', 检查: 'check' };
+const SECTION_OF = { Sync: 'sync', 同步: 'sync', Facts: 'facts', 事实: 'facts', Literature: 'lit' };
+
+async function openStep(step) {
+  const tab = page.locator(`.rail [role="tab"][data-step="${step}"]`);
   const selected = await tab.getAttribute('aria-selected');
   const collapsed = await pc(() => window.__paper.shell.getState().leftCollapsed);
   if (selected !== 'true' || collapsed) await tab.click();
   await sleep(150);
   if (await pc(() => window.__paper.shell.getState().leftCollapsed)) await tab.click();
+}
+
+async function openTab(name) {
+  const step = STEP_OF[name];
+  assert(step, `unknown tab ${name}`);
+  await openStep(step);
+  const section = SECTION_OF[name];
+  if (section) {
+    await pc((s) => window.__paper.shell.getState().focusSection(s), section);
+    await sleep(250);
+  }
+}
+
+/** The UI language lives in the Settings drawer (⚙). */
+async function setLang(label) {
+  await page.locator('[data-testid="settings-button"]').click();
+  await page.waitForSelector('[data-testid="settings-drawer"]', { timeout: 2000 });
+  await page.locator('[data-testid="settings-drawer"]').getByRole('button', { name: label, exact: true }).click();
+  await page.keyboard.press('Escape');
+  await waitFor(() => !document.querySelector('[data-testid="settings-drawer"]'), null, 2000, 'settings closed');
+}
+
+/** Open a collapsible section of ④ (consistency, terminology, figures, disclosure, sync). */
+async function openCheckSection(id) {
+  await openStep('check');
+  const sec = page.locator(`.shell-panel [data-section="${id}"]`);
+  const toggle = sec.locator('.psec-toggle').first();
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await sleep(200);
+  return sec;
 }
 
 async function main() {
@@ -207,13 +247,73 @@ async function main() {
   await page.waitForSelector('.cm-content .pc-s', { timeout: 20000 });
   await sleep(800);
 
-  await check('language toggle: default 中文 (notesLanguage zh), EN switches the UI', async () => {
+  await check('first-run hint shows the four steps once and stays dismissed after a reload', async () => {
+    await page.waitForSelector('[data-testid="first-run"]', { timeout: 3000 });
+    const items = await page.locator('[data-testid="first-run"] .first-run-step').count();
+    assert(items === 4, `${items} steps in the hint`);
+    await shot('first-run');
+    await page.locator('[data-testid="first-run"] .btn-primary').click();
+    await waitFor(() => !document.querySelector('[data-testid="first-run"]'), null, 2000, 'hint dismissed');
+    await page.reload();
+    await page.waitForSelector('.cm-content .pc-s', { timeout: 20000 });
+    await sleep(600);
+    assert((await page.locator('[data-testid="first-run"]').count()) === 0, 'hint came back after reload');
+    return `${items} steps; remembered`;
+  });
+
+  await check('language: default 中文 (notesLanguage zh), EN in Settings switches the UI', async () => {
     const zh = await page.locator('.statusbar').innerText();
-    await page.getByRole('button', { name: 'EN', exact: true }).click();
+    const zhTabs = await page.locator('.rail [role="tab"]').allInnerTexts();
+    await setLang('EN');
     await waitFor(() => /sentences/.test(document.querySelector('.statusbar')?.textContent ?? ''), null, 2000, 'English status bar');
     const tabs = await page.locator('.rail [role="tab"]').allInnerTexts();
-    assert(tabs.some((x) => /Outline/.test(x)), `tabs not English: ${tabs.join(',')}`);
+    assert(tabs.some((x) => /Plan/.test(x)), `tabs not English: ${tabs.join(',')}`);
+    assert(zhTabs.some((x) => /构思/.test(x)) && zhTabs.some((x) => /待办/.test(x)), `tabs not 中文: ${zhTabs.join(',')}`);
     return `zh status "${zh.replace(/\s+/g, ' ').slice(0, 30)}…"`;
+  });
+
+  await check('rail: exactly four numbered steps in writing order (Plan, Sources, To do, Check)', async () => {
+    const steps = await pc(() => [...document.querySelectorAll('.rail [role="tab"]')].map((t) => ({ step: t.getAttribute('data-step'), text: t.textContent.replace(/\s+/g, ' ').trim() })));
+    assert(steps.length === 4, `${steps.length} rail entries: ${JSON.stringify(steps)}`);
+    assert(steps.map((s) => s.step).join(',') === 'plan,sources,todo,check', `order ${steps.map((s) => s.step)}`);
+    for (let i = 0; i < 4; i++) assert(steps[i].text.includes(String(i + 1)), `step ${i + 1} has no number: ${steps[i].text}`);
+    // keyboard: arrows move between steps
+    await page.locator('.rail [data-step="plan"]').focus();
+    await page.keyboard.press('ArrowDown');
+    const sel = await pc(() => window.__paper.workspace.getState().leftTab);
+    assert(sel === 'sources', `ArrowDown selected ${sel}`);
+    await openStep('plan');
+    return steps.map((s) => s.text).join(' | ');
+  });
+
+  await check('top bar: name, file, compile, Sync, submission, simulated AI, settings, help and nothing else', async () => {
+    const info = await pc(() => {
+      const bar = document.querySelector('.topbar');
+      const buttons = [...bar.querySelectorAll('button')].map((b) => (b.getAttribute('aria-label') || b.textContent).trim());
+      return { buttons, text: bar.textContent.replace(/\s+/g, ' ') };
+    });
+    assert(info.buttons.length <= 7, `too many top-bar controls: ${info.buttons.join(' | ')}`);
+    for (const re of [/Compile/, /Sync/, /Settings/, /help/i]) assert(info.buttons.some((b) => re.test(b)), `missing ${re}: ${info.buttons.join(' | ')}`);
+    assert(/Simulated AI/.test(info.text), 'simulated-AI badge missing in fake mode');
+    assert(!/\$\d/.test(info.text), 'cost meter still in the top bar');
+    assert(!info.buttons.some((b) => /^(EN|中文)$/.test(b)), 'language toggle still in the top bar');
+    await shot('topbar');
+    return info.buttons.join(' | ');
+  });
+
+  await check('settings drawer: language, theme, heatmap, cost and voice; Escape closes', async () => {
+    await page.locator('[data-testid="settings-button"]').click();
+    await page.waitForSelector('[data-testid="settings-drawer"]', { timeout: 2000 });
+    const txt = await page.locator('[data-testid="settings-drawer"]').innerText();
+    for (const re of [/Interface language/i, /Theme/i, /Ownership heatmap/i, /API cost/i, /Your voice/i, /Style distance|style/i]) assert(re.test(txt), `settings lacks ${re}`);
+    await page.locator('[data-testid="settings-drawer"] .settings-check input').first().check();
+    await waitFor(() => !!document.querySelector('.pc-heatmap'), null, 2000, 'heatmap on');
+    await shot('settings');
+    await page.locator('[data-testid="settings-drawer"] .settings-check input').first().uncheck();
+    await page.keyboard.press('Escape');
+    await waitFor(() => !document.querySelector('[data-testid="settings-drawer"]'), null, 2000, 'drawer closed');
+    const focus = await pc(() => document.activeElement?.getAttribute('data-testid'));
+    return `focus back on ${focus}`;
   });
 
   await check('editor renders the fixture with sentence decorations and gutter', async () => {
@@ -357,15 +457,72 @@ async function main() {
     return `${drafted} drafted, ${n} in queue, status "${status.split('\n').find((x) => /reviewed/.test(x))}"`;
   });
 
-  await check('Sync panel shows push blockers while proposed sentences exist', async () => {
-    await openTab('Sync');
-    const checkBtn = page.getByRole('button', { name: /Check/ }).first();
-    if (await checkBtn.count()) await checkBtn.click();
+  await check('④ Sync with Overleaf shows push blockers while proposed sentences exist; Push disabled with a reason', async () => {
+    const sec = await openCheckSection('sync');
+    await sec.getByRole('button', { name: 'Check', exact: true }).click();
     await waitFor(() => !!document.querySelector('.shell-panel .blockers'), null, 4000, 'blockers');
     const txt = await page.locator('.shell-panel .blockers').innerText();
     assert(/roposed|nsupported/i.test(txt), `blockers: ${txt.slice(0, 120)}`);
+    const pushDisabled = await sec.getByRole('button', { name: 'Push', exact: true }).isDisabled();
+    assert(pushDisabled, 'Push enabled despite blockers');
+    assert((await sec.locator('.push-reason').count()) === 1, 'no visible reason for the disabled Push');
+    await page.locator('.shell-panel [data-section="sync"]').scrollIntoViewIfNeeded();
     await shot('sync');
     return txt.split('\n').slice(0, 2).join(' / ');
+  });
+
+  await check('top-bar submission pill runs the check and opens ④ with blockers first; items reveal their sentence', async () => {
+    await page.locator('[data-testid="submission-pill"]').click();
+    await page.waitForSelector('[data-testid="submission-check"] .sub-list', { timeout: 5000 });
+    const sel = await pc(() => window.__paper.workspace.getState().leftTab);
+    assert(sel === 'check', `step ${sel}`);
+    const rows = await pc(() => [...document.querySelectorAll('[data-testid="submission-check"] .sub-list > .sub-item')].map((li) => li.className));
+    const firstWarn = rows.findIndex((c) => /sub-warn|sub-info/.test(c));
+    const lastBlock = rows.map((c) => /sub-block/.test(c)).lastIndexOf(true);
+    assert(lastBlock < firstWarn || firstWarn < 0, `blockers not first: ${rows.join(',')}`);
+    const pill = await page.locator('[data-testid="submission-pill"]').innerText();
+    assert(/issue/.test(pill), `pill: ${pill}`);
+    const unreviewed = page.locator('[data-testid="submission-check"] [data-item="unreviewed"] .sub-head');
+    assert(await unreviewed.count(), 'no "unreviewed" item while proposed sentences exist');
+    await unreviewed.click();
+    await shot('submission');
+    await page.locator('[data-testid="submission-check"] [data-item="unreviewed"] .sub-entries .list-row').first().click();
+    await waitFor(() => {
+      const ws = window.__paper.workspace.getState();
+      const u = ws.units.find((x) => x.id === ws.activeSentenceId);
+      return !!u && (u.state === 'proposed' || u.state === 'unsupported');
+    }, null, 3000, 'revealed proposed sentence');
+    return `pill "${pill.trim()}", ${rows.length} failing items`;
+  });
+
+  for (const [id, re] of [
+    ['consistency', /Numbers across the paper/],
+    ['terminology', /Acronyms/],
+    ['figures', /Figures and tables/],
+  ]) {
+    await check(`④ ${id} section loads its report and reveals a sentence`, async () => {
+      const sec = await openCheckSection(id);
+      await waitFor((i) => !!document.querySelector(`.shell-panel [data-section="${i}"] .report-body`), id, 5000, `${id} report`);
+      const txt = await sec.innerText();
+      assert(re.test(txt), `${id}: ${txt.slice(0, 120)}`);
+      await sec.scrollIntoViewIfNeeded();
+      await shot(`check-${id}`);
+      const row = sec.locator('.report-body button.list-row:not([disabled]), .report-body .q-head').first();
+      if (await row.count()) await row.click();
+      const toggle = sec.locator('.psec-toggle').first();
+      await toggle.click();
+      return txt.split('\n').slice(0, 3).join(' / ').slice(0, 100);
+    });
+  }
+
+  await check('④ AI-use disclosure: venue select and copy', async () => {
+    const sec = await openCheckSection('disclosure');
+    await waitFor(() => !!document.querySelector('.shell-panel [data-section="disclosure"] textarea.disclosure-text')?.value, null, 4000, 'disclosure text');
+    await sec.locator('select').first().selectOption('elsevier');
+    await waitFor(() => /Declaration/i.test(document.querySelector('.shell-panel [data-section="disclosure"] textarea.disclosure-text')?.value ?? ''), null, 4000, 'Elsevier statement');
+    assert(await sec.getByRole('button', { name: /Copy/ }).count(), 'no copy button');
+    await shot('disclosure');
+    await sec.locator('.psec-toggle').first().click();
   });
 
   await check('Alt+Down navigates the review queue; Ctrl+Enter accepts', async () => {
@@ -432,11 +589,33 @@ async function main() {
     return count;
   });
 
-  await check('language toggle to 中文 switches the UI', async () => {
-    await page.getByRole('button', { name: '中文', exact: true }).click();
+  await check('card history: restore an earlier version as one annotated change; provenance stays AI', async () => {
+    const id = instructId;
+    const u0 = await unitById(id);
+    assert(u0 && u0.everAi, `instructed sentence not AI-touched: ${JSON.stringify(u0?.state)}`);
+    await pc((i) => window.__paper.workspace.getState().editor.revealSentence(i), id);
+    await page.keyboard.press('Control+.');
+    await page.waitForSelector('[data-testid="sentence-card"]', { timeout: 2000 });
+    await page.keyboard.press('h');
+    await page.waitForSelector('.pc-history .pc-hist-restore', { timeout: 3000 });
+    await shot('history');
+    const before = await docText();
+    // the oldest version: the author's imported text
+    await page.locator('.pc-history .pc-hist-restore').last().click();
+    await waitFor((b) => window.__paper.workspace.getState().editor.getText() !== b, before, 3000, 'restored text');
+    await sleep(500);
+    const u1 = await unitById(id);
+    const after = await docText();
+    assert(/On isolated displaced particles that neither model saw/.test(after), 'original wording not back');
+    assert(u1 && u1.everAi, 'everAi was cleared by the restore');
+    return `state ${u0.state} -> ${u1.state}, everAi kept`;
+  });
+
+  await check('language 中文 switches the UI (rail, To do, card, Settings)', async () => {
+    await setLang('中文');
     await waitFor(() => /句/.test(document.querySelector('.statusbar')?.textContent ?? ''), null, 2000, 'Chinese status bar');
     const tabs = await page.locator('.rail [role="tab"]').allInnerTexts();
-    assert(tabs.some((x) => /事实/.test(x)), `tabs: ${tabs.join(',')}`);
+    assert(tabs.some((x) => /资料/.test(x)) && tabs.some((x) => /检查/.test(x)), `tabs: ${tabs.join(',')}`);
     await openTab('审阅');
     await shot('zh');
     // card in zh UI
@@ -445,15 +624,26 @@ async function main() {
     await page.waitForSelector('[data-testid="sentence-card"]', { timeout: 2000 });
     const cardText = await page.locator('[data-testid="sentence-card"]').innerText();
     assert(/你写的/.test(cardText) && /指令/.test(cardText) && /拒绝/.test(cardText), `card not in 中文: ${cardText.replace(/\s+/g, ' ').slice(0, 80)}`);
-    const bar = await page.locator('.pc-editor-bar').innerText();
-    assert(/归属/.test(bar), `editor bar not in 中文: ${bar}`);
     await shot('zh-card');
     await page.keyboard.press('Escape');
+    await page.locator('[data-testid="settings-button"]').click();
+    await page.waitForSelector('[data-testid="settings-drawer"]', { timeout: 2000 });
+    const st = await page.locator('[data-testid="settings-drawer"]').innerText();
+    assert(/归属热图/.test(st) && /界面语言/.test(st), `settings not in 中文: ${st.slice(0, 80)}`);
+    await shot('zh-settings');
+    await page.keyboard.press('Escape');
+    for (const step of ['plan', 'sources', 'check']) {
+      await openStep(step);
+      await sleep(300);
+      await shot(`zh-${step}`);
+    }
+    const sub = await page.locator('[data-testid="submission-check"]').innerText();
+    assert(/未审阅的 AI 句子|阻碍/.test(sub), `submission items not in 中文: ${sub.slice(0, 100)}`);
     return `card: "${cardText.split('\n')[0]}"`;
   });
 
   await check('dark mode renders (shell, editor, card, panels)', async () => {
-    await page.getByRole('button', { name: 'EN', exact: true }).click();
+    await setLang('EN');
     await page.emulateMedia({ colorScheme: 'dark' });
     await pc(() => window.__paper.shell.getState().setTheme?.('dark'));
     await sleep(400);
@@ -472,6 +662,23 @@ async function main() {
     await shot('dark-outline');
     await openTab('Facts');
     await shot('dark-facts');
+    await openTab('Literature');
+    await shot('dark-lit');
+    await openStep('todo');
+    await shot('dark-todo');
+    await openStep('check');
+    await shot('dark-check');
+    for (const id of ['consistency', 'figures']) {
+      const sec = await openCheckSection(id);
+      await waitFor((i) => !!document.querySelector(`.shell-panel [data-section="${i}"] .report-body`), id, 5000, `${id} report`);
+      await sec.scrollIntoViewIfNeeded();
+      await shot(`dark-check-${id}`);
+      await sec.locator('.psec-toggle').first().click();
+    }
+    await page.locator('[data-testid="settings-button"]').click();
+    await page.waitForSelector('[data-testid="settings-drawer"]', { timeout: 2000 });
+    await shot('dark-settings');
+    await page.keyboard.press('Escape');
     await openTab('Sync');
     await shot('dark-sync');
     return `body ${bg}, editor ${edBg}, card ${cardBg}`;
@@ -493,6 +700,42 @@ async function main() {
     assert(m.sw <= m.w && m.sh <= m.h, `page overflows: ${JSON.stringify(m)}`);
     assert(m.edW >= 280, `editor column only ${m.edW}px`);
     return `editor column ${m.edW}px`;
+  });
+
+  await check('large \\input fixture: file switcher with per-file counts; switching and cross-file reveal', async () => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${BASE}/?mock=1&fixture=large`);
+    await page.waitForSelector('.cm-content .pc-s', { timeout: 30000 });
+    await sleep(600);
+    await page.locator('[data-testid="file-switcher"]').click();
+    const items = await pc(() => [...document.querySelectorAll('.file-menu [data-file]')].map((b) => b.getAttribute('data-file')));
+    assert(items.length === 5 && items[0] === 'main.tex', `files: ${items.join(',')}`);
+    await shot('files');
+    await page.locator('.file-menu [data-file="sections/method.tex"]').click();
+    await waitFor(() => {
+      const ws = window.__paper.workspace.getState();
+      return ws.file === 'sections/method.tex' && ws.units.length > 0 && ws.units.every((u) => u.file === 'sections/method.tex');
+    }, null, 6000, 'method.tex open');
+    const crumb = await page.locator('.topbar .crumb-file').innerText();
+    assert(/method\.tex/.test(crumb), `crumb ${crumb}`);
+    // a report row in another file: the editor switches, then reveals the sentence
+    const target = await pc(async () => {
+      const rep = await window.__paper.api.consistency();
+      const o = rep.quantities.flatMap((q) => q.occurrences).find((x) => x.file === 'sections/results.tex' && x.sentenceId);
+      return o ? { id: o.sentenceId, file: o.file } : null;
+    });
+    assert(target, 'no occurrence in results.tex');
+    // the same path a report row takes (goRef -> revealSentence(id, false, file))
+    await pc((t) => window.__paper.actions.revealSentence(t.id, false, t.file), target);
+    await waitFor((t) => {
+      const ws = window.__paper.workspace.getState();
+      return ws.file === t.file && ws.activeSentenceId === t.id;
+    }, target, 8000, 'cross-file reveal');
+    // the submission check spans every file
+    await page.locator('[data-testid="submission-pill"]').click();
+    await page.waitForSelector('[data-testid="submission-check"] .sub-list', { timeout: 8000 });
+    await shot('files-check');
+    return `${items.length} files; revealed ${target.id.slice(-6)} in ${target.file}`;
   });
 
   await check('no page errors', async () => {

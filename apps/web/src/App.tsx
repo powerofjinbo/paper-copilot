@@ -10,7 +10,7 @@ import { Editor } from './editor/Editor';
 import { PdfPane } from './pdf/PdfPane';
 import { getApiClient } from './api';
 import { errorText } from './api/errors';
-import { compileNow, flushPendingReveal, forwardSync, loadWorkspace, notify, refetchFacts, refetchOutline, refetchQuestions, refreshFiles, revealIn, switchFile } from './components/actions';
+import { compileNow, flushPendingReveal, forwardSync, loadWorkspace, notify, openStep, refetchFacts, refetchOutline, refetchQuestions, refreshFiles, revealIn, revealLine, revealSentence, switchFile } from './components/actions';
 import { LeftRail } from './components/LeftRail';
 import { Resizer } from './components/Resizer';
 import { SettingsDrawer } from './components/SettingsDrawer';
@@ -239,7 +239,7 @@ function useDevHandle(api: ApiClient): void {
   useEffect(() => {
     // Dev server, or a build made for the full-stack E2E (`VITE_PAPER_E2E=1 vite build`, e2e/fullstack.mjs).
     if (!import.meta.env.DEV && import.meta.env.VITE_PAPER_E2E !== '1') return;
-    (window as unknown as Record<string, unknown>).__paper = { api, workspace: useWorkspace, shell: useShell };
+    (window as unknown as Record<string, unknown>).__paper = { api, workspace: useWorkspace, shell: useShell, actions: { revealSentence, revealLine, revealIn, switchFile, openStep } };
   }, [api]);
 }
 
