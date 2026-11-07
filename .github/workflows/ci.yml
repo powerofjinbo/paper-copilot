@@ -1,8 +1,12 @@
 name: ci
 
 on:
+  # Only main and pull requests: work-in-progress checkpoints on feature branches carry deliberately
+  # failing review tests (each bug is proven by a failing test before it is fixed) and must not alert.
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
