@@ -82,15 +82,42 @@ export function distinctTokens(a: string | null | undefined, b: string | null | 
   return nameTokens(a).filter((w) => !tb.has(w));
 }
 
-/** Offsets of whole-word mentions of any of `tokens` in `text` (case-insensitive). */
+let cacheText: string | null = null;
+let cache = new Map<string, Array<{ start: number; end: number }>>();
+
+/**
+ * Whole-word mentions of a name (any of `tokens`, case-insensitive). The words of one name written
+ * together ("acorn (HNL) + LM") are one mention, starting at its first word.
+ */
 export function mentionsOf(text: string, tokens: string[]): Array<{ start: number; end: number }> {
-  const out: Array<{ start: number; end: number }> = [];
+  // the gate asks for the same names once per numeral: one scan per sentence and name list
+  if (text !== cacheText) {
+    cacheText = text;
+    cache = new Map();
+  }
+  const key = tokens.join('\u0000');
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const out = scanMentions(text, tokens);
+  if (cache.size < 256) cache.set(key, out);
+  return out;
+}
+
+function scanMentions(text: string, tokens: string[]): Array<{ start: number; end: number }> {
+  const raw: Array<{ start: number; end: number }> = [];
   for (const tk of tokens) {
     if (!tk) continue;
     const re = new RegExp(`(?<![A-Za-z0-9])${tk.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9]|-[A-Za-z0-9])`, 'gi');
-    for (const m of text.matchAll(re)) out.push({ start: m.index, end: m.index + m[0].length });
+    for (const m of text.matchAll(re)) raw.push({ start: m.index, end: m.index + m[0].length });
   }
-  return out.sort((x, y) => x.start - y.start);
+  raw.sort((x, y) => x.start - y.start);
+  const out: Array<{ start: number; end: number }> = [];
+  for (const m of raw) {
+    const last = out[out.length - 1];
+    if (last && /^[\s~()+,/-]{0,4}$/.test(text.slice(last.end, m.start))) last.end = Math.max(last.end, m.end);
+    else out.push({ ...m });
+  }
+  return out;
 }
 
 /** A mention that names the reference of a comparison ("than acorn", "over Canto-L", "compared with X"). */

@@ -318,6 +318,23 @@ const isWordChar = (c: string | undefined): boolean => c !== undefined && (isAsc
  * them (classified later), factors ("twice", "halves", "a hundredfold", "three-fold", "an order of
  * magnitude") and "half of". Compound adjectives ("two-step", "one-sentence") and ordinals are skipped.
  */
+/** The lower-case word right before offset `i` ('' at the start). */
+function prevWordOf(s: string, i: number): string {
+  return /([A-Za-z]+)[^A-Za-z]*$/.exec(s.slice(Math.max(0, i - 16), i))?.[1]?.toLowerCase() ?? '';
+}
+
+/**
+ * "Doubling the decay length to 200 mm ...", "after halving the learning rate": a gerund that opens a
+ * clause names an operation applied to a setting (whose new value the sentence states), not a result.
+ */
+function gerundOperation(s: string, i: number, whole: string): boolean {
+  if (!/ing$/i.test(whole)) return false;
+  const from = Math.max(0, i - 40);
+  const head = s.slice(from, i).replace(/[\s\u0005\u0006\u2009~]+$/, '');
+  if (head === '' && from === 0) return true;
+  return /[.;:,(]$/.test(head) || /\b(?:by|when|after|while|upon|before|on)$/i.test(head);
+}
+
 function wordNumerals(P: Plain, mk: Mk): NumeralDetail[] {
   const s = P.s;
   const out: NumeralDetail[] = [];
@@ -352,6 +369,9 @@ function wordNumerals(P: Plain, mk: Mk): NumeralDetail[] {
           break;
         case 'halve':
           value = 2;
+          // the noun ("split into halves", "both halves agree") names parts, not a factor
+          if (/^halves$/i.test(whole) && /^(?:into|both|two|the|in|each|its|their|of|these|those|our|two|all)$/.test(prevWordOf(s, i))) value = null;
+          if (gerundOperation(s, i, whole)) value = null;
           break;
         case 'half':
           // "more than half of its hits" is a criterion (a definition), not a result
@@ -365,6 +385,7 @@ function wordNumerals(P: Plain, mk: Mk): NumeralDetail[] {
         case 'double': {
           const r = m[1]!.toLowerCase();
           value = r.startsWith('doubl') ? 2 : r.startsWith('tripl') ? 3 : 4;
+          if (gerundOperation(s, i, whole)) value = null;
           break;
         }
         default: {

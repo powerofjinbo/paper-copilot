@@ -151,7 +151,9 @@ describe('large multi-file paper through the real services', () => {
     const ms = performance.now() - t0;
     expect(blocked).toEqual([]);
     // the numbers are linked to facts on open (retro-grounding), not just accepted by the gate
-    expect(numeric).toBeGreaterThan(60);
+    // 60, not 61: "Both halves agree ..." (appendix) used to be linked to a dimensionless fact near 2 by
+    // coincidence; a factor now stands only for a ratio fact (review 2, R2-I-6), and "halves" there is a noun
+    expect(numeric).toBeGreaterThanOrEqual(60);
     expect(ms).toBeLessThan(3000 * PERF_SLACK);
     console.log(`[scale] gate on ${ctx.docs.allUnits().length} sentences: ${ms.toFixed(0)} ms, ${numeric} with linked facts`);
   });

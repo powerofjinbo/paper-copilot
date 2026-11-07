@@ -723,6 +723,17 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
         return { l, f: names.length === 1 && names[0] ? fs.find((f) => otherSideOf(f)) ?? fs[0] : undefined };
       });
     const sideNames = uniq(linkedSides.map((x) => (x.f ? sideNameOf(x.f) : null)).filter((x): x is string => !!x));
+    const starts = links.map((x) => x.tok.start).sort((a, b) => a - b);
+    const firstAbove = (xs: number[], v: number): number => {
+      let lo = 0;
+      let hi = xs.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (xs[mid]! <= v) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo;
+    };
     for (const { l, f } of linkedSides) {
       if (!f) continue;
       const mine = sideNameOf(f);
@@ -733,14 +744,21 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
       const myTokens = uniq(others.flatMap((o) => distinctTokens(mine, o)));
       const otherTokens = others.map((o) => ({ name: o, tokens: distinctTokens(o, mine) }));
       if (!myTokens.length || otherTokens.every((o) => !o.tokens.length)) continue;
-      const nextStart = links.map((x) => x.tok.start).filter((x) => x > tok.end).sort((a, b) => a - b)[0] ?? t.length;
-      const after = t.slice(tok.replEnd, Math.min(nextStart, tok.replEnd + 60));
+      const nextStart = starts[firstAbove(starts, tok.end)] ?? t.length;
+      const limit = Math.min(nextStart, tok.replEnd + 60);
+      // a name right after the numeral binds it ("96.94\% for acorn", "94.62\% (acorn)")
       const bindAfter = (tokens: string[]): boolean =>
-        mentionsOf(after, tokens).some((m) => /^(?:\\?%|\s|~|\)|\$)*(?:points?\s*|percent\s*)?(?:\(\s*|\b(?:for|by|from|with|of|in)\s+(?:the\s+)?)$/i.test(after.slice(0, m.start)));
-      const before = t.slice(0, tok.start);
+        mentionsOf(t, tokens).some((m) => m.start >= tok.replEnd && m.end <= limit && /^(?:\\?%|\s|~|\)|\$)*(?:points?\s*|percent\s*)?(?:\(\s*|\b(?:for|by|from|with|of|in)\s+(?:the\s+)?)$/i.test(t.slice(tok.replEnd, m.start)));
       const lastBefore = (tokens: string[]): number => {
-        const ms = mentionsOf(before, tokens);
-        return ms.length ? ms[ms.length - 1]!.start : -1;
+        const ms = mentionsOf(t, tokens);
+        let lo = 0;
+        let hi = ms.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (ms[mid]!.end <= tok.start) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo > 0 ? ms[lo - 1]!.start : -1;
       };
       let bound: { name: string; explicit: boolean } | null = null;
       const otherAfter = otherTokens.find((o) => o.tokens.length && bindAfter(o.tokens));
