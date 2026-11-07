@@ -335,3 +335,36 @@ describe('HttpApiClient WebSocket', () => {
     expect(FakeWS.instances).toHaveLength(1);
   });
 });
+
+describe('HttpApiClient batch-B routes', () => {
+  it('hits the report, files, literature and restore routes with the right methods and bodies', async () => {
+    const f = makeFetch((url) => {
+      if (url.includes('/api/files')) return json([{ file: 'main.tex' }]);
+      if (url.includes('/confirm')) return json({ key: 'Ju2022', status: 'user_confirmed' });
+      if (url.includes('/api/lit/resolve')) return json({ jobId: 'j1' });
+      return json({ ok: true, items: [] });
+    });
+    const api = new HttpApiClient({ fetch: f.fn, metaToken: () => 't', WebSocket: FakeWS, log: () => {} });
+    expect(await api.files()).toEqual([{ file: 'main.tex' }]);
+    await api.consistency();
+    await api.terminologyReport();
+    await api.figurePlan();
+    await api.submissionCheck('elsevier');
+    expect((await api.confirmLit('Ju2022', true)).status).toBe('user_confirmed');
+    expect(await api.resolveLit()).toEqual({ jobId: 'j1' });
+    await api.restoreVersion('s/1', 2);
+    const seen = f.calls.map((c) => `${c.init.method ?? 'GET'} ${new URL(c.url, 'http://x').pathname}${new URL(c.url, 'http://x').search}`);
+    expect(seen).toEqual([
+      'GET /api/files',
+      'GET /api/consistency',
+      'GET /api/terminology-report',
+      'GET /api/figure-plan',
+      'GET /api/submission-check?venue=elsevier',
+      'POST /api/lit/Ju2022/confirm',
+      'POST /api/lit/resolve',
+      'POST /api/sentences/s%2F1/restore',
+    ]);
+    expect(JSON.parse(String(f.calls[5]!.init.body))).toEqual({ confirmed: true });
+    expect(JSON.parse(String(f.calls[7]!.init.body))).toEqual({ version: 2 });
+  });
+});
