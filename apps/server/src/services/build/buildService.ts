@@ -138,7 +138,10 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
     return true;
   };
 
+  // Aborted by close(): stops latexmk, and no compile starts afterwards.
+  const stopping = new AbortController();
   const runOnce = async (reason: 'save' | 'manual'): Promise<CompileStatus> => {
+    if (stopping.signal.aborted) return status;
     const t0 = Date.now();
     status = { ...status, state: 'running', errors: [], durationMs: null };
     emit();
@@ -175,7 +178,8 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
       // command): such a name is passed as "./<name>", which no option parser takes for an option.
       const mainArg = mainRel().startsWith('-') ? `./${mainRel()}` : mainRel();
       const args = ['-pdf', '-synctex=1', '-interaction=nonstopmode', '-file-line-error', `-outdir=${outDir}`, mainArg];
-      const r = await runProcess(latexmkBin, args, { cwd: srcDir, env, timeoutMs, maxOutput: 2_000_000 });
+      const r = await runProcess(latexmkBin, args, { cwd: srcDir, env, timeoutMs, maxOutput: 2_000_000, signal: stopping.signal });
+      if (stopping.signal.aborted) return done('error', fail('compile stopped: the server is shutting down'), tailBytes(`${r.stdout}${r.stderr ? '\n' + r.stderr : ''}`, LOG_TAIL_BYTES));
       const output = `${r.stdout}${r.stderr ? '\n' + r.stderr : ''}`;
       const tail = tailBytes(output, LOG_TAIL_BYTES);
       if (r.missing) {
@@ -235,6 +239,7 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
 
   let timer: NodeJS.Timeout | null = null;
   const scheduleCompile = () => {
+    if (stopping.signal.aborted) return;
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
@@ -281,10 +286,20 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
     return null;
   };
 
+  const close = async (): Promise<void> => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    stopping.abort();
+    // Wait for the run in flight and the follow-up one (which returns at once now), so nothing writes
+    // into .paper/build after shutdown.
+    while (running || queued) await (queued ?? running)!.catch(() => undefined);
+  };
+
   return {
     available,
     compile,
     scheduleCompile,
+    close,
     status: () => status,
     pdfPath,
     forward,

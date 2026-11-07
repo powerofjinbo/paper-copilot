@@ -400,6 +400,8 @@ export interface BuildService {
   pdfPath(): string | null;
   forward(file: string, line: number): Promise<{ page: number; x: number; y: number; w: number; h: number } | null>;
   inverse(page: number, x: number, y: number): Promise<{ file: string; line: number } | null>;
+  /** Shutdown: cancel a scheduled compile, stop a running latexmk and wait for it; later compile() calls do nothing. Optional (additive). */
+  close?(): Promise<void>;
 }
 
 export interface SyncService {

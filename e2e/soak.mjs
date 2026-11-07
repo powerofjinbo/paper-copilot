@@ -572,12 +572,20 @@ async function review(page) {
 async function compile(page) {
   await page.keyboard.press('Escape');
   await page.locator('.topbar').getByRole('button', { name: 'Compile', exact: true }).click();
+  // The state may still read 'ok' / 'error' from the previous compile: give this one a moment to start
+  // (a very fast compile can finish between polls, so a miss here is not an error).
+  await page.waitForFunction(() => window.__paper.workspace.getState().compile.state === 'running', null, { timeout: ms(3000), polling: 50 }).catch(() => {});
   try {
     await page.waitForFunction(() => ['ok', 'error'].includes(window.__paper.workspace.getState().compile.state), null, { timeout: ms(90000), polling: 200 });
   } catch {
     fail('compile did not finish');
   }
-  return pc(page, () => window.__paper.workspace.getState().compile.state);
+  // Record why a compile failed (random edits can legitimately break LaTeX, e.g. inline CJK under pdflatex).
+  return pc(page, () => {
+    const c = window.__paper.workspace.getState().compile;
+    const why = c.state === 'error' ? (c.errors[0]?.message ?? 'no message').replace(/\s+/g, ' ').slice(0, 60) : '';
+    return why ? `${c.state}: ${why}` : c.state;
+  });
 }
 
 let coauthorEdits = 0;

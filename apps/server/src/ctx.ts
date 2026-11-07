@@ -165,6 +165,12 @@ export async function createCtx(opts: CreateCtxOptions): Promise<AppCtx> {
       /* no timers */
     }
     try {
+      // Before the documents: a compile flushes them, and nothing may write into .paper/build afterwards.
+      await ctx.build.close?.();
+    } catch {
+      /* nothing running */
+    }
+    try {
       await ctx.docs.close();
     } catch (e) {
       log.error('could not write every open document on shutdown', String(e));

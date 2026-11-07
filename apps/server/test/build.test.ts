@@ -5,7 +5,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ServerMessage } from '@paper-copilot/core';
 import type { BuildService, Ctx } from '../src/contracts';
 import { createBuildService } from '../src/services/build/buildService';
@@ -267,4 +267,46 @@ describe('BuildService without the toolchain', () => {
       project.cleanup();
     }
   });
+});
+
+describe('BuildService shutdown', () => {
+  it('close() cancels a scheduled compile and refuses new ones', async () => {
+    const project = await makeTempProject();
+    try {
+      const ctx = makeTestCtx(project);
+      const build = createBuildService(ctx, { latexmk: '/nonexistent/latexmk', debounceMs: 30 });
+      build.scheduleCompile();
+      await build.close!();
+      build.scheduleCompile();
+      await build.compile('manual');
+      await new Promise((r) => setTimeout(r, 150));
+      expect(ctx.events.filter((e) => e.type === 'compile.status')).toEqual([]);
+    } finally {
+      project.cleanup();
+    }
+  });
+
+  it('close() stops a running latexmk (whole process group) and waits for it', async () => {
+    const project = await makeTempProject();
+    try {
+      const ctx = makeTestCtx(project);
+      // A stand-in latexmk that answers the probe and then hangs, as pdflatex can on a big paper.
+      const fake = join(project.root, 'fake-latexmk.sh');
+      const marker = join(project.root, 'after-close');
+      writeFileSync(fake, `#!/bin/sh\ncase "$1" in -v) echo fake; exit 0;; esac\nsleep 20\ntouch "${marker}"\n`, { mode: 0o755 });
+      const build = createBuildService(ctx, { latexmk: fake, timeoutMs: 60_000 });
+      const pending = build.compile('manual');
+      await vi.waitFor(() => expect(ctx.events.some((e) => e.type === 'compile.status' && (e as { state: string }).state === 'running')).toBe(true), { timeout: 5000 });
+      await new Promise((r) => setTimeout(r, 300));
+      const t0 = Date.now();
+      await build.close!();
+      expect(Date.now() - t0).toBeLessThan(5000);
+      const st = await pending;
+      expect(st.state).toBe('error');
+      expect(st.errors[0]!.message).toMatch(/shutting down/);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      project.cleanup();
+    }
+  }, 30_000);
 });

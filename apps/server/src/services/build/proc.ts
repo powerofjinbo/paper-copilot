@@ -22,6 +22,8 @@ export interface RunOptions {
   timeoutMs?: number;
   /** Keep at most this many characters of each stream (the tail). Default 1 MB. */
   maxOutput?: number;
+  /** Abort kills the whole process group (like a timeout, but `timedOut` stays false). */
+  signal?: AbortSignal;
 }
 
 function appendBounded(prev: string, chunk: string, max: number): string {
@@ -76,6 +78,11 @@ export function runProcess(cmd: string, args: string[], opts: RunOptions = {}): 
           kill();
         }, opts.timeoutMs)
       : null;
+    if (opts.signal) {
+      if (opts.signal.aborted) kill();
+      else opts.signal.addEventListener('abort', kill, { once: true });
+      child.once('close', () => opts.signal?.removeEventListener('abort', kill));
+    }
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', (d: string) => (stdout = appendBounded(stdout, d, max)));
