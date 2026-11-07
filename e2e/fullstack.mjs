@@ -988,6 +988,13 @@ async function main() {
       assert(cmp.kept === cmp.total && cmp.sameState === cmp.total && cmp.extra === 0, JSON.stringify(cmp));
       // the last good PDF is shown again without a recompile
       await waitFor(() => window.__paper.workspace.getState().compile.pdfVersion !== null, null, 8000, 'the last PDF after the restart');
+      // a step panel opened after the compile took the room (the PDF yields behind its strip, by design):
+      // the strip shows the compile state, and one click brings the same PDF back without a recompile
+      if (await page.locator('[data-testid="pdf-strip"]').count()) {
+        const tone = await page.locator('[data-testid="pdf-strip"]').getAttribute('class');
+        assert(/is-ok/.test(tone ?? ''), `the PDF strip does not say the PDF is there: ${tone}`);
+        await page.locator('[data-testid="pdf-strip"]').click();
+      }
       await page.waitForSelector('.pdfp-page.is-rendered canvas', { timeout: 20000 });
       const hist2 = await pc((i) => window.__paper.api.history(i), rewriteId);
       assert(hist2.versions.length === hist.versions.length && hist2.unit.everAi, 'history changed');
