@@ -276,13 +276,31 @@ async function gutterStateFor(id) {
   }, id);
 }
 
+/**
+ * The rail has four steps (① Plan ② Sources ③ To do ④ Check & submit); the older panel names select the
+ * step that holds them and open their section ('Sync' -> "Sync with Overleaf" inside ④).
+ */
+const STEP_OF = { Outline: 'plan', Facts: 'sources', Review: 'todo', Placeholders: 'todo', Questions: 'todo', Sync: 'check' };
+const SYNC = '.shell-panel [data-section="sync"]';
+
 async function openTab(name) {
-  const tab = page.locator('.rail [role="tab"]').filter({ hasText: name }).first();
+  const tab = page.locator(`.rail [role="tab"][data-step="${STEP_OF[name] ?? name}"]`);
   const selected = await tab.getAttribute('aria-selected');
   const collapsed = await pc(() => window.__paper.shell.getState().leftCollapsed);
   if (selected !== 'true' || collapsed) await tab.click();
   await sleep(200);
   if (await pc(() => window.__paper.shell.getState().leftCollapsed)) await tab.click();
+  if (name === 'Sync') {
+    await pc(() => window.__paper.shell.getState().focusSection('sync'));
+    await waitFor(() => document.querySelector('.shell-panel [data-section="sync"] .psec-toggle')?.getAttribute('aria-expanded') === 'true', null, 3000, 'sync section open');
+  }
+  if (name === 'Facts') await pc(() => window.__paper.shell.getState().setSourcesTab('facts'));
+}
+
+/** The top bar's Sync menu: Pull / Push… / last pull report. Returns the Pull item (menu left open). */
+async function syncMenuPull() {
+  await page.locator('[data-testid="sync-menu"]').click();
+  return page.locator('.sync-menu').getByRole('menuitem', { name: /Pull/ });
 }
 
 async function waitApp() {
@@ -329,7 +347,10 @@ async function main() {
     await waitApp();
 
     await check('real server: the editor decorates every sentence (simulated AI badge, EN UI)', async () => {
-      await page.getByRole('button', { name: 'EN', exact: true }).click();
+      // the UI language lives in the Settings drawer (⚙)
+      await page.locator('[data-testid="settings-button"]').click();
+      await page.locator('[data-testid="settings-drawer"]').getByRole('button', { name: 'EN', exact: true }).click();
+      await page.keyboard.press('Escape');
       await waitFor(() => /sentences/.test(document.querySelector('.statusbar')?.textContent ?? ''), null, 3000, 'English status bar');
       const info = await pc(() => ({
         units: window.__paper.workspace.getState().units.length,
@@ -545,11 +566,11 @@ async function main() {
 
     await check('push is refused while a proposed sentence exists', async () => {
       await openTab('Sync');
-      await page.locator('.shell-panel').getByRole('button', { name: 'Check' }).click();
+      await page.locator(SYNC).getByRole('button', { name: 'Check', exact: true }).click();
       await waitFor(() => !!document.querySelector('.shell-panel .blockers'), null, 6000, 'blockers');
       const txt = await page.locator('.shell-panel .blockers').innerText();
       assert(/proposed|unsupported/i.test(txt), `blockers: ${txt.slice(0, 120)}`);
-      const disabled = await page.locator('.shell-panel').getByRole('button', { name: 'Push', exact: true }).isDisabled();
+      const disabled = await page.locator(SYNC).getByRole('button', { name: 'Push', exact: true }).isDisabled();
       assert(disabled, 'Push button enabled');
       const res = await pc(() => window.__paper.api.push('should be refused'));
       assert(res.ok === false && /refused/i.test(res.output), `push result ${JSON.stringify(res).slice(0, 160)}`);
@@ -598,10 +619,10 @@ async function main() {
     await check('push allowed after review; the remote receives only .tex changes (no .paper, no CJK)', async () => {
       await sleep(1500); // disk write debounce
       await openTab('Sync');
-      await page.locator('.shell-panel').getByRole('button', { name: 'Check' }).click();
+      await page.locator(SYNC).getByRole('button', { name: 'Check', exact: true }).click();
       await waitFor(() => /Ready to push/.test(document.querySelector('.shell-panel')?.textContent ?? ''), null, 8000, 'ready to push');
-      await page.locator('.shell-panel input.input').first().fill('Results: reviewed rewrite, ghost and draft sentences');
-      const btn = page.locator('.shell-panel').getByRole('button', { name: 'Push', exact: true });
+      await page.locator(`${SYNC} input.input`).first().fill('Results: reviewed rewrite, ghost and draft sentences');
+      const btn = page.locator(SYNC).getByRole('button', { name: 'Push', exact: true });
       assert(!(await btn.isDisabled()), 'Push still disabled');
       await shot('15-push-ready');
       await btn.click();
@@ -635,7 +656,7 @@ async function main() {
       git(P.coauthor, 'push', '--quiet', 'origin', 'HEAD:master');
       editedId = await unitId('The test set holds');
       beforePull = await idStateMap();
-      await page.locator('.topbar').getByRole('button', { name: 'Pull', exact: true }).click();
+      await (await syncMenuPull()).click();
       await waitFor(() => window.__paper.workspace.getState().editor.getText().includes('The test set contains 8,710 targets.'), null, 15000, 'editor updated by doc.replace');
       await sleep(800);
       const after = await idStateMap();
@@ -748,11 +769,13 @@ async function main() {
       await waitApp();
       await openTab('Sync');
       await waitFor(() => !!document.querySelector('[data-testid="sync-off"]'), null, 5000, 'the sync-off note');
-      const pullDisabled = await page.locator('.topbar').getByRole('button', { name: 'Pull', exact: true }).isDisabled();
+      const pullItem = await syncMenuPull();
+      const pullDisabled = await pullItem.isDisabled();
+      await page.keyboard.press('Escape');
       assert(pullDisabled, 'top-bar Pull enabled');
-      await page.locator('.shell-panel').getByRole('button', { name: 'Check' }).click();
+      await page.locator(SYNC).getByRole('button', { name: 'Check', exact: true }).click();
       await sleep(800);
-      const pushButtons = await page.locator('.shell-panel').getByRole('button', { name: 'Push', exact: true }).count();
+      const pushButtons = await page.locator(SYNC).getByRole('button', { name: 'Push', exact: true }).count();
       assert(pushButtons === 0, 'Push button shown');
       const c = await pc(() => window.__paper.api.pushCheck());
       assert(c.ok === false && /sync mode "none"/.test(c.unavailable ?? ''), `push-check ${JSON.stringify(c).slice(0, 160)}`);

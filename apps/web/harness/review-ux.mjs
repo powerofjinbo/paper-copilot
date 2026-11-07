@@ -514,8 +514,11 @@ async function authorWrites() {
   await waitFor(() => window.__paper.workspace.getState().outline !== null, null, 2000, 'outline');
 }
 
+/** The rail's four steps; the older panel names (大纲, 审阅 ...) select the step that now holds them. */
+const STEP_OF = { 大纲: 'plan', 构思: 'plan', Outline: 'plan', 审阅: 'todo', 待办: 'todo', Review: 'todo', 事实: 'sources', Facts: 'sources', 同步: 'check', Sync: 'check' };
+
 async function openTab(name) {
-  const tab = page.locator('.rail [role="tab"]').filter({ hasText: name }).first();
+  const tab = page.locator(`.rail [role="tab"][data-step="${STEP_OF[name] ?? name}"]`);
   if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.click();
   await sleep(150);
 }

@@ -288,8 +288,11 @@ async function waitApp(page) {
   await waitFor(page, () => window.__paper?.workspace.getState().units.length > 10 && window.__paper.workspace.getState().connected && window.__paper.workspace.getState().editor, null, 15000, 'units and connection');
 }
 
+/** The rail's four steps: the older panel names select the step that now holds them. */
+const STEP_OF = { Outline: 'plan', Facts: 'sources', Review: 'todo', Sync: 'check' };
+
 async function openTab(page, name) {
-  const tab = page.locator('.rail [role="tab"]').filter({ hasText: name }).first();
+  const tab = page.locator(`.rail [role="tab"][data-step="${STEP_OF[name] ?? name}"]`);
   const selected = await tab.getAttribute('aria-selected');
   const collapsed = await pc(page, () => window.__paper.shell.getState().leftCollapsed);
   if (selected !== 'true' || collapsed) await tab.click();
@@ -619,8 +622,8 @@ function coauthorCommit() {
 
 async function pull(page) {
   await page.keyboard.press('Escape');
-  const btn = page.locator('.topbar').getByRole('button', { name: 'Pull', exact: true });
-  if (await btn.isDisabled()) return 'pull disabled';
+  // Pull lives in the top bar's Sync menu (disabled when the project has no remote)
+  if (await pc(page, () => window.__paper.workspace.getState().project?.config.sync.mode === 'none')) return 'pull disabled';
   const res = await pc(page, () => window.__paper.api.pull().then((r) => ({ ok: true, n: r.length })).catch((e) => ({ ok: false, msg: String(e?.message ?? e) })));
   return res.ok ? `pulled (${res.n} report(s))` : `pull refused: ${res.msg.slice(0, 80)}`;
 }
@@ -940,7 +943,7 @@ async function main() {
       const cdp = await context.newCDPSession(page);
       tabs.push({ name, page, cdp });
     }
-    await tabs[0].page.getByRole('button', { name: 'EN', exact: true }).click().catch(() => undefined);
+    await pc(tabs[0].page, () => window.__paper.shell.getState().setLang('en')).catch(() => undefined);
     await sleep(300);
     for (const t of tabs) await t.page.reload().then(() => waitApp(t.page));
     console.log(`baseline: ${await checkAll()}`);
