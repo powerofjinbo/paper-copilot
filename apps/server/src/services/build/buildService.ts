@@ -178,7 +178,17 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
       // command): such a name is passed as "./<name>", which no option parser takes for an option.
       const mainArg = mainRel().startsWith('-') ? `./${mainRel()}` : mainRel();
       const args = ['-pdf', '-synctex=1', '-interaction=nonstopmode', '-file-line-error', `-outdir=${outDir}`, mainArg];
-      const r = await runProcess(latexmkBin, args, { cwd: srcDir, env, timeoutMs, maxOutput: 2_000_000, signal: stopping.signal });
+      // latexmk remembers a failed pdflatex run in its .fdb_latexmk: while the sources are unchanged it
+      // refuses to run again ("Nothing to do ... gave an error in previous invocation", exit 12), so an
+      // error caused by the environment (TeX installed after the first try, a missing package now
+      // installed) would stick forever and hide the real message. A manual compile always forces a run
+      // (-g); any compile that hits the remembered-error case is retried once with -g.
+      const runLatexmk = (force: boolean) =>
+        runProcess(latexmkBin, force ? ['-g', ...args] : args, { cwd: srcDir, env, timeoutMs, maxOutput: 2_000_000, signal: stopping.signal });
+      let r = await runLatexmk(reason === 'manual');
+      if (!stopping.signal.aborted && r.code !== 0 && reason !== 'manual' && /error in previous invocation|Nothing to do for/.test(`${r.stdout}\n${r.stderr}`)) {
+        r = await runLatexmk(true);
+      }
       if (stopping.signal.aborted) return done('error', fail('compile stopped: the server is shutting down'), tailBytes(`${r.stdout}${r.stderr ? '\n' + r.stderr : ''}`, LOG_TAIL_BYTES));
       const output = `${r.stdout}${r.stderr ? '\n' + r.stderr : ''}`;
       const tail = tailBytes(output, LOG_TAIL_BYTES);
