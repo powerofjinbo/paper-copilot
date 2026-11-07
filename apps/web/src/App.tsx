@@ -91,6 +91,8 @@ function useBus(api: ApiClient): void {
         if ((m.state === 'ok' || m.state === 'error') && useShell.getState().submission) void runSubmissionCheck(api, undefined, { quiet: true });
         // Keep showing the last PDF while a new compile runs or fails.
         ws().setCompile({ state: m.state, pdfVersion: m.pdfVersion ?? prev.pdfVersion, errors: m.errors, logTail: m.logTail });
+        // a new PDF while the pane is hidden to make room: say where it is (once per PDF)
+        if (m.pdfVersion !== null && m.pdfVersion !== prev.pdfVersion && useShell.getState().fitHidden.pdf) notify('info', tr('fit.pdfReady'));
       }),
       api.on('job.progress', (m) => {
         ws().upsertJob(m.jobId, { kind: m.kind, state: m.state, message: m.message });

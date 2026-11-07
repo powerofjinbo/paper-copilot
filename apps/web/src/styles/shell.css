@@ -1089,6 +1089,9 @@ body.is-resizing canvas {
 .pane-strip-pdf.is-ok .pane-strip-dot {
   background: var(--ok);
 }
+.pane-strip-pdf.is-ok {
+  color: var(--accent);
+}
 .pane-strip-pdf.is-error .pane-strip-dot {
   background: var(--danger);
 }
@@ -1160,4 +1163,8 @@ body.is-resizing canvas {
   background: var(--bg-elev);
   font: 11.5px/1.4 var(--font-mono);
   white-space: pre-wrap;
+}
+
+.compile-pill[data-offline='true'] {
+  opacity: 0.6;
 }

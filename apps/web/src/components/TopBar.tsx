@@ -128,8 +128,9 @@ function CompilePill({ api }: { api: ApiClient }) {
         aria-label={t('compile.button')}
         aria-describedby={statusId}
         aria-keyshortcuts="Control+S Meta+S"
-        // the server is gone (terminal closed, laptop slept): say so instead of a raw "Failed to fetch"
-        aria-disabled={!connected}
+        // the server is gone (terminal closed, laptop slept): the pill looks off, and a click says why and how
+        // to restart it instead of a raw "Failed to fetch"
+        data-offline={connected ? undefined : 'true'}
         title={connected ? `${label} — ${t('compile.clickToCompile')}` : t('compile.offline')}
       >
         {icon}
