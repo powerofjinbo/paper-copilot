@@ -80,6 +80,14 @@ describe('"N out of M": the denominator is a number too', () => {
   });
 });
 
+describe('"N out of M" through a derived share', () => {
+  it('"finds 8,710 out of 10,396 targets" (the sizes of two different test populations) is not accepted as a share', () => {
+    // 8,710 = n (P_G), 10,396 = n (displaced-source targets): their "share" 0.838 is no efficiency of anything
+    const r = gate('Canto-L finds 8,710 out of 10,396 targets.');
+    expect({ ok: r.ok, warned: r.issues.length > 0 }).toEqual({ ok: false, warned: true });
+  });
+});
+
 describe('derived relations: bounds of a factor', () => {
   // two timings of one artifact: 15.5 ms against 10 ms, a ratio of 1.55 (55% slower)
   const T = [

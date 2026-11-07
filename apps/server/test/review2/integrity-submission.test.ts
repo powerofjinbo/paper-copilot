@@ -145,6 +145,23 @@ describe('stale facts stay blockers', () => {
   });
 });
 
+describe('a stated fact whose artifact field disappeared (renamed by the re-run)', () => {
+  it('the sentence stating it blocks the submission', async () => {
+    await project('canto-demo');
+    await boot();
+    await ctx!.facts.rescan();
+    await submission();
+    expect(resultsUnit().facts).toContain('f.g1.fake_rate_A');
+    const p = join(root, 'repo', 'results', 'addendum_g_g1_v1_claim.json');
+    writeFileSync(p, readFileSync(p, 'utf8').replace('"fake_rate_A"', '"fake_rate_canto"'));
+    await ctx!.facts.rescan();
+    const f = ctx!.facts.all().find((x) => x.id === 'f.g1.fake_rate_A')!;
+    expect({ stale: f.stale, excluded: f.excluded }).toEqual({ stale: true, excluded: true }); // kept as stale + missing
+    // today: stale_facts ok ("1 stale fact(s), none stated in the text"): the echo check drops excluded facts
+    expect(blockersOf(await submission(), resultsUnit().id, '0.55')).toContain('stale_facts');
+  });
+});
+
 describe('every typeset file is checked', () => {
   it('a placeholder in a file typeset with \\import{sections/}{extra} is a blocker', async () => {
     await project('canto-demo');
