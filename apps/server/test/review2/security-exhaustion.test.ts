@@ -54,6 +54,8 @@ async function maxStall(fn: () => Promise<unknown>): Promise<{ stallMs: number; 
 /** A server stall the author notices (typing stops echoing); generous for a slow CI box. */
 const STALL_BUDGET_MS = 1500;
 const PARAGRAPH = '1\\% and '.repeat(3000);
+/** One long letter run in prose (a pasted base64 blob, a hash): 60 KB. */
+const LONG_TOKEN = `See x${'a'.repeat(60_000)} for the data.`;
 
 describe('security round 2: pathological LaTeX from a co-author does not freeze the server', () => {
   let project: TempProject;
@@ -64,7 +66,7 @@ describe('security round 2: pathological LaTeX from a co-author does not freeze 
   beforeAll(async () => {
     project = await makeTempProject();
     const main = join(project.paths.tex, 'main.tex');
-    writeFileSync(main, readFileSync(main, 'utf8').replace('\\end{document}', `${PARAGRAPH}\n\n\\end{document}`));
+    writeFileSync(main, readFileSync(main, 'utf8').replace('\\end{document}', `${PARAGRAPH}\n\n${LONG_TOKEN}\n\n\\end{document}`));
     await initProject(project.root, { repo: project.repoDir, skill: SKILL_DIR });
     ctx = await createCtx({ root: project.root, fake: true, logLevel: 'error', watch: false, lintSidecar: false, docs: { segmentDebounceMs: 20, writeDebounceMs: 50 } });
     server = await createServer({ ctx, port: 0, pingIntervalMs: 60_000 });
@@ -97,6 +99,18 @@ describe('security round 2: pathological LaTeX from a co-author does not freeze 
       res = await get(port, '/api/submission-check?venue=aps', ctx.token);
     });
     console.log(`submission-check: longest stall ${r.stallMs} ms (total ${r.ms} ms)`);
+    expect(res!.status).toBe(200);
+    expect(r.stallMs).toBeLessThan(STALL_BUDGET_MS);
+  }, 120_000);
+
+  it('BUG: GET /api/terminology-report on one 60 KB letter run stalls the event loop for seconds (DEF_PAREN_RE has no word-start anchor: quadratic)', async () => {
+    await get(port, '/api/doc?file=main.tex', ctx.token);
+    await new Promise((res) => setTimeout(res, 300));
+    let res: { status: number; body: string } | null = null;
+    const r = await maxStall(async () => {
+      res = await get(port, '/api/terminology-report', ctx.token);
+    });
+    console.log(`terminology-report: longest stall ${r.stallMs} ms (total ${r.ms} ms)`);
     expect(res!.status).toBe(200);
     expect(r.stallMs).toBeLessThan(STALL_BUDGET_MS);
   }, 120_000);
