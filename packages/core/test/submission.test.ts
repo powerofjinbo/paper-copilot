@@ -337,3 +337,41 @@ describe('disclosure statement: a sentence that says who used which AI tool for 
     expect(item(submissionCheck(canto({ text: ml, edit: ai })), 'disclosure').ok).toBe(false);
   });
 });
+
+describe('hostile input (seeded)', () => {
+  /** mulberry32: deterministic. */
+  function rng(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const PIECES = ['\\begin{figure}', '\\end{figure}', '\\caption{', '}', '{', '\\label{fig:a}', '\\ref{fig:a}', '\\cite{', '\\input{x}', '%', '\n\n', '\\begin{abstract}', '\\end{abstract}', '$', '\\%', '96.94', '1.3', '2.5 times', '9 out of 10', 'GNN', '(GNN)', 'graph neural network', '[fact?: x]', '<<<<<<< HEAD', '=======', '中文', '\\section{', '\\appendix', 'In this paper, we', ' ', '.', '\\footnote{', '\\\\', '\\verb|x|', '\u0000', '\ud800'];
+  it('never throws and always returns a valid report', () => {
+    const r = rng(20261107);
+    for (let k = 0; k < 60; k++) {
+      const text = Array.from({ length: 5 + Math.floor(r() * 120) }, () => PIECES[Math.floor(r() * PIECES.length)]).join(r() < 0.5 ? ' ' : '');
+      const facts: Fact[] = [
+        ...CANTO_FACTS.slice(0, Math.floor(r() * CANTO_FACTS.length)),
+        mk({ id: 'f.odd.nan', value: Number.NaN, artifact: 'x', locator: 'a' }),
+        mk({ id: 'f.odd.inf', value: Number.POSITIVE_INFINITY, artifact: 'x', locator: 'b' }),
+        mk({ id: 'f.odd.str', value: '1.3' as unknown as number, artifact: 'x', locator: 'c' }),
+        { ...mk({ id: 'f.odd.unc', value: 2, artifact: 'x', locator: 'd' }), uncertainties: { total: Number.NaN } },
+      ];
+      let units: ConsistencyUnit[];
+      try {
+        units = unitsOf('main.tex', text);
+      } catch {
+        units = [];
+      }
+      if (r() < 0.3) units = units.map((u, i) => ({ ...u, state: i % 2 ? 'proposed' : 'ai-drafted', everAi: true, facts: ['f.odd.nan', 'missing'] }));
+      const rep = submissionCheck({ mainFile: 'main.tex', files: [{ file: 'main.tex', text }], units, facts, venue: (['aps', 'springer', 'elsevier', 'arxiv'] as const)[k % 4]!, bibKeys: [], compile: k % 3 ? OK_COMPILE : null, outline: k % 2 ? emptyOutline() : null });
+      expect(() => SubmissionReport.parse(rep)).not.toThrow();
+      expect(rep.items.map((i) => i.id)).toEqual(SubmissionItemId.options);
+    }
+  });
+});
