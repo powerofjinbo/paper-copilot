@@ -986,3 +986,16 @@ button.chip {
 .topbar-left .crumbs-btn {
   max-width: 100%;
 }
+.nowrap {
+  white-space: nowrap;
+}
+.todo-ph-top {
+  flex-wrap: nowrap;
+}
+.todo-ph-top .ph-chip {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

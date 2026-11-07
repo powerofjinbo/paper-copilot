@@ -104,7 +104,7 @@ function FlagList({ flags, index }: { flags: readonly ConsistencyFlag[]; index: 
                 <strong className="flag-label" title={ct(code, 'explain')}>
                   {ct(code)}
                 </strong>
-                {f.heuristic ? (
+                {f.heuristic && !/heuristic|启发式/i.test(ct(code)) ? (
                   <Badge tone="neutral" title={t('check.heuristicTitle')}>
                     {t('check.heuristic')}
                   </Badge>

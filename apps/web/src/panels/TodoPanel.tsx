@@ -119,16 +119,16 @@ export function TodoPanel({ api }: { api: ApiClient }) {
       return (
         <li key={item.key} className="todo-li">
           <button type="button" className="list-row" onClick={() => revealSentence(u.id)}>
-            <span className="list-row-top">
+            <span className="list-row-top todo-ph-top">
               <code className="ph-chip" title={item.placeholder}>
                 {item.placeholder}
               </code>
-              <span className="muted small">{t(`ph.kind.${item.phKind}` as MsgKey)}</span>
-              <span className="muted tabular">{t('common.line', { n: u.line })}</span>
+              <span className="muted tabular nowrap">{t('common.line', { n: u.line })}</span>
             </span>
             <span className="list-row-text">
               <Highlight text={displayLatex(textOf(u))} needle={item.placeholder} />
             </span>
+            <span className="list-row-meta muted small">{t(`ph.kind.${item.phKind}` as MsgKey)}</span>
           </button>
         </li>
       );
