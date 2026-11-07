@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { derivedRelations } from '../../src/meta/derived';
 import { gateSentence, type DerivedRelation } from '../../src/gate/gate';
-import { FX, loadFacts } from './_facts';
+import { FX, loadFacts, mk } from './_facts';
 
 const FACTS = loadFacts(FX('canto-demo/repo'));
 const DERIVED = derivedRelations(FACTS);
@@ -77,5 +77,24 @@ describe('"N out of M": the denominator is a number too', () => {
     // 11,633 / 12,000 = 0.96942 = eff_A, so the ratio "matches"; 12,000 is never checked (structural)
     const r = gate('Canto-L finds 11,633 out of 12,000 targets.');
     expect(r.ok).toBe(false);
+  });
+});
+
+describe('derived relations: bounds of a factor', () => {
+  // two timings of one artifact: 15.5 ms against 10 ms, a ratio of 1.55 (55% slower)
+  const T = [
+    mk({ id: 'f.t.time_new_ms', value: 15.5, unit: 'ms', definition: 'time_new_ms', artifact: 'results/t.json', locator: '#/time_new_ms' }),
+    mk({ id: 'f.t.time_old_ms', value: 10, unit: 'ms', definition: 'time_old_ms', artifact: 'results/t.json', locator: '#/time_old_ms' }),
+  ];
+  const g = (text: string) => gateSentence(text, { mode: 'ghost', facts: T, allowedCiteKeys: [], knownLabels: [], fictionalNumbers: [], derived: derivedRelations(T) });
+
+  it('control: "50% slower" for a 55% increase is blocked (wrong at its precision)', () => {
+    expect(g('The new tracker is 50\\% slower than the old one.').ok).toBe(false);
+  });
+
+  it('"twice as slow" (a 100% increase) for a ratio of 1.55 is not accepted as grounded', () => {
+    // the 1-significant-figure rendering of 1.55 is "2 times"; the gate accepts "twice", "2 times",
+    // "a factor of two" with no warning and links both timings
+    expect(g('The new tracker is twice as slow as the old one.').ok).toBe(false);
   });
 });
