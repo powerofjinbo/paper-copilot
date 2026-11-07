@@ -12,6 +12,7 @@ import { cardField } from './card/cardState';
 import { ctxField, type EditorCtx } from './context';
 import { factLabel, matchesOf, numeralsOf, placeholdersOf } from './safe';
 import { unitAtPos, unitsField, unitsInRange } from './units';
+import { lintLabel } from './i18n';
 
 /* ------------------------------------------------------------------------------------ */
 /* Sentence marks                                                                        */
@@ -103,7 +104,7 @@ export function findLintWord(text: string, word: string): number {
 
 export function lintTitle(f: LintFlag): string {
   const rate = f.corpusRate !== null ? ` · corpus ${f.corpusRate.toFixed(1)}/1k words` : '';
-  return `${f.check}: ${f.msg}${rate}`;
+  return `${lintLabel(f.check)}: ${f.msg}${rate}`;
 }
 
 const placeholderMarks: Record<string, Decoration> = {};

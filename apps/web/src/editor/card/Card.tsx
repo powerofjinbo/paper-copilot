@@ -11,10 +11,11 @@ import { useWorkspace } from '../../state/store';
 import { clearReplanEffect } from '../context';
 import type { EditorEnv } from '../env';
 import { isCjk, MOD_KEY } from '../labels';
-import { originLabel, relTime, stateLabel, useEdT, type EdT } from '../i18n';
+import { issueLabel, lintExplain, lintLabel, originLabel, relTime, stateLabel, useEdT, type EdT } from '../i18n';
 import { factLabel, wordDiffOf } from '../safe';
 import { lintTitle } from '../decorations';
-import { replanDropSpec, replanInsertBeforeSpec, replanReviseSpec } from '../actions';
+import { replanDropSpec, replanInsertBeforeSpec, replanReviseSpec, restoreSpec } from '../actions';
+import { codeLabel } from '../../i18n';
 import { pinCardEffect } from './cardState';
 import type { CardSnapshot } from './cardData';
 
@@ -147,6 +148,33 @@ export function SentenceCard({ view, env, snap }: SentenceCardProps) {
   const runHistory = useCallback(() => {
     void guarded(t('busyHistory'), () => env.api.history(id), (data) => setMode({ kind: 'history', data }));
   }, [env, id, guarded, t]);
+  const restoreVersion = useCallback(
+    (version: number) => {
+      void guarded(
+        t('busyRestore'),
+        () => env.api.restoreVersion(id, version),
+        (r) => {
+          if (r.noop) {
+            useWorkspace.getState().pushNotice('info', t('restoreNoop', { n: version }));
+            setMode({ kind: 'main' });
+            return;
+          }
+          const spec = restoreSpec(view.state, r);
+          if (!spec) {
+            setMode({ kind: 'error', message: t('restoreChanged') });
+            return;
+          }
+          view.dispatch(spec);
+          const notice = r.issues.length
+            ? t('restoreIssues', { issues: r.issues.map((x) => codeLabel(lang, `gate.${x.code}`)).join(' · ') })
+            : t('restored', { n: version });
+          useWorkspace.getState().pushNotice(r.issues.length ? 'warn' : 'info', notice);
+          close();
+        },
+      );
+    },
+    [env, id, view, guarded, t, lang, close],
+  );
   const submitInstruction = useCallback(
     (raw: string) => {
       const ins = raw.trim();
@@ -381,7 +409,7 @@ export function SentenceCard({ view, env, snap }: SentenceCardProps) {
             <button key={p.proposalId} type="button" role="option" aria-selected="false" className="pc-alt" data-autofocus={i === 0 ? '' : undefined} onClick={() => applyProposal(p, 'alternative', null, null)}>
               <Kbd>{i + 1}</Kbd>
               <span className="pc-alt-text">{p.text}</span>
-              {p.issues.length ? <span className="pc-alt-issues">{p.issues.map((x) => x.message).join(' · ')}</span> : null}
+              {p.issues.length ? <span className="pc-alt-issues">{p.issues.map((x) => `${issueLabel(x.code, lang)}: ${x.message}`).join(' · ')}</span> : null}
             </button>
           ))}
         </div>
@@ -396,6 +424,7 @@ export function SentenceCard({ view, env, snap }: SentenceCardProps) {
               <div key={v.version} className="pc-hist-row">
                 <div className="pc-hist-meta">
                   <span className="pc-hist-v">v{v.version}</span> {originLabel(v.origin, lang)}
+                  {v.text === text ? <span className="pc-hist-current"> · {t('current')}</span> : null}
                   {v.model ? ` · ${v.model}` : ''} · <span title={v.ts}>{relTime(v.ts, lang)}</span>
                   {v.editDistance !== null && v.editDistance !== undefined ? ` · ${Math.round(v.editDistance * 100)}%` : ''}
                 </div>
@@ -405,6 +434,11 @@ export function SentenceCard({ view, env, snap }: SentenceCardProps) {
                   </div>
                 ) : null}
                 <div className="pc-hist-text">{v.text}</div>
+                {v.text !== text ? (
+                  <button type="button" className="pc-btn pc-btn-sm pc-hist-restore" title={t('restoreTitle')} onClick={() => restoreVersion(v.version)}>
+                    {t('restore')}
+                  </button>
+                ) : null}
               </div>
             ))}
         </div>
@@ -490,8 +524,8 @@ function ProposalView({ t, mode }: { t: EdT; mode: Extract<Mode, { kind: 'propos
         <ul className="pc-issues" aria-label={t('factGate')}>
           {p.issues.map((x, i) => (
             <li key={i} className={`pc-issue-${x.severity}`}>
-              <span aria-hidden="true">{x.severity === 'block' ? '⚠' : '·'}</span> {x.message}
-              <span className="pc-muted"> ({x.code})</span>
+              <span aria-hidden="true">{x.severity === 'block' ? '⚠' : '·'}</span> <strong className="pc-issue-label">{issueLabel(x.code, lang)}</strong>{' '}
+              <span lang="en">{x.message}</span>
             </li>
           ))}
         </ul>
@@ -568,7 +602,8 @@ function MainBody({ t, snap, view, onShowFact, onDismissLint }: { t: EdT; snap: 
         <ul className="pc-card-section pc-issues" aria-label={t('factGate')}>
           {snap.draftNote.issues.map((x, i) => (
             <li key={i} className={`pc-issue-${x.severity}`}>
-              <span aria-hidden="true">{x.severity === 'block' ? '⚠' : '·'}</span> {x.message}
+              <span aria-hidden="true">{x.severity === 'block' ? '⚠' : '·'}</span> <strong className="pc-issue-label">{issueLabel(x.code, lang)}</strong>{' '}
+              <span lang="en">{x.message}</span>
             </li>
           ))}
         </ul>
@@ -577,7 +612,10 @@ function MainBody({ t, snap, view, onShowFact, onDismissLint }: { t: EdT; snap: 
         <ul className="pc-card-section pc-lint-list" aria-label={t('lint')}>
           {snap.lint.map((f) => (
             <li key={f.id} className={`pc-lint-row pc-lint-row-${f.severity}`} title={lintTitle(f)}>
-              <span className="pc-lint-check">{f.check}</span> {f.msg}
+              <span className="pc-lint-check" title={lintExplain(f.check, lang) || undefined}>
+                {lintLabel(f.check, lang)}
+              </span>{' '}
+              <span lang="en">{f.msg}</span>
               {f.word ? <span className="pc-muted"> “{f.word}”</span> : null}
               {f.corpusRate !== null ? <span className="pc-muted"> · {t('corpus')} {f.corpusRate.toFixed(1)}/1k</span> : null}
               {f.userRate !== null ? <span className="pc-muted"> · {t('you')} {f.userRate.toFixed(1)}/1k</span> : null}

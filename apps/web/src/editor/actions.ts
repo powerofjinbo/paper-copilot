@@ -42,6 +42,18 @@ export function replaceUnitSpec(state: EditorState, id: string, text: string, an
   };
 }
 
+/**
+ * Restore an earlier version (POST /api/sentences/:id/restore): the server's text and annotation, applied
+ * as ONE transaction, only while the unit still reads exactly like the text the server saw (`current`);
+ * null otherwise (the author typed meanwhile) so nothing is overwritten.
+ */
+export function restoreSpec(state: EditorState, r: { sentenceId: string; current: string; text: string; annotation: ChangeAnnotation }): TransactionSpec | null {
+  const u = state.field(unitsField).byId.get(r.sentenceId);
+  if (!u || u.end < u.start || u.end > state.doc.length) return null;
+  if (state.doc.sliceString(u.start, u.end) !== r.current) return null;
+  return replaceUnitSpec(state, r.sentenceId, r.text, { ...r.annotation, sentenceIds: r.annotation.sentenceIds.length ? r.annotation.sentenceIds : [r.sentenceId] });
+}
+
 /** handle.applyProposal: the proposal text replaces its unit; origin from the proposal (ai_rewrite, grammar_fix, replan...). */
 export function proposalSpec(
   state: EditorState,

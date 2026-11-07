@@ -196,6 +196,14 @@ describe.each(FIXTURES)('features on $name', (fx) => {
     expect(els.status).toBe(200);
     SubmissionReport.parse(els.body);
     expect((await get(`${FEATURE_ROUTES.submissionCheck}?venue=nature`)).status).toBe(400);
+    // labels from core i18n, in the requested language
+    const zh = (await get(`${FEATURE_ROUTES.submissionCheck}?lang=zh&token=ignored`)).body as { labels: Record<string, { label: string; explain: string }> };
+    expect(zh.labels['submission.compile_errors']).toEqual({ label: '编译错误', explain: expect.stringContaining('编译') });
+    expect(Object.keys(zh.labels)).toHaveLength(rep.items.length);
+    const fig = (await get(`${FEATURE_ROUTES.figurePlan}?lang=en`)).body as { labels: Record<string, { label: string }> };
+    expect(Object.keys(fig.labels).some((k) => k.startsWith('caption.'))).toBe(true);
+    expect((await get(`${FEATURE_ROUTES.consistency}?lang=fr`)).status).toBe(400);
+    expect(body).not.toHaveProperty('labels');
     expect((await get(REPORT_ROUTES.submission)).status).toBe(200);
   });
 

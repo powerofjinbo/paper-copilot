@@ -4,7 +4,7 @@
  * the editor only reads it. English strings are the editor's originals (labels.ts); sentence text, AI
  * notes and instructions are never translated.
  */
-import type { SentenceState, VersionOrigin } from '@paper-copilot/core';
+import { i18nEntry, t as coreT, type SentenceState, type VersionOrigin } from '@paper-copilot/core';
 import { useShell, type Lang } from '../state/extra';
 import { ALT_KEY, GHOST_KEY, MOD_KEY, ORIGIN_LABEL, STATE_LABEL, STATE_SHORT } from './labels';
 
@@ -97,6 +97,14 @@ const EN = {
   busyGrammar: 'Checking grammar…',
   busyAlternatives: 'Writing alternatives…',
   busyHistory: 'Loading history…',
+  restore: 'Restore this version',
+  restoreTitle: 'Put this text back as one change; its provenance is kept (AI text stays AI text)',
+  busyRestore: 'Restoring…',
+  restored: 'Restored version {n}.',
+  restoreNoop: 'The sentence already reads like version {n}.',
+  restoreChanged: 'The sentence changed while restoring; open the history again.',
+  restoreIssues: 'Restored text: {issues}',
+  current: 'current',
   replan: 'Re-plan proposal',
   replanSuggests: 'Re-plan suggests:',
   replanRevise: 'a revision',
@@ -208,6 +216,14 @@ const ZH: Record<EdKey, string> = {
   busyGrammar: '正在检查语法…',
   busyAlternatives: '正在写备选句…',
   busyHistory: '正在加载历史…',
+  restore: '恢复此版本',
+  restoreTitle: '把这段文字作为一次修改放回原处；来源记录保留（AI 文字仍标为 AI）',
+  busyRestore: '正在恢复…',
+  restored: '已恢复第 {n} 版。',
+  restoreNoop: '这句话已经与第 {n} 版相同。',
+  restoreChanged: '恢复时这句话被修改了；请重新打开历史。',
+  restoreIssues: '恢复的文字：{issues}',
+  current: '当前',
   replan: '重新规划建议',
   replanSuggests: '重新规划建议：',
   replanRevise: '修改这句',
@@ -315,4 +331,30 @@ export function relTime(iso: string | null | undefined, lang: Lang = currentLang
   const d = Math.round(h / 24);
   if (d < 30) return edText(lang, 'dAgo', { n: d });
   return new Date(t).toISOString().slice(0, 10);
+}
+
+/** Core i18n label of a code in a namespace ('gate', 'lint'), or the bare code when there is none. */
+function nsLabel(ns: 'gate' | 'lint', code: string, lang: Lang, field: 'label' | 'explain' = 'label'): string {
+  try {
+    const key = `${ns}.${code}`;
+    return i18nEntry(key) ? coreT(key, lang, field) : code;
+  } catch {
+    return code;
+  }
+}
+
+/** Label of a faithfulness-gate issue code ("unmatched_number" -> "Number not in the facts" / "数字无出处"). */
+export function issueLabel(code: string, lang: Lang = currentLang()): string {
+  return nsLabel('gate', code, lang);
+}
+
+/** Label of a lint check key ("long", "hype", "7", "pattern", "aiese" ...). */
+export function lintLabel(check: string, lang: Lang = currentLang()): string {
+  return nsLabel('lint', check, lang);
+}
+
+/** One-line explanation of a lint check ('' when the core has none). */
+export function lintExplain(check: string, lang: Lang = currentLang()): string {
+  const s = nsLabel('lint', check, lang, 'explain');
+  return s === check ? '' : s;
 }

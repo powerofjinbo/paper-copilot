@@ -9,6 +9,7 @@
  *   GET /api/figure-plan          FigurePlanReport    (core figurePlan)           alias /api/reports/figure-plan
  *   GET /api/submission-check     SubmissionReport    (core submissionCheck; ?venue=aps|elsevier|arxiv|springer)
  *                                                                                  alias /api/reports/submission
+ * The four reports take `?lang=zh|en` to add `labels` (core i18n: label + explanation of every code they hold).
  *   GET /api/facts/derived        DerivedRelationData[] (the derived numbers every gate call accepts)
  *   GET /api/files                ProjectFilesResponse (the \input tree in document order, per-file counts;
  *                                 never opens a file: counts of a file never opened come from the segmenter)
@@ -22,6 +23,7 @@ import {
   REPORT_ROUTES,
   Venue,
   derivedRelations,
+  describeCode,
   echoCheck,
   emptyOutline,
   extractTitle,
@@ -39,6 +41,7 @@ import {
   type Fact,
   type FigurePlanFile,
   type FigurePlanReport,
+  type I18nMessage,
   type LintFlag,
   type ProjectFileEntry,
   type ProjectOrderEntry,
@@ -246,15 +249,35 @@ export async function projectFiles(ctx: Ctx): Promise<ProjectFileEntry[]> {
 /* Routes                                                                                */
 /* ------------------------------------------------------------------------------------ */
 
-const VenueQuery = z.object({ venue: Venue.optional() });
+const LangField = z.enum(['zh', 'en', 'zh-CN', 'zh-TW', 'en-US', 'en-GB']).optional();
+const ReportQuery = z.object({ lang: LangField });
+const SubmissionQuery = z.object({ venue: Venue.optional(), lang: LangField });
+
+/**
+ * With `?lang=zh|en`: the report plus `labels`, the label and one-line explanation (core i18n) of every
+ * code it contains ('submission.<id>', 'consistency.<kind>', 'caption.<key>'), so a client can show them
+ * without its own copy of the tables. Without `lang` the report is returned unchanged.
+ */
+export function withLabels<T extends object>(report: T, lang: string | undefined): T | (T & { labels: Record<string, I18nMessage> }) {
+  if (!lang) return report;
+  const codes = new Set<string>();
+  const r = report as { items?: Array<{ id: string }>; flags?: Array<{ kind: string }>; floats?: Array<{ checklist: Array<{ key: string }> }> };
+  for (const i of r.items ?? []) codes.add(`submission.${i.id}`);
+  for (const f of r.flags ?? []) codes.add(`consistency.${f.kind}`);
+  for (const fl of r.floats ?? []) for (const c of fl.checklist) codes.add(`caption.${c.key}`);
+  const labels: Record<string, I18nMessage> = {};
+  for (const c of [...codes].sort()) labels[c] = describeCode(c, lang);
+  return { ...report, labels };
+}
 
 export function registerReportsRoutes(app: FastifyInstance, ctx: Ctx): void {
-  const consistency = async () => consistencyReport(await projectSnapshot(ctx));
-  const terminology = async () => terminologyOf(ctx, await projectSnapshot(ctx));
-  const figures = async () => figurePlanOf(ctx, await projectSnapshot(ctx));
+  const lang = (req: { query: unknown }) => parseWith(ReportQuery, req.query, 'query').lang;
+  const consistency = async (req: { query: unknown }) => withLabels(consistencyReport(await projectSnapshot(ctx)), lang(req));
+  const terminology = async (req: { query: unknown }) => withLabels(terminologyOf(ctx, await projectSnapshot(ctx)), lang(req));
+  const figures = async (req: { query: unknown }) => withLabels(figurePlanOf(ctx, await projectSnapshot(ctx)), lang(req));
   const submission = async (req: { query: unknown }) => {
-    const q = parseWith(VenueQuery, req.query, 'query');
-    return submissionReport(ctx, q.venue ?? ctx.config.venue);
+    const q = parseWith(SubmissionQuery, req.query, 'query');
+    return withLabels(await submissionReport(ctx, q.venue ?? ctx.config.venue), q.lang);
   };
 
   app.get(FEATURE_ROUTES.consistency, consistency);
