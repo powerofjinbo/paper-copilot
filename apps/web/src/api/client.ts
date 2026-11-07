@@ -135,7 +135,10 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
    */
   private dropQueuedChanges = false;
   private readonly openFiles = new Set<string>();
-  /** Files re-opened automatically on the current connection; absorbs one echoed doc.open each. */
+  /**
+   * Files re-opened automatically on the current connection whose snapshot has not arrived yet: a doc.open
+   * for one of them is absorbed (the snapshot on its way answers it). Cleared per file by its snapshot.
+   */
   private reopened = new Set<string>();
   private reopenedTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly listeners = new Map<string, Set<AnyListener>>();
@@ -359,6 +362,10 @@ export class HttpApiClient implements ApiClient, ApiClientExtras {
       this.log(`dropping a malformed server message (type ${String(t)})`, parsed.error.issues.slice(0, 3));
       return;
     }
+    // The automatic re-open of this file got its answer: a later doc.open (an editor opening the file after
+    // the snapshot was delivered, e.g. the file switcher right after a reconnect) must reach the server, or
+    // that editor waits for a snapshot that already went by.
+    if (parsed.data.type === 'doc.snapshot') this.reopened.delete(parsed.data.file);
     this.dispatch(parsed.data);
   }
 

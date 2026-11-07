@@ -7,6 +7,7 @@ import { ViewPlugin, type EditorView, type ViewUpdate } from '@codemirror/view';
 import type { SentenceUnit } from '@paper-copilot/core';
 import { useWorkspace } from '../state/store';
 import { setCtxEffect, type CtxInput } from './context';
+import { editorEnv } from './env';
 import { setUnitsEffect, patchUnitsEffect, unitAtPos, unitsField } from './units';
 
 const LOCAL_PUBLISH_MS = 150;
@@ -16,6 +17,12 @@ class StoreBridge {
   timer: ReturnType<typeof setTimeout> | null = null;
   lastActive: string | null | undefined = undefined;
   destroyed = false;
+
+  /** A parked editor (its file is not the one shown) must not overwrite the shown file's units. */
+  private shown(): boolean {
+    const f = useWorkspace.getState().file;
+    return f === null || f === this.view.state.facet(editorEnv)?.file;
+  }
 
   constructor(readonly view: EditorView) {
     const s = useWorkspace.getState();
@@ -49,7 +56,7 @@ class StoreBridge {
       if (active !== this.lastActive) {
         this.lastActive = active;
         queueMicrotask(() => {
-          if (!this.destroyed) useWorkspace.getState().setActiveSentence(active);
+          if (!this.destroyed && this.shown()) useWorkspace.getState().setActiveSentence(active);
         });
       }
     }
@@ -61,7 +68,7 @@ class StoreBridge {
     if (this.destroyed) return;
     const units = this.view.state.field(unitsField).units as SentenceUnit[];
     queueMicrotask(() => {
-      if (!this.destroyed) useWorkspace.getState().setUnits(units);
+      if (!this.destroyed && this.shown()) useWorkspace.getState().setUnits(units);
     });
   }
 
@@ -74,4 +81,14 @@ class StoreBridge {
 
 export function storeBridge(): Extension {
   return ViewPlugin.fromClass(StoreBridge);
+}
+
+/** Publish the view's units and active sentence now (a parked editor shown again). */
+export function publishUnits(view: EditorView): void {
+  const units = view.state.field(unitsField).units as SentenceUnit[];
+  const active = unitAtPos(units, view.state.selection.main.head)?.id ?? null;
+  queueMicrotask(() => {
+    useWorkspace.getState().setUnits(units);
+    useWorkspace.getState().setActiveSentence(active);
+  });
 }

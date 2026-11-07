@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { EditorProps } from '../contracts';
 import { useWorkspace } from '../state/store';
-import { EditorController } from './controller';
+import { acquireController, releaseController } from './controller';
 import { ALT_KEY, STATE_ORDER } from './labels';
 import { stateShort, useEdT } from './i18n';
 import { reviewQueueOf } from './safe';
@@ -33,7 +33,8 @@ export function Editor(props: EditorProps) {
     if (!parent) return;
     setStatus('loading');
     let seq = 0;
-    const ctrl = new EditorController({
+    // a parked controller of this file (it still held unsent text when the file was switched away) comes back
+    const ctrl = acquireController({
       parent,
       api,
       file,
@@ -46,7 +47,7 @@ export function Editor(props: EditorProps) {
     onReadyRef.current(ctrl.handle);
     return () => {
       offConn();
-      ctrl.destroy();
+      releaseController(ctrl);
     };
   }, [api, file]);
 

@@ -28,7 +28,7 @@ import { paperKeymap } from './keymap';
 import { STATE_LABEL } from './labels';
 import { rewritableLength, rewriteEffect, rewriteExtension } from './rewrite';
 import { factLabel, nextInQueueOf, reviewQueueOf } from './safe';
-import { storeBridge } from './storeBridge';
+import { publishUnits, storeBridge } from './storeBridge';
 import { DocSync } from './sync/docSync';
 import { paperTheme, texHighlight } from './theme';
 import { useEditorUi } from './uiStore';
@@ -40,6 +40,54 @@ export interface ControllerOptions {
   file: string;
   announce(message: string): void;
   onStatus(status: 'loading' | 'ready'): void;
+}
+
+/**
+ * Every live controller (shown or parked). A controller whose file is switched away from (file switcher,
+ * cross-file reveal, a draft arriving for another file) or whose editor is unmounted while it still holds
+ * text the server has not acknowledged is PARKED instead of destroyed: its view leaves the DOM but its
+ * DocSync keeps running (sends, reconciles after a reconnect), and it is destroyed once its log is empty.
+ * Opening the file again re-attaches it, so the unsent typing is still in the editor.
+ */
+const live = new Set<EditorController>();
+
+/** Is any text typed in this page not yet acknowledged by the server (any file)? */
+export function hasUnsavedText(): boolean {
+  for (const c of live) if (c.holdsUnacknowledged()) return true;
+  return false;
+}
+
+let unloadGuard = false;
+function installUnloadGuard(): void {
+  if (unloadGuard || typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+  unloadGuard = true;
+  window.addEventListener('beforeunload', (e) => {
+    if (!hasUnsavedText()) return;
+    // the browser shows its own "leave site?" prompt; the text is still in the page
+    e.preventDefault();
+    e.returnValue = '';
+  });
+}
+
+/**
+ * The controller for `file`: a parked one (re-attached to `opts.parent`, with the new callbacks), or a new
+ * one. Release it with `releaseController`.
+ */
+export function acquireController(opts: ControllerOptions): EditorController {
+  installUnloadGuard();
+  for (const c of live) {
+    if (c.parked && c.file === opts.file && c.api === opts.api) {
+      c.unpark(opts);
+      return c;
+    }
+  }
+  return new EditorController(opts);
+}
+
+/** The editor that showed this controller is gone: destroy it, or park it while it holds unsent text. */
+export function releaseController(c: EditorController): void {
+  if (c.holdsUnacknowledged()) c.park();
+  else c.destroy();
 }
 
 function errText(err: unknown): string {
@@ -57,9 +105,16 @@ export class EditorController {
   private offs: Array<() => void> = [];
   private intentReq = 0;
   private destroyed = false;
+  /** Detached from the DOM, kept alive until the server acknowledged its text (see `live`). */
+  parked = false;
+  readonly file: string;
+  readonly api: ApiClient;
 
-  constructor(private readonly opts: ControllerOptions) {
+  constructor(private opts: ControllerOptions) {
     const { api, file } = opts;
+    this.file = file;
+    this.api = api;
+    live.add(this);
     this.ops = this.makeOps();
     // The editor's messages that refer to the local text (ghost.request: version + cursor) go out after the
     // document changes made before them (DocSync sends one change at a time).
@@ -75,9 +130,12 @@ export class EditorController {
       view: () => (this.destroyed ? null : this.view),
       loaded: () => {
         this.view.dispatch({ effects: this.editable.reconfigure(EditorView.editable.of(true)) });
-        opts.onStatus('ready');
+        this.opts.onStatus('ready');
       },
       notice: (level, message) => useWorkspace.getState().pushNotice(level, message),
+      settled: () => {
+        if (this.parked) this.destroy();
+      },
     });
     const intentActions: IntentWidgetActions = {
       accept: (view, i) => {
@@ -150,9 +208,36 @@ export class EditorController {
     this.sync.start();
   }
 
+  /** Text typed here that the server has not acknowledged (sent or not). */
+  holdsUnacknowledged(): boolean {
+    return !this.destroyed && this.sync.core.initialized && this.sync.core.pending().length > 0;
+  }
+
+  /** Leave the DOM but keep syncing (see `live`). */
+  park(): void {
+    if (this.destroyed || this.parked) return;
+    this.parked = true;
+    this.view.dom.remove();
+    this.opts = { ...this.opts, onStatus: () => undefined, announce: () => undefined };
+  }
+
+  /** Show a parked controller again in `opts.parent`. */
+  unpark(opts: ControllerOptions): void {
+    if (!this.parked || this.destroyed) return;
+    this.parked = false;
+    this.opts = opts;
+    opts.parent.appendChild(this.view.dom);
+    this.view.requestMeasure();
+    opts.onStatus(this.sync.core.initialized ? 'ready' : 'loading');
+    // the workspace store gets this file's units again (the bridge did not publish while parked)
+    publishUnits(this.view);
+  }
+
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.parked = false;
+    live.delete(this);
     this.sync.stop();
     for (const off of this.offs) off();
     this.offs = [];

@@ -40,6 +40,8 @@ export interface DocSyncHooks {
   /** The first snapshot was applied (editing can start). */
   loaded(): void;
   notice(level: 'info' | 'warn' | 'error', message: string): void;
+  /** The server acknowledged every local change (nothing pending): a parked editor may be destroyed. */
+  settled?(): void;
 }
 
 export class DocSync {
@@ -112,7 +114,14 @@ export class DocSync {
     if (this.awaitTimer) clearTimeout(this.awaitTimer);
     this.awaitTimer = setTimeout(() => {
       this.awaitTimer = null;
-      if (!this.awaitingSnapshot) return;
+      if (!this.awaitingSnapshot || this.stopped) return;
+      if (!this.core.initialized) {
+        // never got a first snapshot (the open was lost or answered before this editor listened): ask again,
+        // or the editor stays read-only on "loading" for good
+        if (this.api.connected) this.open();
+        else this.openSent = false;
+        return;
+      }
       this.awaitingSnapshot = false;
       this.pump();
     }, SNAPSHOT_WAIT_MS);
@@ -196,6 +205,7 @@ export class DocSync {
     const note = reconcileNotice(this.file, res);
     if (note) this.hooks.notice(note.level, note.message);
     this.pump();
+    this.checkSettled();
   }
 
   private onAck(version: number): void {
@@ -207,6 +217,12 @@ export class DocSync {
     }
     this.resyncIfBehind();
     this.pump();
+    this.checkSettled();
+  }
+
+  private checkSettled(): void {
+    if (this.stopped || !this.core.initialized || this.awaitingSnapshot || this.core.pending().length > 0 || this.core.queuedReplace) return;
+    this.hooks.settled?.();
   }
 
   /** A relayed change was missed: once nothing of ours is pending, a fresh snapshot brings the text. */
