@@ -321,5 +321,7 @@ export function createVoiceService(ctx: Ctx): VoiceService {
     authorNorms,
     authorNormsTable,
     styleDistance: styleDistanceFor,
+    // Shutdown and tests: the stats.json write is fire-and-forget, so wait for it before the files go away.
+    flush: () => statsChain,
   };
 }

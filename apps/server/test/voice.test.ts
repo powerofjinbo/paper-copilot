@@ -18,7 +18,15 @@ import {
   pdftotextAvailable,
   splitPlainSentences,
 } from '../src/services/voice/corpusText';
-import { createVoiceService } from '../src/services/voice/voiceService';
+import { createVoiceService as createVoiceServiceRaw } from '../src/services/voice/voiceService';
+
+/** Services made by the current test: their background stats.json writes are drained before cleanup. */
+const made: Array<ReturnType<typeof createVoiceServiceRaw>> = [];
+const createVoiceService = (c: Ctx): ReturnType<typeof createVoiceServiceRaw> => {
+  const v = createVoiceServiceRaw(c);
+  made.push(v);
+  return v;
+};
 import { FIXTURE, makeTempProject, makeTestCtx, type TempProject } from './helpers/ctx';
 
 function coreMetaReady(): boolean {
@@ -92,7 +100,10 @@ beforeEach(async () => {
   project = await makeTempProject();
   ctx = makeTestCtx(project);
 });
-afterEach(() => project.cleanup());
+afterEach(async () => {
+  await Promise.all(made.splice(0).map((v) => v.flush?.()));
+  project.cleanup();
+});
 
 /* ------------------------------------------------------------------------------------ */
 /* Text helpers                                                                          */

@@ -180,6 +180,7 @@ export async function createCtx(opts: CreateCtxOptions): Promise<AppCtx> {
     for (const [name, svc] of [
       ['facts', ctx.facts],
       ['literature', ctx.lit],
+      ['voice', ctx.voice],
     ] as const) {
       const flush = (svc as { flush?: () => Promise<void> }).flush;
       if (typeof flush !== 'function') continue;

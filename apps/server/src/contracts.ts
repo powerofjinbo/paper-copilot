@@ -428,6 +428,8 @@ export interface VoiceService {
   /** Short table "you vs corpus" for block A. */
   authorNormsTable(): string;
   styleDistance(scope: 'document' | 'section' | 'paragraph', id?: string): StyleDistanceResponse;
+  /** Wait for background writes (the stats.json cache) to land. Optional (additive). */
+  flush?(): Promise<void>;
 }
 
 /* ------------------------------------------------------------------------------------ */
