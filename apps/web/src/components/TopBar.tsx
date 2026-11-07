@@ -15,7 +15,7 @@ import { PopoverButton } from './Popover';
 import { submissionStatus } from './steps';
 import { isNoTex, TexInstallHint, withCode } from './TexInstall';
 import { isMockClient } from '../api/extras';
-import { startTour, useTour, markDemoReset } from '../tour/Tour';
+import { markDemoReset, openDemoTour, startTour, useTour } from '../tour/Tour';
 import { menuEntry, TOUR_STEPS } from '../tour/machine';
 import { Badge, IconButton } from './ui';
 
@@ -363,12 +363,14 @@ function HelpMenu({ api }: { api: ApiClient }) {
             data-testid="tour-menu-start"
             onClick={() => {
               close();
-              startTour();
+              // the tour edits the example paper, never the author's own: outside the demo it opens the demo
+              if (demo) startTour();
+              else openDemoTour();
             }}
           >
-            <span>{entry.kind === 'resume' ? t('tour.menuResume', { n: entry.step, total: TOUR_STEPS.length }) : t('tour.menu')}</span>
+            <span>{!demo ? t('tour.menuDemo') : entry.kind === 'resume' ? t('tour.menuResume', { n: entry.step, total: TOUR_STEPS.length }) : t('tour.menu')}</span>
           </button>
-          {entry.kind === 'resume' ? (
+          {demo && entry.kind === 'resume' ? (
             <button
               type="button"
               role="menuitem"

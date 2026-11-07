@@ -2,7 +2,9 @@
  * The guided tour (新手引导): a spotlight on the real element and a small card beside it (never over it,
  * nor over the sentence card or proposal the author is working with), with Back / Next / Skip. Each step
  * asks the author to do one thing in the demo paper and moves on once it is done (steps.ts), or on Next.
- * Offered once on the first launch of the browser demo; the ? menu starts, continues or restarts it.
+ * It runs only in the browser demo (it edits the example paper, never the author's own): offered once on the
+ * first launch of the demo; the ? menu starts, continues or restarts it, and outside the demo opens the demo
+ * in a new tab (`?mock=1&tour=1`).
  *
  * Keyboard: the card's buttons are ordinary buttons; inside the card ← / → go back / next and Escape
  * pauses the tour. Focus moves to the card only when the tour starts or the author uses its buttons, never
@@ -146,6 +148,28 @@ let focusRequest = 0;
 let focusServed = 0;
 function focusCardSoon(): void {
   focusRequest++;
+}
+
+/** Outside the demo: the tour runs on the example paper in a new tab (`?mock=1&tour=1` starts it there). */
+export function openDemoTour(): void {
+  try {
+    window.open(`${window.location.pathname}?mock=1&tour=1`, '_blank', 'noopener');
+  } catch {
+    /* pop-ups blocked: nothing happens, the menu item can be tried again */
+  }
+}
+
+/** `?tour=1` in the demo: start the tour once (the parameter is then dropped from the address). */
+function takeTourParam(): boolean {
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('tour') !== '1') return false;
+    url.searchParams.delete('tour');
+    window.history.replaceState(window.history.state, '', url.toString());
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const RESET_KEY = 'paper-copilot.demo.reset';
@@ -339,7 +363,7 @@ function TourCard({ step, index }: { step: TourStepId; index: number }) {
           {t(keys.title)}
         </h2>
         <p id="tour-card-body" className="tour-body">
-          {t(keys.body)}
+          {withKeys(t(keys.body))}
         </p>
         <div className="tour-do">
           <span className="tour-do-label">{t('tour.doLabel')}</span>
@@ -388,8 +412,12 @@ export function Tour({ api }: { api: ApiClient }) {
   useEffect(() => {
     if (ready && demo && takeDemoReset()) notify('info', t('demo.resetDone'));
   }, [ready, demo, t]);
-  if (!ready) return null;
+  useEffect(() => {
+    if (ready && demo && takeTourParam()) startTour();
+  }, [ready, demo]);
+  // the tour asks the author to edit the example paper: it only ever runs in the demo
+  if (!ready || !demo) return null;
   if (step) return <TourCard key={step} step={step} index={state.index} />;
-  if (offer && demo) return <TourOffer />;
+  if (offer) return <TourOffer />;
   return null;
 }

@@ -990,6 +990,28 @@ async function main() {
     return `${items.length} files; revealed ${target.id.slice(-6)} in ${target.file}; ${drafted} drafted sentence(s) landed in results.tex`;
   });
 
+  await check('tour: ?tour=1 (the full app\'s "Take the tour" opens the demo with it) starts the tour; Skip pauses and the ? menu continues it', async () => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${BASE}/?mock=1&tour=1`);
+    await page.waitForSelector('[data-testid="tour-card"][data-step="rail"]', { timeout: 20000 });
+    const url = page.url();
+    assert(!/tour=1/.test(url), `the parameter stayed in the address: ${url}`);
+    await page.locator('[data-testid="tour-next"]').click();
+    await page.waitForSelector('[data-testid="tour-card"][data-step="card"]', { timeout: 3000 });
+    await page.locator('[data-testid="tour-skip"]').click();
+    await waitFor(() => !document.querySelector('[data-testid="tour-card"]'), null, 2000, 'paused');
+    await page.locator('[data-testid="help-menu"]').click();
+    const resume = await page.locator('[data-testid="tour-menu-start"]').innerText();
+    assert(/2/.test(resume), `menu entry: ${resume}`);
+    await page.locator('[data-testid="tour-menu-start"]').click();
+    await page.waitForSelector('[data-testid="tour-card"][data-step="card"]', { timeout: 3000 });
+    // Escape inside the card pauses the tour too
+    await page.locator('[data-testid="tour-card"]').focus();
+    await page.keyboard.press('Escape');
+    await waitFor(() => !document.querySelector('[data-testid="tour-card"]'), null, 2000, 'paused by Escape');
+    return `menu: "${resume}"`;
+  });
+
   for (const v of [
     { lang: 'zh', dark: false },
     { lang: 'en', dark: true },
