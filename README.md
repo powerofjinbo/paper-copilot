@@ -82,13 +82,13 @@ and is tested here (simulated AI, local git remote, TeX Live 2023):
 
 | Suite | Result |
 |---|---|
-| `packages/core` (segmenter, anchoring with a seeded fuzz test, gate, prompts, meta) | 537 tests pass |
+| `packages/core` (segmenter, anchoring with a seeded fuzz test, gate, prompts, meta) | 642 tests pass |
 | `packages/client-core` (ghost machine, review queue) | 102 tests pass |
-| `apps/server` (services, routes, security, SDK request shapes, end-to-end in process) | 438 tests pass |
-| `apps/web` (sync core, decorations, ghost, panels, API client) | 177 tests pass |
+| `apps/server` (services, routes, security, SDK request shapes, end-to-end in process) | 530 tests pass |
+| `apps/web` (sync core, decorations, ghost, panels, API client) | 213 tests pass |
 | `sidecar` (your `style_check.py` behind a JSON-lines process) | 25 tests pass |
-| `node e2e/fullstack.mjs` (real server + built app in Chromium: the Phase 1a acceptance walk, compile, SyncTeX both ways, draft and review, push refused then allowed, a co-author pull keeping 29/29 sentence ids, kill -9 and restart) | 20/20 |
-| Browser harnesses (`apps/web/harness/*.mjs`: app in demo mode, editor, PDF, UX review) | 18/18, 14/14, 17/17, 18/18 |
+| `node e2e/fullstack.mjs` (real server + built app in Chromium: the Phase 1a acceptance walk, compile, SyncTeX both ways, draft and review, push refused then allowed, a co-author pull keeping 29/29 sentence ids, kill -9 and restart; the submission check, a planted abstract/body number drift, restoring a version, a derived "2.5 times" through the gate, a re-run result JSON marking its fact stale, the file switcher on the multi-file fixture, the 4-step layout in 中文/light/dark) | 28/28 |
+| Browser harnesses (`apps/web/harness/*.mjs`: app in demo mode, editor, PDF, UX review) | 29/29, 14/14, 17/17, 18/18 |
 
 The segmenter agrees with the skill's `style_check.py` on 100% of the fixture's sentences. An adversarial review from
 five angles (integrity, anchoring, security, SDK correctness, UX) found 36 problems; each was reproduced by a failing
