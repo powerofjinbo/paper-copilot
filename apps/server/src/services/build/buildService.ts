@@ -20,7 +20,7 @@ import { basename, isAbsolute, join, normalize, relative, resolve, sep } from 'n
 import type { CompileError } from '@paper-copilot/core';
 import type { BuildService, CompileStatus, Ctx } from '../../contracts';
 import { safeJoin } from '../../infra';
-import { parseLatexLog, tailBytes } from './latexLog';
+import { missingFileHint, parseLatexLog, tailBytes } from './latexLog';
 import { probeExecutable, runProcess } from './proc';
 import { ShadowTree } from './shadow';
 import { boxFromRecords, parseSynctexEditAll, parseSynctexView, type PdfBox } from './synctex';
@@ -207,6 +207,11 @@ export function createBuildService(ctx: Ctx, opts: BuildServiceOptions = {}): Bu
       }
       const mapFile = (raw: string) => toRel(raw) ?? raw;
       let errors = parseLatexLog(log, { mapFile, mainFile: mainRel() });
+      // Missing class/package: say what to install (and that TinyTeX is the cause, when it is).
+      errors = errors.map((e) => {
+        const hint = missingFileHint(e.message, log);
+        return hint ? { ...e, message: `${e.message} ${hint}` } : e;
+      });
       if (r.code === 0) {
         if (!(await publish())) return done('error', fail('latexmk finished but produced no PDF'), tail);
         // A clean exit is authoritative (the final log may still quote recovered "! ..." lines).

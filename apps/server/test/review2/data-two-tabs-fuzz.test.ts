@@ -11,7 +11,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { EditorState, type TransactionSpec } from '@codemirror/state';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import type { ClientMessage, ServerMessage } from '@paper-copilot/core';
 import { createCtx, type AppCtx } from '../../src/ctx';
@@ -129,12 +129,21 @@ let ctx: AppCtx;
 let server: PaperServer;
 const apis: WsApi[] = [];
 
-beforeAll(async () => {
+const busNotices: string[] = [];
+async function fresh(): Promise<void> {
+  for (const a of apis.splice(0)) a.close();
+  await server?.close();
+  await ctx?.close();
+  project?.cleanup();
+  busNotices.length = 0;
   project = await makeTempProject();
   await initProject(project.root, { repo: project.repoDir, skill: SKILL_DIR });
   ctx = await createCtx({ root: project.root, fake: true, logLevel: 'error', watch: false, lintSidecar: false, docs: { segmentDebounceMs: 20, writeDebounceMs: 600_000 } });
   server = await createServer({ ctx, port: 0, pingIntervalMs: 600_000 });
-});
+  ctx.bus.subscribe((m) => {
+    if (m.type === 'notice') busNotices.push(m.message);
+  });
+}
 
 afterAll(async () => {
   for (const a of apis) a.close();
@@ -190,6 +199,7 @@ const settled = (t: Tab) => t.ed.sync.core.pending().length === 0 && !t.ed.sync.
 const SEEDS = (process.env.R2_SEEDS ?? '1,2,3,4,5,6').split(',').map(Number);
 
 it.each(SEEDS)('seed %i: two tabs + co-author reloads + reconnects keep every text', async (seed) => {
+  await fresh();
   const rand = rng(seed);
   const tabs = [await openTab(`a${seed}`), await openTab(`b${seed}`)];
   const disk = join(ctx.paths.tex, 'main.tex');
