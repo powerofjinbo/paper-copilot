@@ -134,7 +134,12 @@ function CompilePill({ api }: { api: ApiClient }) {
           {label}
         </span>
       </button>
-      <PopoverButton className="compile-caret" title={t('compile.details')} popClass="compile-popover" label={<IconChevronDown size={13} />}>
+      <PopoverButton
+        className={`compile-caret${compile.errors.length ? ' has-errors' : ''}`}
+        title={compile.errors.length ? `${t('compile.errors')} (${compile.errors.length})` : t('compile.details')}
+        popClass="compile-popover"
+        label={compile.errors.length ? <span className="compile-err-count">{compile.errors.length > 99 ? '99+' : compile.errors.length}</span> : <IconChevronDown size={13} />}
+      >
         {(close) => (
           <>
             <h3 className="popover-title">{t('compile.errors')}</h3>

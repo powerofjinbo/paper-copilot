@@ -430,7 +430,8 @@ async function main() {
       );
       await sleep(300);
       const pill = await page.locator('.compile-pill').innerText();
-      await page.locator('.compile-pill').click();
+      // the pill compiles; its caret (which shows the error count) opens the errors
+      await page.locator('.compile-caret').click();
       await page.locator('.compile-errors button').first().click();
       await sleep(300);
       const line = await pc(() => {
