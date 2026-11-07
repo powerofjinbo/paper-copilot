@@ -22,6 +22,7 @@ import { StatusBar } from './components/StatusBar';
 import { Toasts } from './components/Toasts';
 import { TopBar } from './components/TopBar';
 import { PanelHost } from './panels/PanelHost';
+import { Tour } from './tour/Tour';
 import { htmlLang, jobKey, translate, useT } from './i18n';
 import { useShell } from './state/extra';
 import { useWorkspace } from './state/store';
@@ -407,6 +408,7 @@ function Workspace({ api }: { api: ApiClient }) {
       <Toasts />
       <ShortcutHelp />
       <SettingsDrawer api={api} />
+      <Tour api={api} />
     </div>
   );
 }

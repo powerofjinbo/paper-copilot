@@ -1,0 +1,141 @@
+/* The guided tour: a spotlight ring (the page stays usable: no pointer capture) and a small card. */
+.tour-spot {
+  position: fixed;
+  z-index: 30;
+  border-radius: 8px;
+  pointer-events: none;
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent), 0 0 0 100vmax rgba(20, 18, 15, 0.16);
+  transition: left 0.15s ease, top 0.15s ease, width 0.15s ease, height 0.15s ease;
+}
+:root[data-theme='dark'] .tour-spot {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 0 100vmax rgba(0, 0, 0, 0.32);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .tour-spot {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 0 100vmax rgba(0, 0, 0, 0.32);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tour-spot {
+    transition: none;
+  }
+}
+
+.tour-card,
+.tour-offer {
+  position: fixed;
+  z-index: 70;
+  width: min(340px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  padding: 12px 14px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-elev);
+  color: var(--ink);
+  box-shadow: var(--shadow-2);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.tour-card:focus {
+  outline: none;
+}
+.tour-card:focus-visible {
+  box-shadow: var(--shadow-2), 0 0 0 2px var(--focus-ring);
+}
+.tour-offer {
+  right: 20px;
+  bottom: 44px;
+  width: min(360px, calc(100vw - 24px));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.tour-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.tour-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+.tour-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--line);
+}
+.tour-dot.is-past {
+  background: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+.tour-dot.is-current {
+  width: 14px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+.tour-progress-text {
+  margin-left: 4px;
+}
+.tour-skip {
+  margin-left: auto;
+}
+.tour-title {
+  margin: 0 0 4px;
+  font-size: 14.5px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.tour-body {
+  margin: 0 0 8px;
+  color: var(--ink-2);
+}
+.tour-do {
+  display: block;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: var(--accent-bg);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.tour-do-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.tour-do .kbd {
+  font-size: 11px;
+}
+.tour-status {
+  min-height: 0;
+  margin: 6px 0 0;
+}
+.tour-status:empty {
+  display: none;
+}
+.tour-done {
+  color: var(--ok);
+  font-weight: 600;
+}
+.tour-card.is-done {
+  border-color: color-mix(in srgb, var(--ok) 55%, var(--line));
+}
+.tour-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+.tour-offer .tour-actions {
+  justify-content: flex-end;
+}
+.tour-spacer {
+  flex: 1 1 auto;
+}

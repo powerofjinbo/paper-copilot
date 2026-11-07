@@ -15,6 +15,8 @@ import { PopoverButton } from './Popover';
 import { submissionStatus } from './steps';
 import { isNoTex, TexInstallHint, withCode } from './TexInstall';
 import { isMockClient } from '../api/extras';
+import { startTour, useTour, markDemoReset } from '../tour/Tour';
+import { menuEntry, TOUR_STEPS } from '../tour/machine';
 import { Badge, IconButton } from './ui';
 
 function BrandMark() {
@@ -326,6 +328,98 @@ function SubmissionPill({ api }: { api: ApiClient }) {
   );
 }
 
+/**
+ * "?": keyboard shortcuts, the guided tour (start, continue, start over) and, in the browser demo, a reset
+ * of the example paper. (F1 and "?" outside the text still open the shortcuts directly.)
+ */
+function HelpMenu({ api }: { api: ApiClient }) {
+  const t = useT();
+  const tour = useTour((s) => s.state);
+  const demo = isMockClient(api);
+  const entry = menuEntry(tour);
+  return (
+    <PopoverButton className="icon-btn help-btn" title={t('top.help')} role="menu" popClass="help-menu" testId="help-menu" label={<IconHelp />}>
+      {(close) => (
+        <>
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            aria-keyshortcuts="F1"
+            onClick={() => {
+              close();
+              useShell.getState().setHelpOpen(true);
+            }}
+          >
+            <span>{t('help.shortcuts')}</span>
+            <kbd className="kbd menu-kbd">?</kbd>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            data-testid="tour-menu-start"
+            onClick={() => {
+              close();
+              startTour();
+            }}
+          >
+            <span>{entry.kind === 'resume' ? t('tour.menuResume', { n: entry.step, total: TOUR_STEPS.length }) : t('tour.menu')}</span>
+          </button>
+          {entry.kind === 'resume' ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              data-testid="tour-menu-restart"
+              onClick={() => {
+                close();
+                startTour(true);
+              }}
+            >
+              <span>{t('tour.menuRestart')}</span>
+            </button>
+          ) : null}
+          {demo ? (
+            <>
+              <div className="menu-sep" role="separator" />
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                title={t('demo.resetTitle')}
+                data-testid="demo-reset"
+                onClick={() => {
+                  close();
+                  resetDemo(t('demo.resetConfirm'));
+                }}
+              >
+                <span>{t('demo.reset')}</span>
+              </button>
+            </>
+          ) : null}
+        </>
+      )}
+    </PopoverButton>
+  );
+}
+
+/**
+ * The demo paper lives only in this tab (the in-browser mock): reloading the page starts it again from the
+ * fixture text. Asked first, since the author's changes in the demo go.
+ */
+function resetDemo(question: string): void {
+  let ok = true;
+  try {
+    ok = window.confirm(question);
+  } catch {
+    ok = true;
+  }
+  if (!ok) return;
+  markDemoReset();
+  window.location.reload();
+}
+
 export function TopBar({ api }: { api: ApiClient }) {
   const t = useT();
   const lang = useShell((s) => s.lang);
@@ -354,7 +448,7 @@ export function TopBar({ api }: { api: ApiClient }) {
         ) : null}
         <span className="topbar-divider" aria-hidden="true" />
         <IconButton label={t('top.settings')} icon={<IconGear />} onClick={() => useShell.getState().setSettingsOpen(true)} data-testid="settings-button" aria-haspopup="dialog" />
-        <IconButton label={t('top.help')} icon={<IconHelp />} onClick={() => useShell.getState().setHelpOpen(true)} aria-keyshortcuts="F1" />
+        <HelpMenu api={api} />
       </div>
     </header>
   );

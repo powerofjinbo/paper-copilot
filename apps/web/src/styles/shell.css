@@ -1198,3 +1198,9 @@ body.is-resizing canvas {
   max-width: 360px;
   line-height: 1.45;
 }
+.help-menu {
+  min-width: 230px;
+}
+.menu-item .menu-kbd {
+  margin-left: auto;
+}
