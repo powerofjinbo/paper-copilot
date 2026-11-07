@@ -340,7 +340,10 @@ function derivedInContext(t: string, tok: NumeralDetail, rel: DerivedRelation, b
     sub = subjectOf(t, d1, d2);
     const both = sub.namedA && sub.namedB;
     const one = sub.namedA || sub.namedB;
-    if (!both && !(one && quantity && BASELINE_CUE_RE.test(t))) return null;
+    // "the tracker finds 2.45% more targets than the baseline": the claim's own A-versus-B comparison
+    // may name neither side, as long as it names the quantity and the reference of the comparison
+    const claimPair = !!claimSidesOf(f1) && sideNameOf(f1) === otherSideOf(f2) && sideNameOf(f2) === otherSideOf(f1);
+    if (!both && !((one || claimPair) && quantity && BASELINE_CUE_RE.test(t))) return null;
   } else if (!quantity) return null;
   if (!sub || !sub.subject || rel.kind === 'share') return { issue: null };
   // expected direction from the subject's side
