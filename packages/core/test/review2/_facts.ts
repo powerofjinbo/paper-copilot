@@ -42,7 +42,13 @@ export function loadFacts(repo: string): Fact[] {
           }
         }
       };
-      walk(JSON.parse(src), [], '');
+      const parsed = JSON.parse(src) as Record<string, unknown>;
+      const before = out.length;
+      walk(parsed, [], '');
+      // like the real fact service: a claim's string fields (claim, A, B, population, ...) describe every
+      // number of the claim ("eff_A (claim=G1; A=Canto-L (ttbar); B=acorn (HNL) + LM; ...)")
+      const strMeta = Object.entries(parsed).filter(([k, v]) => typeof v === 'string' && !/^(?:split|outcome)$/.test(k)).map(([k, v]) => `${k}=${String(v)}`).join('; ');
+      if (name.endsWith('_claim.json') && strMeta) for (const f of out.slice(before)) f.definition = `${f.definition} (${strMeta})`;
     } else {
       const [head, ...rows] = src.trim().split('\n').map((l) => l.split(','));
       const cols = head!;

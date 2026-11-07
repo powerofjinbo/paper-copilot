@@ -130,9 +130,28 @@ function fieldsOf(f: Fact): Array<[string, number]> {
  */
 function factorCompatible(tok: NumeralToken, f: Fact): boolean {
   if ((tok as Partial<NumeralDetail>).factor !== true) return true;
+  return isRatioFact(f);
+}
+
+const RATIO_UNITS = new Set(['x', 'times', 'factor', 'ratio', 'fold']);
+const RATIO_NAME_RE = /(?:ratio|factor|speed[\s_-]?up|fold|rejection|improvement[\s_-]?factor|_over_|\bover\b|times\b)/i;
+
+/**
+ * A fact a factor may stand for: one that IS a ratio (unit "x"/"times"/"ratio", a 'ratio'/'factor' tag,
+ * or a name/definition that says ratio, factor, speed-up, rejection, "A over B"). A dimensionless value
+ * is not enough: a count of seeds (3) or a difference in points (1.76) is never "3 times" or "2 times".
+ */
+export function isRatioFact(f: Fact): boolean {
+  if (isFractionFact(f)) return false;
+  const tags = (f.tags ?? []).map((t) => t.toLowerCase());
+  if (tags.includes('count') || tags.includes('fraction')) return false;
   const u = normalizeUnit(f.unit).toLowerCase();
-  if (u !== '' && u !== 'x' && u !== 'times' && u !== 'factor' && u !== 'ratio') return false;
-  return !isFractionFact(f);
+  if (RATIO_UNITS.has(u)) return true;
+  if (u !== '') return false;
+  if (tags.some((t) => /^(?:ratio|factor|speedup|speed-up)$/.test(t))) return true;
+  const leaf = String(f.id ?? '').split('.').pop() ?? '';
+  if (/^n_|(?:^|_)(?:n|count|num|points?|pts|delta|diff|sigma)(?:_|$)/i.test(leaf)) return false;
+  return RATIO_NAME_RE.test(leaf) || RATIO_NAME_RE.test(f.definition ?? '');
 }
 
 /** Scales a numeral may use for a fact under the strict rules. */

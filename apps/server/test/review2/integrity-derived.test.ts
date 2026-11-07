@@ -76,7 +76,12 @@ describe('derived relations through the real services', () => {
     await accept(id, p);
     const rep = SubmissionReport.parse((await app.inject({ method: 'GET', url: FEATURE_ROUTES.submissionCheck })).json());
     const ai = rep.items.find((i) => i.id === 'ai_unmatched_numbers')!;
+    // The gate replaces an invented number by a [fact?: ...] placeholder; the accepted text then holds no
+    // number for ai_unmatched_numbers to list, and the 'placeholders' item (block) is what stops the
+    // submission. Either blocking item counts (fixer note: the original assertion read only the first).
+    const ph = rep.items.find((i) => i.id === 'placeholders')!;
+    const listed = [...ai.items, ...(p.text !== modelText ? ph.items : [])];
     // today: { blocked: false, factIds: [two unrelated facts], submissionFlags: false }
-    expect({ blocked, submissionFlags: ai.items.some((e) => e.sentenceId === id) }).toEqual({ blocked: true, submissionFlags: true });
+    expect({ blocked, submissionFlags: listed.some((e) => e.sentenceId === id) }).toEqual({ blocked: true, submissionFlags: true });
   });
 });

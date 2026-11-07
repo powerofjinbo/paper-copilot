@@ -67,6 +67,8 @@ import { compareLatexInvariance, findPlaceholders, latexTokensOf, scanLatex } fr
 import { extractNumeralDetails, normalizeUnit as normUnit, relaxedOnlyMatches, resolveLinks, type NumeralDetail, type TokenLink } from '../facts/numbers';
 import { claimStrengthIssues, confidenceLevelOf } from './claims';
 import { directionWords, grammarOnlyReasons, meaningChange, type Direction } from './meaning';
+import { definitionStem } from '../meta/derived';
+import { claimSidesOf, distinctTokens, isBaselineMention, mentionsOf, nameTokens, otherSideOf, sideNameOf } from './sides';
 import { cleanWordSpans, cleanWords, countWords, findCjk, findReasoningLeak, placeholderSafe } from './text';
 
 export type GateMode = 'ghost' | 'draft' | 'rewrite' | 'grammar' | 'intent';
@@ -236,7 +238,11 @@ function derivedFormMatch(tok: NumeralDetail, rel: DerivedRelation): boolean {
   if (typeof rel.maxSigfigs === 'number' && !tok.word && tok.ratioDen === null && tok.sigfigs > rel.maxSigfigs) return false;
   switch (rel.form) {
     case 'factor':
-      return tok.factor && !tok.percent && !tok.points && near(v, tol);
+      if (!tok.factor || tok.percent || tok.points) return false;
+      // a factor in words or as a whole number ("twice", "3 times") is a rounding the reader takes at
+      // face value: it must be within 10% of the measured ratio ("twice" is not 1.55, "3 times" not 2.5)
+      if (tok.word || tok.decimals - tok.exponent <= 0) return Math.abs(Math.abs(tok.value) - v) <= 0.1 * v + 1e-12;
+      return near(v, tol);
     case 'points':
       return tok.points && !tok.factor && near(v, tol);
     case 'percent':
@@ -250,6 +256,114 @@ function derivedFormMatch(tok: NumeralDetail, rel: DerivedRelation): boolean {
     default:
       return false;
   }
+}
+
+/** Words that state a comparison: a relative change is only ever "X% higher/lower/fewer (than ...)". */
+const COMPARISON_RE = /\b(?:higher|lower|more|fewer|less|larger|smaller|greater|bigger|increas\w*|decreas\w*|reduc\w*|improv\w*|drops?|dropped|rises?|rose|gains?|than|relative|compared|faster|slower|loss|los(?:e|es|t)|grow\w*|grew|fall\w*|fell|declin\w*|exceed\w*|cuts?|suppress\w*|outperform\w*|trail\w*|above|below)\b/i;
+const BASELINE_CUE_RE = /\b(?:than|baseline|over|against|compared|relative|versus|vs)\b/i;
+/** Result verbs with a direction that the direction-word list leaves out (it is shared with grammar checks). */
+const RESULT_UP_RE = /\b(?:improv(?:e|es|ed|ing)|outperform(?:s|ed|ing)?|better|gains?|beats?|surpass(?:es|ed)?)\b/gi;
+const GENERIC_STEM = new Set(['mean', 'value', 'val', 'rate', 'n', 'num', 'total', 'avg', 'average', 'frac', 'fraction', 'main', 'new', 'old', 'pct', 'diff', 'delta']);
+const STEM_WORDS: Record<string, RegExp> = {
+  eff: /\b(?:efficienc\w*|finds?|found|reconstruct\w*|recover\w*)\b/i,
+  efficiency: /\b(?:efficienc\w*|finds?|found|reconstruct\w*)\b/i,
+  time: /\b(?:times?(?!\s+(?:more|fewer|less|higher|lower|larger|smaller|as))|timing|faster|slower|speed\w*|latenc\w*|runtime|ms)\b/i,
+};
+
+/** Does the sentence speak of the quantity of this fact (the words of its definition stem)? */
+function namesQuantity(t: string, f: Fact | undefined): boolean {
+  if (!f) return false;
+  const toks = definitionStem(f).split('_').filter((w) => w && !GENERIC_STEM.has(w) && !/^\d+$/.test(w));
+  for (const w of toks) {
+    const re = STEM_WORDS[w];
+    if (re ? re.test(t) : w.length >= 3 && new RegExp(`\\b${w.replace(/s$/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(t)) return true;
+  }
+  return false;
+}
+
+/** Direction word nearest to a numeral (within 80 chars), including result verbs ("improves"). */
+function nearestDirection(t: string, dirs: Array<{ dir: Direction; word: string; start: number; end: number }>, tok: { start: number; end: number }, resultVerbs = true): { dir: Direction; word: string } | null {
+  let best: { dir: Direction; word: string; d: number } | null = null;
+  const consider = (dir: Direction, word: string, start: number, end: number): void => {
+    const dist = end <= tok.start ? tok.start - end : start >= tok.end ? start - tok.end : 0;
+    if (dist > 80) return;
+    if (!best || dist < best.d) best = { dir, word, d: dist };
+  };
+  for (const d of dirs) consider(d.dir, d.word, d.start, d.end);
+  if (!best && resultVerbs) for (const m of t.matchAll(RESULT_UP_RE)) consider('up', m[0].toLowerCase(), m.index, m.index + m[0].length);
+  return best;
+}
+
+/**
+ * The subject of a two-sided comparison: which of the two named sides the sentence speaks from.
+ * 'A' / 'B' for the first / second name list, null when the sentence names neither (or cannot tell).
+ */
+function subjectOf(t: string, ta: string[], tb: string[]): { subject: 'A' | 'B' | null; namedA: boolean; namedB: boolean } {
+  const ma = mentionsOf(t, ta);
+  const mb = mentionsOf(t, tb);
+  const fa = ma.find((m) => !isBaselineMention(t, m.start));
+  const fb = mb.find((m) => !isBaselineMention(t, m.start));
+  const baseA = ma.some((m) => isBaselineMention(t, m.start));
+  const baseB = mb.some((m) => isBaselineMention(t, m.start));
+  let subject: 'A' | 'B' | null = null;
+  if (fa && (!fb || fa.start < fb.start) && !(baseA && !baseB && fb)) subject = 'A';
+  else if (fb && (!fa || fb.start < fa.start || (baseA && !baseB))) subject = 'B';
+  else if (baseB && !baseA) subject = 'A';
+  else if (baseA && !baseB) subject = 'B';
+  return { subject, namedA: ma.length > 0, namedB: mb.length > 0 };
+}
+
+/**
+ * Is a derived relation that matches a numeral's value really what the sentence states? A relation is a
+ * computed number; any sentence number can equal one of the thousands of pairs by chance. It is
+ * accepted only when (1) it is written in the form of its kind (a relative change as a comparison,
+ * never as an absolute value), (2) the sentence names both sides it compares (the two methods or
+ * samples), or one side and the comparison's reference, or, for facts with no side, speaks of their
+ * quantity; and (3) when the sides are named, the direction word agrees with the sign. Returns null
+ * when the relation does not apply, else the direction issue to report (or none).
+ */
+function derivedInContext(t: string, tok: NumeralDetail, rel: DerivedRelation, byId: Map<string, Fact>, dirs: Array<{ dir: Direction; word: string; start: number; end: number }>): { issue: GateIssue | null } | null {
+  const ids = arr<string>(rel.factIds);
+  if (ids.length !== 2) return { issue: null }; // an untyped or one-fact relation: as declared
+  const f1 = byId.get(ids[0]!);
+  const f2 = byId.get(ids[1]!);
+  if (!f1 || !f2) return { issue: null };
+  const near = t.slice(Math.max(0, tok.start - 80), Math.min(t.length, tok.end + 80));
+  if (rel.kind === 'relative' && !COMPARISON_RE.test(near)) return null;
+  const s1 = sideNameOf(f1);
+  const s2 = sideNameOf(f2);
+  const quantity = namesQuantity(t, f1) || namesQuantity(t, f2);
+  let sub: ReturnType<typeof subjectOf> | null = null;
+  if (s1 && s2 && s1 !== s2) {
+    const d1 = distinctTokens(s1, s2);
+    const d2 = distinctTokens(s2, s1);
+    sub = subjectOf(t, d1, d2);
+    const both = sub.namedA && sub.namedB;
+    const one = sub.namedA || sub.namedB;
+    if (!both && !(one && quantity && BASELINE_CUE_RE.test(t))) return null;
+  } else if (!quantity) return null;
+  if (!sub || !sub.subject || rel.kind === 'share') return { issue: null };
+  // expected direction from the subject's side
+  let expected: Direction | null = null;
+  const v = typeof rel.value === 'number' ? rel.value : NaN;
+  if (rel.kind === 'ratio') expected = sub.subject === 'A' ? 'up' : 'down'; // factIds = [larger, smaller]
+  else if ((rel.kind === 'relative' || rel.kind === 'difference') && Number.isFinite(v) && v !== 0) {
+    const up = v > 0;
+    expected = (sub.subject === 'A') === up ? 'up' : 'down';
+  }
+  if (!expected) return { issue: null };
+  const said = nearestDirection(t, dirs, tok);
+  if (!said || said.dir === expected) return { issue: null };
+  return {
+    issue: {
+      code: 'direction',
+      severity: 'block',
+      message: `"${said.word} ... ${tok.word ? tok.phrase : tok.raw}" says ${sub.subject === 'A' ? s1 : s2} is ${said.dir === 'up' ? 'higher' : 'lower'}, but ${rel.description} goes the other way.`,
+      start: tok.start,
+      end: tok.end,
+      raw: tok.raw,
+    },
+  };
 }
 
 interface Replacement {
@@ -471,6 +585,7 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
   const cutText = (tok: NumeralDetail): string => `"${tok.word ? tok.phrase : tok.raw}${tok.unit ? ' ' + tok.unit : ''}" after "${tok.comparison}"`;
   const formOf = (tok: NumeralDetail): string => (tok.percent ? '%' : tok.points ? 'points' : tok.factor ? 'factor' : (tok.unit ?? ''));
 
+  const dirsAll = directionWords(t);
   for (const l of links) {
     const tok = l.tok;
     if (l.status === 'structural') {
@@ -516,8 +631,16 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
         continue;
       }
     }
-    // unmatched: derived relation?
-    const rel = derived.find((d) => derivedMatch(tok, d));
+    // unmatched: derived relation? (only one the sentence actually states: its form, its two sides, its direction)
+    let rel: DerivedRelation | undefined;
+    for (const d of derived) {
+      if (!derivedMatch(tok, d)) continue;
+      const c = derivedInContext(t, tok, d, byId, dirsAll);
+      if (!c) continue;
+      rel = d;
+      if (c.issue) issues.push(c.issue);
+      break;
+    }
     if (rel) {
       const ids = arr<string>(rel.factIds).filter((x) => typeof x === 'string');
       linked.push(...ids);
@@ -582,6 +705,64 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
     );
   }
 
+  // ---------------------------------------------------------------- whose number: attribution
+  // A value of one side of a comparison ("eff_A", A = Canto-L) given to the other side ("acorn reaches
+  // 96.94%", "94.62% for Canto-L") states the opposite result with every numeral grounded.
+  {
+    // a numeral linked to one fact, or one whose candidates all belong to the same side (eff_B and the
+    // acorn row's mean are one number of one method)
+    const linkedSides = links
+      .filter((l) => (l.linked || l.candidates.length > 0) && !l.tok.isUncertainty && l.tok.ratioDen === null && l.status !== 'structural')
+      .map((l) => {
+        const ids = l.linked ? [l.linked] : l.candidates;
+        const fs = ids.map((id) => byId.get(id)).filter((f): f is Fact => !!f);
+        const names = uniq(fs.map((f) => sideNameOf(f)));
+        return { l, f: names.length === 1 && names[0] ? fs.find((f) => otherSideOf(f)) ?? fs[0] : undefined };
+      });
+    const sideNames = uniq(linkedSides.map((x) => (x.f ? sideNameOf(x.f) : null)).filter((x): x is string => !!x));
+    for (const { l, f } of linkedSides) {
+      if (!f) continue;
+      const mine = sideNameOf(f);
+      if (!mine) continue;
+      const others = uniq([otherSideOf(f), ...sideNames].filter((x): x is string => !!x && x !== mine));
+      if (!others.length) continue;
+      const tok = l.tok;
+      const myTokens = uniq(others.flatMap((o) => distinctTokens(mine, o)));
+      const otherTokens = others.map((o) => ({ name: o, tokens: distinctTokens(o, mine) }));
+      if (!myTokens.length || otherTokens.every((o) => !o.tokens.length)) continue;
+      const nextStart = links.map((x) => x.tok.start).filter((x) => x > tok.end).sort((a, b) => a - b)[0] ?? t.length;
+      const after = t.slice(tok.replEnd, Math.min(nextStart, tok.replEnd + 60));
+      const bindAfter = (tokens: string[]): boolean =>
+        mentionsOf(after, tokens).some((m) => /^(?:\\?%|\s|~|\)|\$)*(?:points?\s*|percent\s*)?(?:\(\s*|\b(?:for|by|from|with|of|in)\s+(?:the\s+)?)$/i.test(after.slice(0, m.start)));
+      const before = t.slice(0, tok.start);
+      const lastBefore = (tokens: string[]): number => {
+        const ms = mentionsOf(before, tokens);
+        return ms.length ? ms[ms.length - 1]!.start : -1;
+      };
+      let bound: { name: string; explicit: boolean } | null = null;
+      const otherAfter = otherTokens.find((o) => o.tokens.length && bindAfter(o.tokens));
+      if (bindAfter(myTokens)) bound = { name: mine, explicit: true };
+      else if (otherAfter) bound = { name: otherAfter.name, explicit: true };
+      else {
+        let best = { name: mine, pos: lastBefore(myTokens) };
+        for (const o of otherTokens) {
+          const p = o.tokens.length ? lastBefore(o.tokens) : -1;
+          if (p > best.pos) best = { name: o.name, pos: p };
+        }
+        if (best.pos >= 0) bound = { name: best.name, explicit: false };
+      }
+      if (!bound || bound.name === mine) continue;
+      issues.push({
+        code: 'direction',
+        severity: bound.explicit ? 'block' : 'warn',
+        message: `"${shown(tok)}" is given to ${bound.name}, but ${f.id} = ${String(f.value)} is the value of ${mine}; the sentence would state another result.`,
+        start: tok.start,
+        end: tok.end,
+        raw: tok.raw,
+      });
+    }
+  }
+
   // ---------------------------------------------------------------- direction of signed results
   // A numeral without a sign may state the magnitude of a negative fact ("lower by 0.83 points"); the
   // direction word next to it must then agree with the sign.
@@ -600,7 +781,13 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
       // ("acorn's rate is 0.83 points higher than Canto-L's"); B after "than"/"over"/"against" is the baseline
       const ab = /^(.+?)\s+(?:minus|−|–|-)\s+(.+?)\s*$/.exec(String(f.definition ?? ''));
       let subjectKnown = false;
-      if (ab) {
+      const claimAB = ab ? null : claimSidesOf(f);
+      if (claimAB) {
+        // a difference of a two-sided claim (definition "delta_points (A=Canto-L; B=acorn)") is A minus B
+        const sub = subjectOf(t, distinctTokens(claimAB[0], claimAB[1]), distinctTokens(claimAB[1], claimAB[0]));
+        subjectKnown = sub.subject !== null;
+        if (sub.subject === 'B') sign = sign === 'up' ? 'down' : 'up';
+      } else if (ab) {
         const entity = (side: string, left: boolean): string => {
           let e = side.split(',')[left ? side.split(',').length - 1 : 0]!.trim();
           if (left) e = e.replace(/^.*\bof\s+/i, '');
@@ -624,13 +811,8 @@ function gateImpl(t: string, ctx: GateContext): GateResult {
         subjectKnown = subject !== null;
         if (subject === 'B') sign = sign === 'up' ? 'down' : 'up';
       }
-      // nearest direction word (by distance to the numeral)
-      let best: { dir: Direction; word: string; d: number } | null = null;
-      for (const d of dirs) {
-        const dist = d.end <= tok.start ? tok.start - d.end : d.start >= tok.end ? d.start - tok.end : 0;
-        if (dist > 80) continue;
-        if (!best || dist < best.d) best = { dir: d.dir, word: d.word, d: dist };
-      }
+      // nearest direction word (by distance to the numeral); result verbs ("improves") count when the subject is known
+      const best = nearestDirection(t, dirs, tok, subjectKnown);
       if (!best) {
         if (f.value < 0) issues.push({ code: 'direction', severity: 'warn', message: `"${shown(tok)}" is the size of ${f.id} = ${String(f.value)} (a decrease); say which way it goes.`, start: tok.start, end: tok.end, raw: tok.raw });
         continue;

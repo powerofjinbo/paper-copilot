@@ -11,7 +11,8 @@
  *          placeholders ([fact?: ...], [ref], [claim: ...?]), intent_lines (Chinese notes on their own line), cjk (Chinese/Japanese/
  *          Korean text outside comments), merge_conflicts, compile_errors (or not compiled yet),
  *          undefined_cites (\cite keys missing from the .bib), ai_unmatched_numbers (a number in an
- *          AI-touched sentence that matches no fact or derived relation), stale_facts (sentences stating a
+ *          AI-touched sentence that matches no fact or derived relation, or that states a fact or relation
+ *          the wrong way round or for the other method), stale_facts (sentences stating a
  *          fact whose artifact changed), disclosure (AI was used and neither the main file nor a file it inputs has the venue's
  *          statement; arXiv: info, the statement goes in the Comments field);
  *   warn:  unresolved_cites (in the .bib but not resolved on INSPIRE nor confirmed), unmatched_numbers
@@ -121,7 +122,8 @@ export function findDisclosureStatement(latex: string, venue: Venue): string | n
   return null;
 }
 
-const NUMBER_CODES = new Set(['unmatched_number', 'unmatched_cut', 'percent_scale', 'fictional_number']);
+// 'direction' (block): a grounded number stated the wrong way round or given to the other method
+const NUMBER_CODES = new Set(['unmatched_number', 'unmatched_cut', 'percent_scale', 'fictional_number', 'direction']);
 
 /**
  * The checklist (see the module comment), items in the order of `SubmissionItemId`. Pure. A report that
