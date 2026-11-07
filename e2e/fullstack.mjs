@@ -280,7 +280,7 @@ async function gutterStateFor(id) {
  * The rail has four steps (① Plan ② Sources ③ To do ④ Check & submit); the older panel names select the
  * step that holds them and open their section ('Sync' -> "Sync with Overleaf" inside ④).
  */
-const STEP_OF = { Outline: 'plan', Facts: 'sources', Review: 'todo', Placeholders: 'todo', Questions: 'todo', Sync: 'check' };
+const STEP_OF = { Outline: 'plan', Facts: 'sources', Review: 'todo', Placeholders: 'todo', Questions: 'todo', Sync: 'check', Disclosure: 'check' };
 const SYNC = '.shell-panel [data-section="sync"]';
 
 async function openTab(name) {
@@ -290,9 +290,10 @@ async function openTab(name) {
   if (selected !== 'true' || collapsed) await tab.click();
   await sleep(200);
   if (await pc(() => window.__paper.shell.getState().leftCollapsed)) await tab.click();
-  if (name === 'Sync') {
-    await pc(() => window.__paper.shell.getState().focusSection('sync'));
-    await waitFor(() => document.querySelector('.shell-panel [data-section="sync"] .psec-toggle')?.getAttribute('aria-expanded') === 'true', null, 3000, 'sync section open');
+  if (name === 'Sync' || name === 'Disclosure') {
+    const section = name === 'Sync' ? 'sync' : 'disclosure';
+    await pc((sec) => window.__paper.shell.getState().focusSection(sec), section);
+    await waitFor((sec) => document.querySelector(`.shell-panel [data-section="${sec}"] .psec-toggle`)?.getAttribute('aria-expanded') === 'true', section, 3000, `${section} section open`);
   }
   if (name === 'Facts') await pc(() => window.__paper.shell.getState().setSourcesTab('facts'));
 }
@@ -522,7 +523,8 @@ async function main() {
       await page.waitForSelector('[data-testid="sentence-card"] [data-testid="lint-dismiss"]', { timeout: 4000 });
       await shot('10b-lint-card');
       const rows = await page.locator('[data-testid="sentence-card"] .pc-lint-row').count();
-      await page.locator('[data-testid="sentence-card"] .pc-lint-row').filter({ hasText: flag.check }).first().getByTestId('lint-dismiss').click();
+      // the card shows the check's translated label (core i18n), then the message
+      await page.locator('[data-testid="sentence-card"] .pc-lint-row').filter({ hasText: flag.msg.slice(0, 40) }).first().getByTestId('lint-dismiss').click();
       await waitFor((id) => window.__paper.workspace.getState().lint.find((f) => f.id === id)?.dismissed === true, flag.id, 4000, 'flag dismissed');
       await sleep(600); // the server's lint.update (full list) has arrived
       const after = await pc(() => window.__paper.workspace.getState().lint.length);
@@ -676,7 +678,7 @@ async function main() {
     });
 
     await check('APS disclosure shows the right counts', async () => {
-      await openTab('Sync');
+      await openTab('Disclosure');
       await waitFor(() => (document.querySelector('.disclosure-text')?.value ?? '').length > 40, null, 6000, 'disclosure text');
       const d = await pc(() => window.__paper.api.disclosure('aps'));
       const us = await unitsNow();
