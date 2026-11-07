@@ -6,7 +6,18 @@
  * (see data-disk-overwrite.test.ts), so neither known problem is involved.
  *
  * At the end every token typed in either tab and every co-author line must be in the server text (or in a
- * .paper/conflicts copy), and both tabs must show the server text.
+ * .paper/conflicts copy), and both tabs must show the server text. Tokens are only ever inserted right
+ * after a space, so a token found inside another word was put at the wrong place by a rebase.
+ *
+ * Observed (timing-dependent, seeds 1-40, ~5 of 40 fail per run):
+ *  - a single never-sent token lost on reconnect (seeds 8, 19, 21, 22, 27: data-reconnect-unsent.test.ts);
+ *  - typed tokens placed INSIDE a co-author's word ("c15y11zqa15x95q zqa15x94q w"), which then fails the
+ *    co-author check (seeds 14, 15, 18): the tab's rebased change is applied by the server at a position
+ *    that, in the server's text, is inside another word;
+ *  - in about half of the seeds an append before \end{document} cannot be merged into the unsaved mirror
+ *    (diff-match-patch locates a hunk only within Match_Distance * Match_Threshold = 500 characters of
+ *    its disk position) and the disk text replaces the editor text (local text in .paper/conflicts).
+ * R2_SEEDS=1,2,... picks seeds; R2_LOGDIR=<dir> writes per-seed logs and diagnostics.
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -235,7 +246,7 @@ async function openTab(name: string): Promise<Tab> {
         reconnect: (opts as { reconnect: boolean }).reconnect,
       };
       const res = orig(snap, local, opts);
-      ed.vanished.push({ gone: [], stack: `reconcile mode=${res.mode} snapV=${(snap as { version: number }).version} acked=${before.ackedVersion} ackedText=${before.ackedText === 'null' ? 'null' : 'set'} pending=${before.log.filter((e) => e.baseVersion >= before.ackedVersion).length} send=${JSON.stringify((res as unknown as { send: unknown[] }).send).slice(0, 200)} diff=${JSON.stringify((res as unknown as { diff: { toJSON(): unknown } | null }).diff?.toJSON() ?? null).slice(0, 300)}` });
+      ed.vanished.push({ gone: [], stack: `reconcile mode=${res.mode} snapV=${(snap as { version: number }).version} acked=${before.ackedVersion} ackedText=${before.ackedText === 'null' ? 'null' : 'set'} pending=${before.log.filter((e) => e.baseVersion >= (before.ackedVersion as number)).length} send=${JSON.stringify((res as unknown as { send: unknown[] }).send).slice(0, 200)} diff=${JSON.stringify((res as unknown as { diff: { toJSON(): unknown } | null }).diff?.toJSON() ?? null).slice(0, 300)}` });
       const after = res.remote ? res.remote.apply(ed.state.doc).toString() : String(local);
       const toks = (String(local).match(/zq[ab]\d+x\d+q/g) ?? []).filter((t) => !after.includes(t));
       if (toks.length) writeFileSync(join(process.env.R2_LOGDIR!, `reconcile-${name}-${Date.now()}.json`), JSON.stringify({ toks, mode: res.mode, before }));
@@ -247,7 +258,7 @@ async function openTab(name: string): Promise<Tab> {
 
 const settled = (t: Tab) => t.ed.sync.core.pending().length === 0 && !t.ed.sync.core.queuedReplace && !t.ed.sync.core.behind;
 
-const SEEDS = (process.env.R2_SEEDS ?? '1,2,3,4,5,6').split(',').map(Number);
+const SEEDS = (process.env.R2_SEEDS ?? '8,14,15,18,19,21,22,27').split(',').map(Number);
 
 it.each(SEEDS)('seed %i: two tabs + co-author reloads + reconnects keep every text', async (seed) => {
   await fresh();
