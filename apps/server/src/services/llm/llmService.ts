@@ -70,7 +70,7 @@ import { HttpError, type Ctx, type DocState, type LlmClient, type LlmRequest, ty
 import { resolveApiKey, resolveBaseUrl } from './apiKey';
 import { createLlmClient, describeError, isAbortError } from './client';
 import { cursorPlace, defaultGhostMode, englishWordCount, findOutlinePlace, lineContext, mostlyCjk, nearestIntentNote, oneLine, sectionTypeOf, splitPrefix } from './context';
-import type { FakeHint } from './fake';
+import { fileScriptResponder, type FakeHint } from './fake';
 import { createSkillLoader, type SkillLoader } from './skill';
 
 /* ------------------------------------------------------------------------------------ */
@@ -232,13 +232,15 @@ export function createLlmService(ctx: Ctx, opts: LlmServiceOptions = {}): LlmSer
   const getClient = (): LlmClient => {
     if (client) return client;
     const fakeLatencyMs = Number(process.env.PAPER_FAKE_LATENCY_MS ?? 0) || 0;
+    const script = process.env.PAPER_FAKE_SCRIPT;
+    const respond = script ? fileScriptResponder(script) : undefined;
     if (ctx.fakeLlm) {
-      client = createLlmClient({ apiKey: null, fake: true, fakeLatencyMs });
+      client = createLlmClient({ apiKey: null, fake: true, fakeLatencyMs, respond });
     } else {
       const { key, source } = resolveApiKey();
       if (!key) {
         log.warn('no Anthropic API key (ANTHROPIC_API_KEY or keychain service "paper-copilot"); using the simulated AI');
-        client = createLlmClient({ apiKey: null, fake: true, fakeLatencyMs });
+        client = createLlmClient({ apiKey: null, fake: true, fakeLatencyMs, respond });
       } else {
         log.info(`Anthropic API key from ${source}`);
         client = createLlmClient({ apiKey: key, fake: false, log, baseURL: resolveBaseUrl() });

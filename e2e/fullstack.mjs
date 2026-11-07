@@ -59,6 +59,9 @@ const P = {
   repo: join(WORK, 'repo'),
   coauthor: join(WORK, 'coauthor'),
   serverLog: join(WORK, 'server.log'),
+  script: join(WORK, 'fake-script.json'),
+  large: join(WORK, 'large'),
+  largeRepo: join(WORK, 'large-repo'),
 };
 const TSX = join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const CJK = /[　-〿㐀-䶿一-鿿豈-﫿＀-￯]/;
@@ -68,7 +71,8 @@ const CJK = /[　-〿㐀-䶿一-鿿豈-﫿＀-￯]/;
 /* ------------------------------------------------------------------------------------ */
 
 writeFileSync(P.gitcfg, '[user]\n\tname = E2E Author\n\temail = e2e@example.invalid\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = master\n[advice]\n\tdetachedHead = false\n');
-const ENV = { ...process.env, GIT_CONFIG_GLOBAL: P.gitcfg, GIT_CONFIG_NOSYSTEM: '1', PAPER_FAKE_LLM: '1', PAPER_WEB_DIST: P.dist, PAPER_LOG_LEVEL: 'info' };
+// PAPER_FAKE_SCRIPT: scripted replies of the simulated AI (llm/fake.ts fileScriptResponder), written below
+const ENV = { ...process.env, GIT_CONFIG_GLOBAL: P.gitcfg, GIT_CONFIG_NOSYSTEM: '1', PAPER_FAKE_LLM: '1', PAPER_WEB_DIST: P.dist, PAPER_LOG_LEVEL: 'info', PAPER_FAKE_SCRIPT: P.script };
 delete ENV.ANTHROPIC_API_KEY;
 
 function run(cmd, argv, opts = {}) {
@@ -83,9 +87,9 @@ const paper = (...a) => run(process.execPath, [TSX, 'src/cli.ts', ...a], { cwd: 
 let server = null;
 let serverOut = '';
 
-async function startServer() {
+async function startServer(proj = P.proj) {
   serverOut = '';
-  const child = spawn(process.execPath, [TSX, 'src/cli.ts', 'open', P.proj, '--no-browser', '--port', String(PORT)], {
+  const child = spawn(process.execPath, [TSX, 'src/cli.ts', 'open', proj, '--no-browser', '--port', String(PORT)], {
     cwd: join(ROOT, 'apps', 'server'),
     env: ENV,
     detached: true,
@@ -154,6 +158,37 @@ function makeProject() {
   mkdirSync(P.proj, { recursive: true });
   git(WORK, 'clone', '--quiet', P.remote, P.tex);
   const r = paper('init', P.proj, '--repo', P.repo, '--skill', join(ROOT, '.skill'), '--sync', 'git', '--remote', P.remote);
+  return r.stdout.trim().split('\n').slice(-2).join(' | ');
+}
+
+/**
+ * The simulated AI only tidies wording; for the derived-number check it must state a ratio of two facts.
+ * The scripted rewrite keeps the sentence's LaTeX and numbers and adds "2.5 times" (fake_rate_B /
+ * fake_rate_A = 0.01377 / 0.00548 = 2.51), a number no artifact holds: only the derived relation
+ * the gate gets from the fact store makes it acceptable.
+ */
+const DERIVED_SENTENCE = 'The fake-track rate is 0.55\\% against 1.38\\% for the baseline, 2.5 times lower.';
+function writeFakeScript() {
+  const rule = {
+    task: 'instruct',
+    match: '低了多少倍',
+    json: {
+      text: DERIVED_SENTENCE,
+      notes: '模拟模式（脚本）：补充了两者之比。',
+      drift: { actor: false, scope: false, direction: false, condition: false },
+      fact_ids: [],
+      cite_keys: [],
+    },
+  };
+  writeFileSync(P.script, JSON.stringify({ rules: [rule] }, null, 1));
+}
+
+/** fixtures/large-multifile as a second project: main.tex \\input's four section files; sync off. */
+function makeLargeProject() {
+  cpSync(join(ROOT, 'fixtures', 'large-multifile', 'repo'), P.largeRepo, { recursive: true });
+  mkdirSync(P.large, { recursive: true });
+  cpSync(join(ROOT, 'fixtures', 'large-multifile', 'tex'), join(P.large, 'tex'), { recursive: true });
+  const r = paper('init', P.large, '--repo', P.largeRepo, '--skill', join(ROOT, '.skill'), '--sync', 'none');
   return r.stdout.trim().split('\n').slice(-2).join(' | ');
 }
 
@@ -331,6 +366,7 @@ async function main() {
     console.log('done');
   }
   console.log(`project: ${makeProject()}`);
+  writeFakeScript();
   let url = await startServer();
   console.log(`server: ${url.replace(/token=[^&]+/, 'token=…')}`);
 
@@ -582,6 +618,25 @@ async function main() {
       return res.output.split('\n')[0];
     });
 
+    await check('submission check (top-bar pill) lists the proposed sentences as unreviewed blockers; a row reveals one', async () => {
+      await page.locator('[data-testid="submission-pill"]').click();
+      await page.waitForSelector('[data-testid="submission-check"] .sub-list', { timeout: 8000 });
+      const rep = await pc(() => window.__paper.api.submissionCheck());
+      const un = rep.items.find((i) => i.id === 'unreviewed');
+      const proposed = (await unitsNow()).filter((u) => u.state === 'proposed').map((u) => u.id);
+      assert(un && !un.ok && un.severity === 'block' && un.count === proposed.length, `unreviewed item ${JSON.stringify(un).slice(0, 200)}`);
+      assert(proposed.every((id) => un.items.some((e) => e.sentenceId === id)), 'a proposed sentence is not listed');
+      assert(rep.ok === false && rep.blockers >= 1, `report ok=${rep.ok} blockers=${rep.blockers}`);
+      await waitFor(() => /issue/.test(document.querySelector('[data-testid="submission-pill"]')?.textContent ?? ''), null, 4000, 'the pill to show issues');
+      const head = page.locator('[data-testid="submission-check"] [data-item="unreviewed"] .sub-head');
+      await head.click();
+      await shot('13b-submission');
+      await page.locator('[data-testid="submission-check"] [data-item="unreviewed"] .sub-entries .list-row').first().click();
+      await waitFor((ids) => ids.includes(window.__paper.workspace.getState().activeSentenceId), proposed, 4000, 'the listed sentence revealed');
+      const pill = await page.locator('[data-testid="submission-pill"]').innerText();
+      return `pill "${pill.trim()}"; unreviewed ${un.count} (${un.items.map((e) => `line ${e.line}`).join(', ')}), ${rep.blockers} blocker(s), ${rep.warnings} warning(s)`;
+    });
+
     await check('review: accept the drafted sentences, reject one (claim placeholder), the author removes it', async () => {
       await openTab('Review');
       const queue = (await unitsNow()).filter((u) => u.state === 'proposed' || u.state === 'unsupported');
@@ -616,6 +671,47 @@ async function main() {
       assert(left === 0, `${left} unreviewed left`);
       const status = await page.locator('.statusbar').innerText();
       return `${queue.length - 1} accepted, 1 rejected -> ${rej.state} -> removed; ${status.split('\n').find((x) => /review/.test(x)) ?? ''}`;
+    });
+
+    await check('submission check after the review: the unreviewed blocker is gone; once the author adds the APS AI-use statement it is clean', async () => {
+      const failingBlocks = (r) => r.items.filter((i) => !i.ok && i.severity === 'block');
+      let rep = null;
+      for (let i = 0; i < 20; i++) {
+        rep = await pc(() => window.__paper.api.submissionCheck());
+        if (rep.items.find((x) => x.id === 'unreviewed')?.ok) break;
+        await sleep(300);
+      }
+      for (const id of ['unreviewed', 'unsupported', 'placeholders', 'intent_lines', 'cjk']) {
+        const it = rep.items.find((x) => x.id === id);
+        assert(it && it.ok && it.count === 0, `${id}: ${JSON.stringify(it).slice(0, 160)}`);
+      }
+      // AI text is in the record, so the venue's disclosure statement is the one blocker left
+      const left = failingBlocks(rep).map((i) => i.id);
+      assert(JSON.stringify(left) === '["disclosure"]', `blockers after the review: ${left.join(', ')}`);
+      await page.locator('[data-testid="submission-pill"]').click();
+      await page.waitForSelector('[data-testid="submission-check"] [data-item="disclosure"]', { timeout: 8000 });
+      await waitFor(() => !document.querySelector('[data-testid="submission-check"] [data-item="unreviewed"].sub-block'), null, 6000, 'the unreviewed row to clear');
+      await shot('14b-submission-after-review');
+      // the author pastes the generated statement into the acknowledgments (as typed text)
+      const d = await pc(() => window.__paper.api.disclosure('aps'));
+      assert(d.latex.length > 40 && !CJK.test(d.latex), 'disclosure LaTeX');
+      await endOfSentenceLine('On validation, the same comparison');
+      await page.keyboard.press('Enter');
+      await page.keyboard.press('Enter');
+      await page.keyboard.insertText(`\\begin{acknowledgments}\n${d.latex.trim()}\n\\end{acknowledgments}`);
+      await waitFor(() => /\\end\{acknowledgments\}/.test(window.__paper.workspace.getState().editor.getText()), null, 3000, 'the statement in the text');
+      for (let i = 0; i < 30; i++) {
+        rep = await pc(() => window.__paper.api.submissionCheck());
+        if (rep.ok) break;
+        await sleep(300);
+      }
+      assert(rep.ok && rep.blockers === 0 && failingBlocks(rep).length === 0, `blockers left: ${failingBlocks(rep).map((i) => `${i.id} (${i.count})`).join(', ')}`);
+      await page.locator('[data-testid="submission-check"]').getByRole('button', { name: /Run|Check again|Re-run|Refresh/ }).first().click().catch(() => undefined);
+      await waitFor(() => !document.querySelector('[data-testid="submission-pill"].submit-blocked'), null, 8000, 'the pill to leave the blocked state');
+      const pill = await page.locator('[data-testid="submission-pill"]').innerText();
+      await shot('14c-submission-clean');
+      const warn = rep.items.filter((i) => !i.ok && i.severity === 'warn').map((i) => i.id);
+      return `pill "${pill.trim()}"; 0 blockers; open warnings: ${warn.join(', ') || 'none'}`;
     });
 
     await check('push allowed after review; the remote receives only .tex changes (no .paper, no CJK)', async () => {
@@ -697,6 +793,148 @@ async function main() {
       assert(st.aiDrafted === 2 && /2 sentences were drafted by the tool/.test(text), `drafted count ${st.aiDrafted}`);
       assert(st.aiFromIntent === 0 && st.aiEdited === 1 && /1 sentence was drafted by the tool and then edited by the authors/.test(text), 'edited count');
       return `stats ${JSON.stringify(st).slice(0, 200)}`;
+    });
+
+    let abstractId = null;
+    let abstractText = null;
+    await check('consistency (④): a number edited in the abstract so it differs from the body is flagged; the row reveals the sentence', async () => {
+      abstractId = await unitId('On isolated displaced particles that neither model saw');
+      abstractText = await unitTextOf(abstractId);
+      assert(abstractText.includes('against 1.38\\%'), `abstract: ${abstractText}`);
+      const before = await pc(() => window.__paper.api.consistency());
+      assert(!before.flags.some((f) => /^drift_/.test(f.kind) && f.sentenceIds.includes(abstractId)), 'a drift flag on the abstract before the edit');
+      // the author mistypes the baseline's fake-track rate in the abstract (1.38 -> 1.36; the body keeps 1.38)
+      await retype(abstractId, abstractText.replace('against 1.38\\%', 'against 1.36\\%'));
+      await waitFor((i) => {
+        const ws = window.__paper.workspace.getState();
+        const u = ws.units.find((x) => x.id === i);
+        return !!u && ws.editor.getText().slice(u.start, u.end).includes('1.36');
+      }, abstractId, 4000, 'the edit on the abstract sentence');
+      await sleep(400);
+      let flag = null;
+      for (let i = 0; i < 20 && !flag; i++) {
+        const rep = await pc(() => window.__paper.api.consistency());
+        flag = rep.flags.find((f) => /^drift_/.test(f.kind) && f.sentenceIds.includes(abstractId)) ?? null;
+        if (!flag) await sleep(250);
+      }
+      assert(flag, 'no drift flag on the abstract sentence');
+      const sec = page.locator('.shell-panel [data-section="consistency"]');
+      await openTab('Disclosure'); // selects step ④
+      const toggle = sec.locator('.psec-toggle').first();
+      if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+      // the section loads its report when opened; refresh it if it was loaded before the edit
+      await waitFor(() => !!document.querySelector('.shell-panel [data-section="consistency"] .report-body'), null, 6000, 'the consistency report');
+      const refresh = sec.getByRole('button', { name: /Refresh|Re-run|Run again/ });
+      if (await refresh.count()) await refresh.first().click();
+      const row = sec.locator('.flag-list .flag').filter({ hasText: '1.36' }).first();
+      await row.waitFor({ timeout: 6000 });
+      const label = await row.locator('.flag-label').innerText();
+      await row.scrollIntoViewIfNeeded();
+      await shot('24-consistency-drift');
+      await pc(() => window.__paper.workspace.getState().editor.revealLine(60));
+      await row.locator('button.list-row').click();
+      await waitFor((ids) => ids.includes(window.__paper.workspace.getState().activeSentenceId), flag.sentenceIds, 4000, 'the flagged sentence revealed');
+      return `${flag.kind} (${label}): "${flag.message.slice(0, 110)}"`;
+    });
+
+    await check('restore: the card History brings back the imported abstract sentence as one change; the drift flag goes away', async () => {
+      assert(abstractId, 'no abstract sentence from the previous check');
+      const h0 = await pc((i) => window.__paper.api.history(i), abstractId);
+      assert(h0.versions.length >= 2 && h0.versions[0].origin === 'import', `versions ${h0.versions.map((v) => v.origin).join(',')}`);
+      await pc((i) => window.__paper.workspace.getState().editor.revealSentence(i), abstractId);
+      await page.keyboard.press('ArrowRight');
+      await page.keyboard.press('Control+.');
+      await page.waitForSelector('[data-testid="sentence-card"]', { timeout: 3000 });
+      await page.keyboard.press('h');
+      await page.waitForSelector('.pc-history .pc-hist-restore', { timeout: 4000 });
+      await shot('25-history');
+      // the oldest version (the imported text) is the last row
+      await page.locator('.pc-history .pc-hist-restore').last().click();
+      await waitFor(([i, t]) => {
+        const ws = window.__paper.workspace.getState();
+        const u = ws.units.find((x) => x.id === i);
+        return !!u && ws.editor.getText().slice(u.start, u.end) === t;
+      }, [abstractId, abstractText], 5000, 'the imported text back on the same sentence');
+      await sleep(800);
+      const u = await unitById(abstractId);
+      assert(u.state === 'human' && !u.everAi, `state ${u.state}${u.everAi ? ' everAi' : ''}`);
+      const h1 = await pc((i) => window.__paper.api.history(i), abstractId);
+      assert(h1.versions.length === h0.versions.length + 1 && h1.versions.at(-1).origin === 'human_edit' && h1.versions.at(-1).text === abstractText, `history after: ${h1.versions.map((v) => v.origin).join(',')}`);
+      for (let i = 0; i < 20; i++) {
+        const rep = await pc(() => window.__paper.api.consistency());
+        if (!rep.flags.some((f) => /^drift_/.test(f.kind) && f.sentenceIds.includes(abstractId))) return `${h0.versions.length} -> ${h1.versions.length} versions (restore recorded as human_edit), state human; drift flag cleared`;
+        await sleep(250);
+      }
+      throw new Error('the drift flag is still reported after the restore');
+    });
+
+    let derivedId = null;
+    await check('instruct proposal stating a derived "2.5 times" (ratio of two facts): the gate accepts it and links both facts', async () => {
+      const rels = await pc(() => window.__paper.api.request('GET', '/api/facts/derived'));
+      const rel = rels.find((r) => r.kind === 'ratio' && r.raw === '2.5' && r.factIds.some((f) => /fake_rate_A/.test(f)) && r.factIds.some((f) => /fake_rate_B/.test(f)));
+      assert(rel, `no 2.5 ratio of the fake-track rates among ${rels.length} relations`);
+      derivedId = await unitId('The fake-track rate is 0.55');
+      const before = await unitById(derivedId);
+      await clickSentence(derivedId);
+      await waitFor((i) => window.__paper.workspace.getState().activeSentenceId === i, derivedId, 3000, 'the sentence to become active');
+      await page.keyboard.press('Control+i');
+      await page.waitForSelector('.pc-card input.pc-input', { timeout: 3000 });
+      await page.keyboard.insertText('补一句：比基线低了多少倍');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('[data-testid="proposal"]', { timeout: 8000 });
+      const prop = await page.locator('[data-testid="proposal"]').innerText();
+      assert(prop.includes('2.5 times'), `proposal: ${prop.slice(0, 200)}`);
+      const blocks = await page.locator('.pc-card .pc-issue-block').count();
+      assert(blocks === 0, `the gate blocked the derived number: ${await page.locator('.pc-card .pc-issues').innerText().catch(() => '')}`);
+      await shot('26-derived-proposal');
+      await page.keyboard.press('Control+Enter');
+      await waitFor((i) => window.__paper.workspace.getState().units.find((u) => u.id === i)?.state === 'ai-drafted', derivedId, 5000, 'state ai-drafted');
+      await sleep(400);
+      const text = await unitTextOf(derivedId);
+      assert(text === DERIVED_SENTENCE, `text: ${text}`);
+      const u = await unitById(derivedId);
+      assert(u.everAi && rel.factIds.every((f) => u.facts.includes(f)), `unit facts ${JSON.stringify(u.facts)} lack ${rel.factIds.join(', ')}`);
+      const last = (await pc((i) => window.__paper.api.history(i), derivedId)).versions.at(-1);
+      assert(last.origin === 'ai_rewrite' && /^fake-/.test(last.model), `last version ${last.origin} ${last.model}`);
+      return `${before.state} -> ${u.state}; "${rel.description ?? rel.raw}" links ${rel.factIds.join(' + ')}`;
+    });
+
+    await check('repo watcher: re-running the analysis (a result JSON changes) marks its facts stale: notice, Facts panel, card chip, consistency', async () => {
+      const claim = join(P.repo, 'results', 'addendum_g_g1_v1_claim.json');
+      const j = JSON.parse(readFileSync(claim, 'utf8'));
+      j.fake_rate_A = 0.0049271;
+      // record notices as they arrive (toasts close by themselves)
+      await pc(() => {
+        window.__e2eNotices = [];
+        window.__paper.workspace.subscribe((st, prev) => {
+          if (st.notices !== prev.notices) for (const n of st.notices) if (!window.__e2eNotices.some((x) => x.id === n.id)) window.__e2eNotices.push(n);
+        });
+      });
+      writeFileSync(claim, `${JSON.stringify(j, null, 1)}\n`);
+      await waitFor(() => window.__paper.workspace.getState().facts.some((f) => f.stale && /fake_rate_A$/.test(f.id)), null, 15000, 'the fact to turn stale');
+      const stale = await pc(() => window.__paper.workspace.getState().facts.filter((f) => f.stale).map((f) => f.id));
+      await waitFor(() => window.__e2eNotices.some((n) => /addendum_g_g1_v1_claim\.json/.test(n.message)), null, 5000, 'the watcher notice');
+      const notice = await pc(() => window.__e2eNotices.find((n) => /addendum_g_g1_v1_claim\.json/.test(n.message)));
+      assert(notice.level === 'warn', `notice level ${notice.level}`);
+      // Facts panel, "stale" filter
+      await openTab('Facts');
+      await page.locator('.shell-panel select[aria-label="Show"]').selectOption('stale');
+      await waitFor(() => [...document.querySelectorAll('.shell-panel .badge-warn')].some((b) => /stale/.test(b.textContent ?? '')), null, 4000, 'a stale badge in the Facts panel');
+      const listed = await pc(() => document.querySelector('.shell-panel .count-line')?.textContent ?? '');
+      await shot('27-facts-stale');
+      // the sentence that states the fact shows the stale chip on its card
+      await pc((i) => window.__paper.workspace.getState().editor.revealSentence(i), derivedId);
+      await page.keyboard.press('ArrowRight');
+      await page.keyboard.press('Control+.');
+      await page.waitForSelector('[data-testid="sentence-card"] .pc-chip-fact', { timeout: 4000 });
+      const chips = await page.locator('[data-testid="sentence-card"] .pc-chip-fact.pc-stale').count();
+      assert(chips >= 1, 'no stale chip on the card');
+      await shot('28-card-stale');
+      await page.keyboard.press('Escape');
+      await page.locator('.shell-panel select[aria-label="Show"]').selectOption('all');
+      const rep = await pc(() => window.__paper.api.consistency());
+      assert(rep.stale.some((x) => /fake_rate_A$/.test(x.factId) && x.sentences.length > 0), `consistency stale: ${JSON.stringify(rep.stale).slice(0, 200)}`);
+      return `${stale.length} stale fact(s) (${stale.slice(0, 3).join(', ')}); Facts panel "${listed.trim()}"; notice "${notice.message.slice(0, 80)}…"; ${chips} stale chip(s) on the card`;
     });
 
     await check('reload the page -> ids and states persist', async () => {
@@ -784,6 +1022,77 @@ async function main() {
       const note = await page.locator('[data-testid="sync-off"]').innerText();
       await shot('23-sync-off');
       return note.slice(0, 90);
+    });
+
+    await check('large \\input project (fixtures/large-multifile): the file switcher lists main.tex and its 4 sections with counts; switching opens each file', async () => {
+      await stopServer('SIGTERM');
+      console.log(`      large project: ${makeLargeProject()}`);
+      url = await startServer(P.large);
+      await page.goto(url);
+      await waitApp();
+      const files = await pc(() => window.__paper.api.files());
+      const names = files.map((f) => f.file);
+      assert(names[0] === 'main.tex' && names.length === 5 && ['sections/intro.tex', 'sections/method.tex', 'sections/results.tex', 'sections/appendix.tex'].every((f) => names.includes(f)), `files ${names.join(', ')}`);
+      const sentences = files.reduce((n, f) => n + (f.sentences ?? f.units ?? 0), 0);
+      await page.locator('[data-testid="file-switcher"]').click();
+      const items = await pc(() => [...document.querySelectorAll('.file-menu [data-file]')].map((b) => b.getAttribute('data-file')));
+      assert(JSON.stringify(items) === JSON.stringify(names), `menu ${items.join(', ')} vs ${names.join(', ')}`);
+      await shot('29-files-menu');
+      const opened = [];
+      for (const f of ['sections/method.tex', 'sections/results.tex', 'sections/appendix.tex', 'main.tex']) {
+        if (!(await page.locator('.file-menu').count())) await page.locator('[data-testid="file-switcher"]').click();
+        await page.locator(`.file-menu [data-file="${f}"]`).click();
+        await waitFor((x) => {
+          const ws = window.__paper.workspace.getState();
+          return ws.file === x && ws.units.length > 0 && ws.units.every((u) => u.file === x) && !!ws.editor && ws.editor.getText().length > 0;
+        }, f, 10000, `${f} open`);
+        const t = await docText();
+        const disk = readFileSync(join(P.large, 'tex', f), 'utf8');
+        assert(t === disk, `${f}: the editor text differs from the file on disk`);
+        const crumb = await page.locator('.topbar .crumb-file').innerText();
+        assert(crumb.includes(f.split('/').pop()), `crumb ${crumb}`);
+        opened.push(`${f} ${await pc(() => window.__paper.workspace.getState().units.length)}`);
+        if (f === 'sections/results.tex') {
+          await sleep(300);
+          await shot('30-files-results');
+        }
+      }
+      return `${names.length} files, ${sentences} sentences in all; opened ${opened.join(', ')}`;
+    });
+
+    await check('the 4-step layout on the real server: 中文, light and dark (rail, each step, Settings) without overflow', async () => {
+      await page.locator('[data-testid="settings-button"]').click();
+      await page.locator('[data-testid="settings-drawer"]').getByRole('button', { name: '中文', exact: true }).click();
+      await page.keyboard.press('Escape');
+      await waitFor(() => /句/.test(document.querySelector('.statusbar')?.textContent ?? ''), null, 3000, 'Chinese status bar');
+      const tabs = await page.locator('.rail [role="tab"]').allInnerTexts();
+      assert(tabs.length === 4 && /构思/.test(tabs[0]) && /资料/.test(tabs[1]) && /待办/.test(tabs[2]) && /检查/.test(tabs[3]), `rail ${tabs.map((x) => x.replace(/\s+/g, '')).join(' | ')}`);
+      const problems = [];
+      for (const scheme of ['light', 'dark']) {
+        await page.emulateMedia({ colorScheme: scheme });
+        await pc((t) => window.__paper.shell.getState().setTheme?.(t), scheme);
+        for (const step of ['plan', 'sources', 'todo', 'check']) {
+          const tab = page.locator(`.rail [role="tab"][data-step="${step}"]`);
+          if ((await tab.getAttribute('aria-selected')) !== 'true' || (await pc(() => window.__paper.shell.getState().leftCollapsed))) await tab.click();
+          await sleep(350);
+          const m = await pc(() => {
+            const se = document.scrollingElement;
+            const panel = document.querySelector('.shell-panel');
+            const over = panel ? [...panel.querySelectorAll('*')].filter((el) => el.scrollWidth > el.clientWidth + 2 && getComputedStyle(el).overflowX === 'visible' && el.clientWidth > 0).length : 0;
+            return { page: se.scrollWidth > innerWidth || se.scrollHeight > innerHeight, panelX: panel ? panel.scrollWidth > panel.clientWidth + 1 : false, over };
+          });
+          if (m.page || m.panelX) problems.push(`${scheme}/${step}: ${JSON.stringify(m)}`);
+          await shot(`31-zh-${scheme}-${step}`);
+        }
+        await page.locator('[data-testid="settings-button"]').click();
+        await page.waitForSelector('[data-testid="settings-drawer"]', { timeout: 3000 });
+        await shot(`31-zh-${scheme}-settings`);
+        await page.keyboard.press('Escape');
+      }
+      await page.emulateMedia({ colorScheme: 'light' });
+      await pc(() => window.__paper.shell.getState().setTheme?.('light'));
+      assert(problems.length === 0, problems.join('; '));
+      return `rail ${tabs.map((x) => x.replace(/\s+/g, '')).join(' · ')}; 2 x 5 screenshots`;
     });
 
     await check('no page errors', async () => {

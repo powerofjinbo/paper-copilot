@@ -7,6 +7,7 @@
  * are labelled with model `fake-<model>` and cost nothing. Latency simulation is off unless
  * `latencyMs` > 0 (the server may set PAPER_FAKE_LATENCY_MS for UI work).
  */
+import { readFileSync } from 'node:fs';
 import { renderFact, simulatedRewrite, type Fact } from '@paper-copilot/core';
 import type { LlmClient, LlmRequest, LlmResponse } from '../../contracts';
 
@@ -412,6 +413,37 @@ function isHint(x: unknown): x is FakeHint {
 
 function approxTokens(chars: number): number {
   return Math.max(1, Math.ceil(chars / 4));
+}
+
+/**
+ * Scripted replies from a JSON file (PAPER_FAKE_SCRIPT, simulated AI only; the full-stack e2e uses it to
+ * make the simulated AI say one specific thing, e.g. a derived "2.5 times" the gate must accept):
+ *   { "rules": [ { "task": "instruct", "match": "<substring>", "json": { ... } } | { ..., "text": "..." } ] }
+ * The first rule whose `task` (if given) equals the request's task and whose `match` (if given) occurs in
+ * the request's instruction / note / prefix or a message wins. The file is re-read on every call, so a
+ * running server picks up a new script; a missing or malformed file scripts nothing (the default
+ * simulated output). The output still goes through every gate like any model output.
+ */
+export function fileScriptResponder(path: string): FakeResponder {
+  return (req) => {
+    let rules: unknown;
+    try {
+      rules = (JSON.parse(readFileSync(path, 'utf8')) as { rules?: unknown }).rules;
+    } catch {
+      return undefined;
+    }
+    if (!Array.isArray(rules)) return undefined;
+    const hint = (req.fakeHint && typeof req.fakeHint === 'object' ? req.fakeHint : {}) as Record<string, unknown>;
+    const hay = [hint.instruction, hint.note, hint.prefix, hint.sentence, ...req.messages.map((m) => m.content)].filter((x): x is string => typeof x === 'string');
+    for (const r of rules as Array<Record<string, unknown>>) {
+      if (!r || typeof r !== 'object') continue;
+      if (typeof r.task === 'string' && r.task !== req.task) continue;
+      if (typeof r.match === 'string' && !hay.some((h) => h.includes(r.match as string))) continue;
+      if ('json' in r) return { json: r.json };
+      if (typeof r.text === 'string') return { text: r.text };
+    }
+    return undefined;
+  };
 }
 
 export interface FakeClientOptions {

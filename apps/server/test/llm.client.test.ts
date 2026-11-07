@@ -19,6 +19,7 @@ import {
   createRealLlmClient,
   createSkillLoader,
   fakeFromSchema,
+  fileScriptResponder,
   isRetryable,
   keychainLookup,
   modelFamily,
@@ -399,6 +400,29 @@ describe('fake client', () => {
     expect(InstructOutput.parse(i.json).text).toBe('We use the tracker.');
     const j = await c.complete(actionsReq({ messages: [{ role: 'user', content: '<sentence>We utilize X.</sentence>\n<instruction lang="zh">\n更简洁\n</instruction>' }] }));
     expect(InstructOutput.parse(j.json).notes).toContain('更简洁');
+  });
+
+  it('PAPER_FAKE_SCRIPT responder: first matching rule by task and substring, re-read per call, missing/malformed file scripts nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paper-test-script-'));
+    try {
+      const file = join(dir, 'script.json');
+      const c = createFakeLlmClient({ respond: fileScriptResponder(file) });
+      const hint = { task: 'instruct', sentence: 'We utilize the tracker.', instruction: 'say the factor', notesLanguage: 'en', factIds: [], citeKeys: [] };
+      // no file yet: the default simulated rewrite
+      expect(InstructOutput.parse((await c.complete(actionsReq({ fakeHint: hint }))).json).text).toBe('We use the tracker.');
+      const scripted = { text: 'We use the tracker, which keeps 2.5 times fewer fake tracks.', notes: 'scripted', drift: { actor: false, scope: false, direction: false, condition: false }, fact_ids: [], cite_keys: [] };
+      writeFileSync(file, JSON.stringify({ rules: [{ task: 'ghost', json: { text: 'never' } }, { task: 'instruct', match: 'nothing like this', text: 'never' }, { task: 'instruct', match: 'the factor', json: scripted }] }));
+      const r = await c.complete(actionsReq({ fakeHint: hint }));
+      expect(InstructOutput.parse(r.json)).toEqual(scripted);
+      expect(r.model).toMatch(/^fake-/);
+      // a raw-text rule (the client parses it against the schema)
+      writeFileSync(file, JSON.stringify({ rules: [{ match: 'the factor', text: JSON.stringify(scripted) }] }));
+      expect((await c.complete(actionsReq({ fakeHint: hint }))).json).toEqual(scripted);
+      writeFileSync(file, '{ not json');
+      expect(InstructOutput.parse((await c.complete(actionsReq({ fakeHint: hint }))).json).text).toBe('We use the tracker.');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('honours abort during simulated latency', async () => {
