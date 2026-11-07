@@ -10,7 +10,7 @@
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { EditorState, type TransactionSpec } from '@codemirror/state';
+import { ChangeSet, EditorState, type TransactionSpec } from '@codemirror/state';
 import { afterAll, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import type { ClientMessage, ServerMessage } from '@paper-copilot/core';
@@ -82,7 +82,21 @@ class WsApi {
     this.conn.add(fn);
     return () => this.conn.delete(fn);
   }
+  sentLog: string[] = [];
+  /** Diagnostics: the sender's state when each doc.change went out (keyed by the change JSON). */
+  static sentState = new Map<string, unknown>();
+  core: { ackedVersion: number; ackedText: unknown; localVersion: number; epoch: number; log: Array<{ baseVersion: number; sent: boolean }> } | null = null;
   send(m: ClientMessage): void {
+    if (process.env.R2_LOGDIR && m.type === 'doc.change' && this.core) {
+      const c = this.core;
+      WsApi.sentState.set(JSON.stringify(m.changes), { tab: this.clientId, base: m.baseVersion, epoch: m.epoch, ackedVersion: c.ackedVersion, localVersion: c.localVersion, coreEpoch: c.epoch, ackedText: String(c.ackedText), log: c.log.map((e) => [e.baseVersion, e.sent]), at: Date.now() });
+    }
+    if (process.env.R2_LOGDIR && m.type === 'doc.change') {
+      const j = JSON.stringify(m.changes);
+      // a change that deletes text (the fuzz only types insertions)
+      const dels = (m.changes as unknown[]).filter((x) => Array.isArray(x) && (x as unknown[]).length >= 1 && (x as unknown[])[0] !== 0 && typeof (x as unknown[])[0] === 'number');
+      if (dels.length) this.sentLog.push(`base=${m.baseVersion} epoch=${m.epoch} DELETES ${j.slice(0, 300)} @ ${(new Error().stack ?? '').split('\n').slice(2, 8).join(' <- ')}`);
+    }
     if (this.connected && this.ws.readyState === this.ws.OPEN) this.ws.send(JSON.stringify(m));
   }
   close(): void {
@@ -95,8 +109,16 @@ class Editor {
   state = EditorState.create({ doc: '', extensions: [unitsField, EditorState.lineSeparator.of('\n')] });
   sync!: DocSync;
   loaded = false;
+  /** Diagnostics (R2_LOGDIR): every dispatch that removes a typed token or a co-author line, with its stack. */
+  vanished: Array<{ gone: string[]; stack: string }> = [];
   dispatch(spec: TransactionSpec): void {
     const tr = this.state.update(spec);
+    if (process.env.R2_LOGDIR && tr.docChanged) {
+      const re = /zq[ab]\d+x\d+q|c\d+y\d+w/g;
+      const after = new Set(tr.state.doc.toString().match(re) ?? []);
+      const gone = [...new Set(this.state.doc.toString().match(re) ?? [])].filter((t) => !after.has(t));
+      if (gone.length) this.vanished.push({ gone, stack: (new Error().stack ?? '').split('\n').slice(2, 9).join(' <- ') });
+    }
     this.state = tr.state;
     this.sync?.onUpdate({ transactions: [tr] } as never);
   }
@@ -130,19 +152,46 @@ let server: PaperServer;
 const apis: WsApi[] = [];
 
 const busNotices: string[] = [];
+const misplaced: unknown[] = [];
+const serverHistory: Record<number, string> = {};
 async function fresh(): Promise<void> {
   for (const a of apis.splice(0)) a.close();
   await server?.close();
   await ctx?.close();
   project?.cleanup();
   busNotices.length = 0;
+  misplaced.length = 0;
+  for (const k of Object.keys(serverHistory)) delete serverHistory[Number(k)];
   project = await makeTempProject();
   await initProject(project.root, { repo: project.repoDir, skill: SKILL_DIR });
   ctx = await createCtx({ root: project.root, fake: true, logLevel: 'error', watch: false, lintSidecar: false, docs: { segmentDebounceMs: 20, writeDebounceMs: 600_000 } });
   server = await createServer({ ctx, port: 0, pingIntervalMs: 600_000 });
   ctx.bus.subscribe((m) => {
     if (m.type === 'notice') busNotices.push(m.message);
+    if (process.env.R2_LOGDIR && (m.type === 'doc.replace' || m.type === 'doc.remoteChange')) {
+      const st = ctx.docs.get('main.tex');
+      if (st) serverHistory[st.version] = `${m.type}: ${st.text}`;
+    }
   });
+  if (process.env.R2_LOGDIR) {
+    // diagnostics: a typed token must land right after a space (the fuzz types only there)
+    const docs = ctx.docs as unknown as { applyClientChange: (msg: { changes: unknown; baseVersion: number; epoch?: number; file: string }, o?: { clientId: string }) => Promise<boolean> };
+    const orig = docs.applyClientChange.bind(docs);
+    docs.applyClientChange = async (msg, o) => {
+      const before = ctx.docs.get('main.tex')?.text ?? '';
+      const ok = await orig(msg, o);
+      if (ok) {
+        const cs = ChangeSet.fromJSON(msg.changes);
+        cs.iterChanges((fromA, _toA, _fromB, _toB, ins) => {
+          const t = ins.toString();
+          if (/^zq[ab]\d+x\d+q $/.test(t) && fromA > 0 && before[fromA - 1] !== ' ') {
+            misplaced.push({ token: t, from: fromA, around: before.slice(fromA - 30, fromA + 30), base: msg.baseVersion, epoch: msg.epoch, origin: o?.clientId, sender: WsApi.sentState.get(JSON.stringify(msg.changes)) });
+          }
+        });
+      }
+      return ok;
+    };
+  }
 }
 
 afterAll(async () => {
@@ -168,6 +217,7 @@ async function openTab(name: string): Promise<Tab> {
   const notices: string[] = [];
   ed.sync = new DocSync(api as never, 'main.tex', { view: () => ed as never, loaded: () => (ed.loaded = true), notice: (_l, m) => notices.push(m) });
   ed.sync.start();
+  api.core = ed.sync.core as never;
   for (let i = 0; i < 300 && !ed.loaded; i++) await sleep(10);
   expect(ed.loaded).toBe(true);
   if (process.env.R2_LOGDIR) {
@@ -185,6 +235,7 @@ async function openTab(name: string): Promise<Tab> {
         reconnect: (opts as { reconnect: boolean }).reconnect,
       };
       const res = orig(snap, local, opts);
+      ed.vanished.push({ gone: [], stack: `reconcile mode=${res.mode} snapV=${(snap as { version: number }).version} acked=${before.ackedVersion} ackedText=${before.ackedText === 'null' ? 'null' : 'set'} pending=${before.log.filter((e) => e.baseVersion >= before.ackedVersion).length} send=${JSON.stringify((res as unknown as { send: unknown[] }).send).slice(0, 200)} diff=${JSON.stringify((res as unknown as { diff: { toJSON(): unknown } | null }).diff?.toJSON() ?? null).slice(0, 300)}` });
       const after = res.remote ? res.remote.apply(ed.state.doc).toString() : String(local);
       const toks = (String(local).match(/zq[ab]\d+x\d+q/g) ?? []).filter((t) => !after.includes(t));
       if (toks.length) writeFileSync(join(process.env.R2_LOGDIR!, `reconcile-${name}-${Date.now()}.json`), JSON.stringify({ toks, mode: res.mode, before }));
@@ -263,7 +314,10 @@ it.each(SEEDS)('seed %i: two tabs + co-author reloads + reconnects keep every te
     duplicated: dup,
     tabsMatchServer: tabs.map((t) => t.ed.text === serverText),
   };
-  const ctxLog = `${log.join('\n')}\nnotices: ${tabs.map((t) => t.notices.join(' | ')).join(' || ')}`;
+  const vanished = tabs.map((t) => `${t.name}: ${t.ed.vanished.map((v) => `${v.gone.length ? 'GONE ' : ''}${v.gone.slice(0, 6).join(',')}${v.gone.length > 6 ? `(+${v.gone.length - 6})` : ''} @ ${v.stack}`).join('\n   ')}`).join('\n');
+  const sent = tabs.map((t) => `${t.name} sent:\n   ${t.api.sentLog.join('\n   ')}`).join('\n');
+  if (process.env.R2_LOGDIR && misplaced.length) writeFileSync(join(process.env.R2_LOGDIR, `misplaced-${seed}.json`), JSON.stringify({ misplaced, serverHistory }, null, 1));
+  const ctxLog = `vanished:\n${vanished}\n${sent}\n${log.join('\n')}\nnotices: ${tabs.map((t) => t.notices.join(' | ')).join(' || ')}\nserver notices: ${busNotices.join(' | ')}\nconflict copies: ${copies.length}`;
   if (process.env.R2_LOGDIR) writeFileSync(join(process.env.R2_LOGDIR, `fuzz-${seed}.log`), `${ctxLog}\n\nREPORT ${JSON.stringify(report)}\n\nSERVER\n${serverText}`);
   expect(report, ctxLog.slice(-4000)).toEqual({ lostTokens: [], lostCoauthor: [], duplicated: [], tabsMatchServer: [true, true] });
 }, 120_000);
