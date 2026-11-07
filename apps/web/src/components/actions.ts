@@ -227,12 +227,15 @@ export async function refreshFiles(api: ApiClient): Promise<void> {
   }
 }
 
-/** Run the submission check (top-bar pill, ④). Failures become a notice. */
-export async function runSubmissionCheck(api: ApiClient, venue?: Venue): Promise<void> {
+let lastVenue: Venue | undefined;
+
+/** Run the submission check (top-bar pill, ④). Failures become a notice (silent for a background refresh). */
+export async function runSubmissionCheck(api: ApiClient, venue?: Venue, opts: { quiet?: boolean } = {}): Promise<void> {
+  if (venue) lastVenue = venue;
   try {
-    useShell.getState().setSubmission(await api.submissionCheck(venue));
+    useShell.getState().setSubmission(await api.submissionCheck(venue ?? lastVenue));
   } catch (e) {
-    notify('error', errorText(e));
+    if (!opts.quiet) notify('error', errorText(e));
   }
 }
 

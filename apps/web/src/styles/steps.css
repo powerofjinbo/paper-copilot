@@ -1016,3 +1016,21 @@ button.chip {
   line-height: 16px;
   text-align: center;
 }
+/* inside ② the sub-tab already names the panel: keep the heading for screen readers only */
+.subtab-panel .panel-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.subtab-panel .panel-header-row {
+  justify-content: flex-end;
+}
+.drawer-body .textarea,
+.drawer-body .input,
+.drawer-body .select {
+  box-sizing: border-box;
+  max-width: 100%;
+}

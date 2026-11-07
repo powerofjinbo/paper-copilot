@@ -10,7 +10,7 @@ import { Editor } from './editor/Editor';
 import { PdfPane } from './pdf/PdfPane';
 import { getApiClient } from './api';
 import { errorText } from './api/errors';
-import { compileNow, flushPendingReveal, forwardSync, loadWorkspace, notify, openStep, refetchFacts, refetchOutline, refetchQuestions, refreshFiles, revealIn, revealLine, revealSentence, switchFile } from './components/actions';
+import { compileNow, flushPendingReveal, forwardSync, loadWorkspace, notify, openStep, refetchFacts, refetchOutline, refetchQuestions, refreshFiles, revealIn, revealLine, revealSentence, runSubmissionCheck, switchFile } from './components/actions';
 import { LeftRail } from './components/LeftRail';
 import { Resizer } from './components/Resizer';
 import { SettingsDrawer } from './components/SettingsDrawer';
@@ -84,6 +84,7 @@ function useBus(api: ApiClient): void {
       }),
       api.on('compile.status', (m) => {
         const prev = ws().compile;
+        if ((m.state === 'ok' || m.state === 'error') && useShell.getState().submission) void runSubmissionCheck(api, undefined, { quiet: true });
         // Keep showing the last PDF while a new compile runs or fails.
         ws().setCompile({ state: m.state, pdfVersion: m.pdfVersion ?? prev.pdfVersion, errors: m.errors, logTail: m.logTail });
       }),
@@ -103,11 +104,13 @@ function useBus(api: ApiClient): void {
       api.on('cost.update', (m) => ws().setCost(m.totals)),
       api.on('notice', (m) => notify(m.level, m.message)),
       api.on('sentences.patch', () => {
-        // per-file counts of the file switcher (other files' counts change on drafts, pulls)
+        // per-file counts of the file switcher (other files' counts change on drafts, pulls), and the
+        // submission pill once a check ran (it must not keep saying "ready" after new AI text)
         if (filesTimer) clearTimeout(filesTimer);
         filesTimer = setTimeout(() => {
           filesTimer = null;
           void refreshFiles(api);
+          if (useShell.getState().submission) void runSubmissionCheck(api, undefined, { quiet: true });
         }, 1500);
       }),
       api.on('lint.update', (m) => {
