@@ -485,6 +485,14 @@ export const NumberOccurrence = SentenceRef.extend({
   /** The numeral matches facts with different values (it is listed under the first; see `candidates`). */
   ambiguous: z.boolean(),
   candidates: z.array(z.string()),
+  /**
+   * Set when the numeral fit several facts and the report picked one without a link (the gate still
+   * sees it as unlinked): 'same_value': every candidate holds this very number (an uncertainty of one
+   * fact and the standalone sigma fact); 'row': exactly one candidate shares the result row or claim
+   * object of a number linked in the same sentence; 'context' (heuristic): exactly one candidate's name
+   * words appear in the sentence ("duplicate rate"). Absent/null: linked, unique or still ambiguous.
+   */
+  resolvedBy: z.enum(['same_value', 'row', 'context']).nullable().optional(),
 });
 export type NumberOccurrence = z.infer<typeof NumberOccurrence>;
 

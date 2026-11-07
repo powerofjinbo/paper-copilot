@@ -242,6 +242,17 @@ describe('submissionCheck on fixtures/large-multifile', () => {
     expect(item(r, 'uncited_floats').ok).toBe(true);
   });
 
+  it('ambiguous numerals: only those the echo check could not assign (same value, row neighbour, wording)', () => {
+    const r = submissionCheck(input);
+    const texts = item(r, 'ambiguous_numbers').items.map((e) => e.text);
+    for (const re of [/bootstrap component/, /in quadrature/, /Between 20 and 50~mm/, /duplicate\s+rate is 1\.3/]) expect(texts.some((t) => re.test(t)), String(re)).toBe(false);
+    // a bare "1.3%" with no clue is still listed, in its own file
+    const extra = unitsOf('sections/extra.tex', 'The tracker reaches 1.3\\%.');
+    const r2 = submissionCheck({ ...input, units: [...input.units, ...extra], files: [...input.files, { file: 'sections/extra.tex', text: 'The tracker reaches 1.3\\%.' }] });
+    expect(item(r2, 'ambiguous_numbers').items).toEqual(expect.arrayContaining([expect.objectContaining({ file: 'sections/extra.tex', text: '"1.3": The tracker reaches 1.3\\%.' })]));
+    expect(item(r2, 'ambiguous_numbers').count).toBe(item(r, 'ambiguous_numbers').count + 1);
+  });
+
   it('an AI sentence in an \\input file with an invented number blocks, and points at that file', () => {
     const units = input.units.map((u) => (u.file === 'sections/results.tex' && /95\.52/.test(u.text) ? { ...u, text: u.text.replace('95.52', '95.25'), state: 'ai-edited' as const, everAi: true } : u));
     const r = submissionCheck({ ...input, units });

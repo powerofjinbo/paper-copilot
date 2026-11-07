@@ -330,6 +330,66 @@ describe('echoCheck on fixtures/large-multifile (five \\input files)', () => {
   });
 });
 
+describe('echoCheck: numerals that fit several facts (large-multifile)', () => {
+  const order = projectFileOrder('main.tex', LARGE);
+  const units = orderUnits(LARGE_FILES.flatMap((f) => unitsOf(f, LARGE[f]!)), order);
+  const derived = derivedRelations(LARGE_FACTS);
+  const r = echoCheck(units, LARGE_FACTS, emptyOutline(), { derived });
+  const occOf = (re: RegExp, raw: string) => {
+    for (const q of r.quantities) for (const o of q.occurrences) if (o.raw === raw && re.test(units.find((u) => u.id === o.sentenceId)!.text)) return { q, o };
+    throw new Error(`no occurrence ${raw}`);
+  };
+
+  it('the fixture, as written, raises no ambiguous_number flag', () => {
+    expect(kinds(r)).not.toContain('ambiguous_number');
+    expect(r.quantities.flatMap((q) => q.occurrences).filter((o) => o.ambiguous && o.form !== 'words')).toEqual([]);
+  });
+
+  it('same_value: an uncertainty that the standalone sigma fact also holds is the uncertainty of the main fact', () => {
+    const boot = occOf(/bootstrap component is/, '0.18');
+    expect(boot.o).toMatchObject({ ambiguous: false, resolvedBy: 'same_value', field: 'unc:boot' });
+    expect(boot.q.key).toBe('f.headline.delta_points#unc:boot');
+    expect(boot.o.candidates).toEqual(expect.arrayContaining(['f.headline.delta_points', 'f.headline.sigma_boot_points']));
+    // the total quoted in the appendix groups with the "2.49 ± 0.24" of the results
+    const total = occOf(/in quadrature/, '0.24');
+    expect(total.q.key).toBe('f.headline.delta_points#unc:total');
+    expect(total.q.occurrences.map((o) => o.file)).toEqual(expect.arrayContaining(['sections/results.tex', 'sections/appendix.tex']));
+  });
+
+  it('row: the number linked in the same sentence picks the candidate of its result row', () => {
+    const x = occOf(/Between 20 and 50~mm/, '94.78');
+    expect(x.o).toMatchObject({ ambiguous: false, resolvedBy: 'row' });
+    expect(x.q.primaryFactId).toBe('f.displacement.r4.eff_B');
+  });
+
+  it('context (heuristic): the candidate whose name words the sentence uses', () => {
+    const dup = occOf(/duplicate\s+rate is 1\.3/, '1.3');
+    expect(dup.o).toMatchObject({ ambiguous: false, resolvedBy: 'context' });
+    expect(dup.q.primaryFactId).toBe('f.headline.duplicate_rate_A');
+    const abl = occOf(/edge\s+features lowers/, '94.78');
+    expect(abl.o.resolvedBy).toBe('context');
+    expect(abl.q.primaryFactId).toMatch(/^f\.ablation\.no_edge_features/);
+  });
+
+  it('a numeral with no such clue stays ambiguous and is flagged; drift through a context pick is labelled heuristic', () => {
+    const extra = [
+      ...unitsOf('extra.tex', 'The tracker reaches 1.3\\%.'),
+      ...unitsOf('more.tex', 'Its duplicate rate is 1.26\\%.'),
+    ];
+    const r2 = echoCheck([...units, ...extra], LARGE_FACTS, emptyOutline(), { derived });
+    const amb = r2.flags.find((f) => f.kind === 'ambiguous_number')!;
+    expect(amb.sentenceIds).toEqual(['extra.tex#0']);
+    expect(amb.factIds).toEqual(expect.arrayContaining(['f.headline.fake_rate_B', 'f.headline.duplicate_rate_A']));
+    const drift = r2.flags.find((f) => f.kind === 'drift_precision' && f.factIds[0] === 'f.headline.duplicate_rate_A')!;
+    expect(drift).toMatchObject({ heuristic: true });
+    expect(drift.sentenceIds).toContain('more.tex#0');
+    // without the context pick (a linked unit), the same drift is a plain flag
+    const linked = [...units.map((u) => (/duplicate\s+rate is 1\.3/.test(u.text) ? { ...u, facts: ['f.headline.duplicate_rate_A'] } : u)), ...extra];
+    const r3 = echoCheck(linked, LARGE_FACTS, emptyOutline(), { derived });
+    expect(r3.flags.find((f) => f.kind === 'drift_precision' && f.factIds[0] === 'f.headline.duplicate_rate_A')).toMatchObject({ heuristic: false });
+  });
+});
+
 describe('unitsWithText and projectFileOrder', () => {
   it('slices unit text from the file texts', () => {
     const seg = segment(CANTO_MAIN);

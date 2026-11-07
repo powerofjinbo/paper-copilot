@@ -25,7 +25,10 @@
  *   condition phrase ("on the isolated gun particles", "at $\mu = 200$") none of whose content words the
  *   abstract/conclusions sentence (or the one before it) has.
  * - stale_fact: a stale fact (its artifact changed) stated in the text, with the sentences.
- * - ambiguous_number (info): a numeral that fits facts with different values.
+ * - ambiguous_number (info): a numeral that fits facts with different values. Before flagging, the
+ *   report picks one candidate when every candidate holds this very number, when exactly one shares the
+ *   result row of a number linked in the same sentence, or (heuristic) when exactly one candidate's name
+ *   words appear in the sentence; NumberOccurrence.resolvedBy says which (the gate is unchanged).
  * - key_phrase_missing / key_phrase_partial / no_contribution_sentence.
  * - headline_missing / headline_baseline / headline_condition.
  */
@@ -36,6 +39,7 @@ import { factNumber, isFractionFact } from '../facts/format';
 import { derivedRelationMatches, type DerivedRelation } from '../gate/gate';
 import { plainText } from '../text/normalize';
 import * as STYLE_LISTS from '../meta/data/styleCheckLists';
+import { definitionStem } from '../meta/derived';
 import { PART_ORDER, contentStems, makeFlag, matchPhrase, plainTokens, sentenceRef, shorten, stemWord, type ConsistencyUnit } from './common';
 
 export interface EchoOptions {
@@ -143,6 +147,75 @@ class Classes {
   }
 }
 
+/** The number a candidate match stands for (the fact's value or the named uncertainty), as unit|value. */
+function matchedNumberKey(cls: Classes, l: TokenLink, id: string): string | null {
+  const f = cls.fact(id);
+  if (!f) return null;
+  const m = l.matches.find((x) => x.factId === id);
+  const field = m?.field ?? 'value';
+  let v: number | null;
+  if (field.startsWith('unc:')) {
+    const u = (f.uncertainties ?? {})[field.slice(4)];
+    v = typeof u === 'number' && Number.isFinite(u) ? u : null;
+  } else v = factNumber(f);
+  if (v === null) return null;
+  return `${normalizeUnit(f.unit)}|${Math.abs(v * (m?.scale ?? 1)).toPrecision(12)}`;
+}
+
+/** Result row / claim object of a fact: its artifact and its id without the last segment. */
+function rowKey(f: Fact | undefined): string | null {
+  if (!f) return null;
+  const id = String(f.id);
+  const cut = id.lastIndexOf('.');
+  return cut > 0 ? `${String(f.artifact ?? '')}|${id.slice(0, cut)}` : null;
+}
+
+/**
+ * Name words of a fact: its id segments (after the 'f.' prefix: artifact stem, row key, column), its
+ * definition stem and the row values of its definition ("eff_A (variant=no_edge_features)"), stemmed;
+ * one- and two-letter labels dropped.
+ */
+function nameStems(f: Fact): Set<string> {
+  const id = String(f.id).replace(/^f\./, '');
+  const meta = [...String(f.definition ?? '').matchAll(/=\s*([^;,)]+)/g)].map((m) => m[1]!).join(' ');
+  const words = `${id} ${definitionStem(f)} ${meta}`.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 2);
+  return new Set(contentStems(words));
+}
+
+type Resolution = { id: string; by: 'same_value' | 'row' | 'context' };
+
+/**
+ * Pick one candidate of an unlinked numeral that fits facts with different values, for the report only
+ * (see NumberOccurrence.resolvedBy). Null when the numeral stays ambiguous.
+ */
+function resolveForReport(cls: Classes, l: TokenLink, ids: readonly string[], siblingRows: ReadonlySet<string>, sentenceStems: ReadonlySet<string>): Resolution | null {
+  // 1. every candidate holds this very number: prefer the uncertainty field of a main fact (groups with "2.49 ± 0.24")
+  const keys = new Set(ids.map((id) => matchedNumberKey(cls, l, id)));
+  if (keys.size === 1 && !keys.has(null)) {
+    const unc = ids.find((id) => (l.matches.find((m) => m.factId === id)?.field ?? 'value') !== 'value');
+    return { id: unc ?? ids[0]!, by: 'same_value' };
+  }
+  // 2. one candidate (as a distinct quantity) shares the row of a number linked in the same sentence
+  if (siblingRows.size) {
+    const inRow = ids.filter((id) => {
+      const k = rowKey(cls.fact(id));
+      return k !== null && siblingRows.has(k);
+    });
+    if (inRow.length && cls.quantities(inRow).length === 1) return { id: inRow[0]!, by: 'row' };
+  }
+  // 3. one candidate's distinctive name words appear in the sentence
+  const qs = cls.quantities(ids);
+  const names = qs.map((id) => {
+    const f = cls.fact(id);
+    return f ? nameStems(f) : new Set<string>();
+  });
+  const common = names.length ? [...names[0]!].filter((w) => names.every((n) => n.has(w))) : [];
+  const scores = names.map((n) => [...n].filter((w) => !common.includes(w) && sentenceStems.has(w)).length);
+  const best = Math.max(0, ...scores);
+  if (best > 0 && scores.filter((x) => x === best).length === 1) return { id: qs[scores.indexOf(best)]!, by: 'context' };
+  return null;
+}
+
 function occurrencesOf(units: readonly ConsistencyUnit[], cls: Classes, facts: Fact[], derived: readonly DerivedRelation[]): { occ: Occ[]; unmatched: Occ[] } {
   const occ: Occ[] = [];
   const unmatched: Occ[] = [];
@@ -156,6 +229,18 @@ function occurrencesOf(units: readonly ConsistencyUnit[], cls: Classes, facts: F
       return;
     }
     const ref = sentenceRef(u);
+    // rows of the numbers this sentence states unambiguously (for 'row' resolution)
+    const siblingRows = new Set<string>();
+    for (const l of links) {
+      if (l.tok.ratioPart || (l.status === 'structural' && !l.linked)) continue;
+      const ids = l.linked ? [l.linked] : l.candidates;
+      if (!ids.length || (!l.linked && cls.quantities(ids).length > 1)) continue;
+      for (const id of ids) {
+        const k = rowKey(cls.fact(id));
+        if (k) siblingRows.add(k);
+      }
+    }
+    let sentenceStems: Set<string> | null = null;
     for (const l of links) {
       const tok = l.tok;
       if (tok.ratioPart) continue;
@@ -172,8 +257,14 @@ function occurrencesOf(units: readonly ConsistencyUnit[], cls: Classes, facts: F
       if (l.linked || l.candidates.length > 0) {
         const ids = l.linked ? [l.linked] : l.candidates;
         const qs = cls.quantities(ids);
-        const primary = l.linked ? cls.primary(l.linked) : (qs[0] ?? ids[0]!);
-        const match = l.matches.find((m) => m.factId === (l.linked ?? ids[0])) ?? l.matches[0];
+        let resolved: Resolution | null = null;
+        if (!l.linked && qs.length > 1) {
+          sentenceStems ??= new Set(contentStems(plainTokens(plainText(u.text))));
+          resolved = resolveForReport(cls, l, ids, siblingRows, sentenceStems);
+        }
+        const chosen = l.linked ?? resolved?.id ?? null;
+        const primary = chosen ? (resolved?.by === 'same_value' ? chosen : cls.primary(chosen)) : (qs[0] ?? ids[0]!);
+        const match = l.matches.find((m) => m.factId === (chosen ?? ids[0])) ?? l.matches[0];
         const field = match?.field ?? 'value';
         const fact = cls.fact(primary) ?? null;
         occ.push({
@@ -181,8 +272,9 @@ function occurrencesOf(units: readonly ConsistencyUnit[], cls: Classes, facts: F
           form: formOf(tok, fact),
           field,
           derived: null,
-          ambiguous: !l.linked && qs.length > 1,
+          ambiguous: !chosen && qs.length > 1,
           candidates: l.linked ? [] : [...ids],
+          ...(resolved ? { resolvedBy: resolved.by } : {}),
           key: `${primary}#${field}`,
           pair: null,
           factIds: field === 'value' ? cls.equivalents(primary) : [primary],
@@ -336,13 +428,16 @@ export function echoCheck(units: readonly ConsistencyUnit[], facts: readonly Fac
       const desc = [...canons.values()].map((os) => `"${os[0]!.rendering}" (${[...new Set(os.map((o) => o.part))].join(', ')})`).join(' vs ');
       const ids = cmp.map((o) => o.sentenceId!).filter(Boolean);
       const what = key.startsWith('derived:') ? (first.derived ?? key) : primary;
+      // a numeral the report assigned by its wording only makes the flag a heuristic
+      const byContext = cmp.some((o) => o.resolvedBy === 'context');
       if ([...forms].some(isPercentLike) && [...forms].some(isFractionLike)) {
-        flags.push(makeFlag('drift_form', { subject: key, factIds: first.factIds.slice(0, 1), sentenceIds: ids, message: `${what} is written as a percent in one place and as a fraction in another: ${desc}. Use one form.` }));
+        flags.push(makeFlag('drift_form', { subject: key, heuristic: byContext, factIds: first.factIds.slice(0, 1), sentenceIds: ids, message: `${what} is written as a percent in one place and as a fraction in another: ${desc}. Use one form.` }));
       } else if (!(forms.has('factor') && forms.has('percent'))) {
         flags.push(
           makeFlag('drift_precision', {
             subject: key,
             severity: crossParts ? 'warn' : 'info',
+            heuristic: byContext,
             factIds: first.factIds.slice(0, 1),
             sentenceIds: ids,
             message: `${what} is stated with different precision${crossParts ? ' across parts' : ''}: ${desc}. Quote it the same way everywhere (the abstract and conclusions echo the body).`,

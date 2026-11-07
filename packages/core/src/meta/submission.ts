@@ -18,7 +18,8 @@
  *          (numbers in the authors' own sentences that match no fact), echo_drift (consistency flags:
  *          precision/form/value drift, factor versus percent), uncited_floats, acronyms_before_definition,
  *          lint_warnings (style_check / AI-ese / gate flags of severity 'warn', not dismissed);
- *   info:  ambiguous_numbers (numerals that fit facts with different values).
+ *   info:  ambiguous_numbers (numerals that fit facts with different values and that the echo check could
+ *          not assign by row or by an identical value either; NumberOccurrence.resolvedBy).
  */
 import { SubmissionItemId as SubmissionItemIdEnum, type CompileError, type EchoReport, type FigurePlanReport, type SubmissionEntry, type SubmissionItem, type SubmissionItemId, type SubmissionReport, type TerminologyReport } from '../api';
 import type { Fact, LintFlag, LitRecord, Outline, TermEntry, Venue } from '../schemas';
@@ -225,6 +226,8 @@ export function submissionCheck(input: SubmissionInput): SubmissionReport {
 
   // ---------------------------------------------------------------- numbers
   const derived = input.derived ? [...input.derived] : derivedRelations([...facts]);
+  /** Ambiguous numerals by the gate's linker alone; used only when the echo check is unavailable. */
+  let ambiguousFallback: SubmissionEntry[] = [];
   {
     const labels: string[] = [];
     for (const f of files) {
@@ -260,7 +263,7 @@ export function submissionCheck(input: SubmissionInput): SubmissionReport {
     }
     item('ai_unmatched_numbers', 'block', aiBad);
     item('unmatched_numbers', 'warn', humanBad);
-    item('ambiguous_numbers', 'info', ambiguous);
+    ambiguousFallback = ambiguous;
   }
 
   // ---------------------------------------------------------------- reports
@@ -291,6 +294,27 @@ export function submissionCheck(input: SubmissionInput): SubmissionReport {
     }
   }
   const byId = new Map(units.map((u) => [u.id, u] as const));
+
+  // ambiguous numerals: those the echo check could not assign either (an uncertainty that the sigma fact
+  // also holds, or a number whose row neighbour in the sentence is linked, is not ambiguous)
+  if (echo) {
+    const bySentence = new Map<string, string[]>();
+    for (const q of echo.quantities)
+      for (const o of q.occurrences) {
+        if (!o.ambiguous || !o.sentenceId) continue;
+        const u = byId.get(o.sentenceId);
+        if (!u || u.state === 'proposed' || u.state === 'unsupported') continue;
+        const l = bySentence.get(o.sentenceId);
+        if (l) l.push(o.raw);
+        else bySentence.set(o.sentenceId, [o.raw]);
+      }
+    const entries: SubmissionEntry[] = [];
+    for (const u of units) {
+      const raws = bySentence.get(u.id);
+      if (raws) entries.push(entryOf(u, `${[...new Set(raws)].map((r) => `"${r}"`).join(', ')}: `));
+    }
+    item('ambiguous_numbers', 'info', entries);
+  } else item('ambiguous_numbers', 'info', ambiguousFallback);
   const flagEntries = (sentenceIds: string[], message: string): SubmissionEntry[] => {
     const u = sentenceIds.map((id) => byId.get(id)).find((x): x is ConsistencyUnit => !!x);
     return [{ file: u?.file ?? input.mainFile, sentenceId: u?.id ?? null, line: u?.line ?? null, text: shorten(message) }];
